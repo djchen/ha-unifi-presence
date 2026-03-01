@@ -8,11 +8,11 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.device_registry import DeviceEntryType
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence import async_remove_config_entry_device
-from custom_components.unifi_presence.const import DOMAIN
+from custom_components.unifi_presence.const import CONF_TRACKED_DEVICES, DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
@@ -82,57 +82,44 @@ async def test_async_unload_entry(hass: HomeAssistant, enable_custom_integration
     assert entry.state is ConfigEntryState.NOT_LOADED
 
 
-async def test_async_setup_entry_registers_hub_device(
+async def test_remove_config_entry_device_allows_untracked_mac(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test that async_setup_entry registers hub device for via_device references."""
+    """Test that async_remove_config_entry_device allows removal when MAC is not tracked."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-    device_reg = dr.async_get(hass)
-    device = device_reg.async_get_device({(DOMAIN, entry.entry_id)})
-    assert device is not None
-    assert device.entry_type is DeviceEntryType.SERVICE
-
-
-async def test_remove_config_entry_device_allows_non_service(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
-) -> None:
-    """Test that async_remove_config_entry_device allows removal of non-service devices."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
-    # Create a fake device entry that is NOT the service device
+    # Create a device whose MAC is NOT in the tracked set
     device_reg = dr.async_get(hass)
     device = device_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, "zz:zz:zz:zz:zz:zz")},
+        connections={(CONNECTION_NETWORK_MAC, "zz:zz:zz:zz:zz:zz")},
     )
 
     result = await async_remove_config_entry_device(hass, entry, device)
     assert result is True
 
 
-async def test_remove_config_entry_device_blocks_service_device(
+async def test_remove_config_entry_device_blocks_tracked_mac(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test that async_remove_config_entry_device blocks removal of the service device."""
+    """Test that async_remove_config_entry_device blocks removal when MAC is still tracked."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-    # Get the service device
+    # The conftest MOCK_OPTIONS tracks "aa:bb:cc:dd:ee:ff" — create a device with that MAC
+    tracked_mac = next(iter(MOCK_OPTIONS[CONF_TRACKED_DEVICES]))
     device_reg = dr.async_get(hass)
-    device = device_reg.async_get_device({(DOMAIN, entry.entry_id)})
-    assert device is not None
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        connections={(CONNECTION_NETWORK_MAC, tracked_mac)},
+    )
 
     result = await async_remove_config_entry_device(hass, entry, device)
     assert result is False

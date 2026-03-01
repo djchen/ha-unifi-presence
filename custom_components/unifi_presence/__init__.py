@@ -6,9 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.device_registry import DeviceEntryType
 
-from .const import DOMAIN
 from .coordinator import UnifiPresenceCoordinator
 from .websocket import UnifiPresenceWebsocket
 
@@ -36,15 +34,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
 
     entry.runtime_data = coordinator
 
-    device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
-        config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, entry.entry_id)},
-        manufacturer="Ubiquiti Networks",
-        name="UniFi Presence",
-        entry_type=DeviceEntryType.SERVICE,
-    )
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     def _async_shutdown(_event: object) -> None:
@@ -71,6 +60,7 @@ async def async_remove_config_entry_device(
     config_entry: UnifiPresenceConfigEntry,
     device_entry: dr.DeviceEntry,
 ) -> bool:
-    """Allow removal of a device unless it is the service device."""
-    # Block removal of the service device; allow anything else
-    return (DOMAIN, config_entry.entry_id) not in device_entry.identifiers
+    """Allow removal of a device only if it is no longer tracked."""
+    coordinator = config_entry.runtime_data
+    tracked = frozenset(coordinator.tracked_devices)
+    return not any(mac for _, mac in device_entry.connections if mac in tracked)
