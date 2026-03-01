@@ -152,9 +152,10 @@ async def test_shutdown_event_stops_websocket(
 
     ws = entry.runtime_data.websocket
     assert ws is not None
+    ws.stop = MagicMock(wraps=ws.stop)
 
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
 
     # The _async_shutdown listener should have called ws.stop()
-    assert ws._stopped is True
+    ws.stop.assert_called_once()
