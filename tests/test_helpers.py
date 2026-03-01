@@ -73,7 +73,9 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
         )
 
     create_session.assert_called_once()
-    call_kwargs = create_session.call_args.kwargs
+    call_args = create_session.call_args
+    assert call_args.args[0] is hass
+    call_kwargs = call_args.kwargs
     assert call_kwargs["verify_ssl"] is False
     assert "cookie_jar" in call_kwargs
     jar = call_kwargs["cookie_jar"]
