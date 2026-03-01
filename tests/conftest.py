@@ -63,11 +63,15 @@ class _MockClientStore(dict):
 
 
 @pytest.fixture
-def mock_coordinator_controller() -> Generator[AsyncMock]:
+def mock_coordinator_controller() -> Generator[MagicMock]:
     """Fixture to mock the aiounifi Controller for coordinator tests."""
-    controller = AsyncMock()
+    controller = MagicMock()
     controller.clients = _MockClientStore()
     controller.login = AsyncMock()
+    controller.messages = MagicMock()
+    controller.messages.subscribe = MagicMock(return_value=MagicMock())
+    controller.connectivity = MagicMock()
+    controller.start_websocket = AsyncMock()
 
     with patch(
         "custom_components.unifi_presence.coordinator.create_controller",

@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence import async_remove_config_entry_device
 from custom_components.unifi_presence.const import DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
@@ -100,10 +102,6 @@ async def test_remove_config_entry_device_allows_untracked(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
     """Test that async_remove_config_entry_device allows removal of untracked devices."""
-    from homeassistant.helpers import device_registry as dr
-
-    from custom_components.unifi_presence import async_remove_config_entry_device
-
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
@@ -125,10 +123,6 @@ async def test_remove_config_entry_device_blocks_tracked(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
     """Test that async_remove_config_entry_device blocks removal of tracked devices."""
-    from homeassistant.helpers import device_registry as dr
-
-    from custom_components.unifi_presence import async_remove_config_entry_device
-
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):

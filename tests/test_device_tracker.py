@@ -176,8 +176,8 @@ def test_tracker_device_info() -> None:
     device_info = tracker._attr_device_info
     assert device_info is not None
     assert (DOMAIN, "aa:bb:cc:dd:ee:ff") in device_info["identifiers"]
-    assert device_info["name"] == "Device aa:bb:cc"
-    assert device_info["manufacturer"] == "Ubiquiti"
+    assert device_info["default_name"] == "Device aa:bb:cc"
+    assert device_info["default_manufacturer"] == "Ubiquiti Networks"
 
 
 def test_tracker_device_info_fallback_no_data() -> None:
@@ -187,7 +187,7 @@ def test_tracker_device_info_fallback_no_data() -> None:
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
     device_info = tracker._attr_device_info
     assert device_info is not None
-    assert device_info["name"] == "aa:bb:cc:dd:ee:ff"
+    assert device_info["default_name"] == "aa:bb:cc:dd:ee:ff"
 
 
 def test_tracker_translation_key() -> None:

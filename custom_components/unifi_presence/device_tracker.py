@@ -54,8 +54,8 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         self._attr_device_info = DeviceInfo(
             connections={(CONNECTION_NETWORK_MAC, mac)},
             identifiers={(DOMAIN, mac)},
-            name=device_name,
-            manufacturer="Ubiquiti",
+            default_name=device_name,
+            default_manufacturer="Ubiquiti Networks",
             via_device=(DOMAIN, coordinator.config_entry.entry_id),
         )
 

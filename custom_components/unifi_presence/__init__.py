@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
@@ -36,6 +36,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
     entry.runtime_data = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    def _async_shutdown(_event: object) -> None:
+        """Stop WebSocket on Home Assistant shutdown."""
+        if coordinator.websocket is not None:
+            coordinator.websocket.stop()
+
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown))
 
     return True
 

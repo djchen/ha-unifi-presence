@@ -17,20 +17,24 @@ PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_c
 
 
 @pytest.fixture
-def mock_controller() -> AsyncMock:
-    """Minimal mock aiounifi controller for diagnostics tests."""
+def mock_controller() -> MagicMock:
+    """Fully-wired mock aiounifi controller for diagnostics tests."""
     clients = MagicMock()
     clients.update = AsyncMock()
     clients.get = MagicMock(return_value=None)
 
-    controller = AsyncMock()
+    controller = MagicMock()
     controller.clients = clients
     controller.login = AsyncMock()
+    controller.messages = MagicMock()
+    controller.messages.subscribe = MagicMock(return_value=MagicMock())
+    controller.connectivity = MagicMock()
+    controller.start_websocket = AsyncMock()
     return controller
 
 
 @pytest.fixture
-async def loaded_entry(hass: HomeAssistant, enable_custom_integrations, mock_controller: AsyncMock) -> MockConfigEntry:
+async def loaded_entry(hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock) -> MockConfigEntry:
     """Config entry fully set up in hass for diagnostics tests."""
     entry = MockConfigEntry(
         domain=DOMAIN,

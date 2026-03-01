@@ -5,19 +5,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 
 import aiohttp
 import aiounifi
 from aiounifi.models.message import Message, MessageKey
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 RETRY_TIMER = 15
+CHECK_WEBSOCKET_INTERVAL = timedelta(minutes=1)
 
 
 class UnifiPresenceWebsocket:
@@ -38,6 +40,7 @@ class UnifiPresenceWebsocket:
 
         self.ws_task: asyncio.Task | None = None
         self._cancel_retry: CALLBACK_TYPE | None = None
+        self._cancel_websocket_check: CALLBACK_TYPE | None = None
         self._reconnect_task: asyncio.Task | None = None
         self._unsub_messages: Callable[[], None] | None = None
 
@@ -54,6 +57,9 @@ class UnifiPresenceWebsocket:
             self._on_message(message)
 
         self._unsub_messages = self.api.messages.subscribe(_message_handler, MessageKey.CLIENT)
+        self._cancel_websocket_check = async_track_time_interval(
+            self.hass, self._async_watch_websocket, CHECK_WEBSOCKET_INTERVAL
+        )
         self._start_websocket()
 
     @callback
@@ -65,6 +71,10 @@ class UnifiPresenceWebsocket:
         if self._cancel_retry:
             self._cancel_retry()
             self._cancel_retry = None
+
+        if self._cancel_websocket_check:
+            self._cancel_websocket_check()
+            self._cancel_websocket_check = None
 
         if self._unsub_messages:
             self._unsub_messages()
@@ -141,3 +151,12 @@ class UnifiPresenceWebsocket:
             _LOGGER.info("Will try to reconnect to UniFi controller")
 
         self._reconnect_task = self.hass.loop.create_task(_do_reconnect())
+
+    @callback
+    def _async_watch_websocket(self, _now: object) -> None:
+        """Log WebSocket health check."""
+        _LOGGER.debug(
+            "WebSocket health check — available: %s, last message: %s",
+            self.available,
+            self.api.connectivity.ws_message_received,
+        )
