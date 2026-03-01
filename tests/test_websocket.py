@@ -229,9 +229,7 @@ async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None
     ws.stop()
 
 
-async def test_stop_and_wait_timeout_logs_warning(
-    hass: HomeAssistant, caplog: logging.Handler
-) -> None:
+async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant, caplog: logging.Handler) -> None:
     """Test that stop_and_wait logs a warning when the WS task won't finish."""
     ws, controller, _ = _make_websocket(hass)
 
