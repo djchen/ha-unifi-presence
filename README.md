@@ -1,38 +1,38 @@
 # UniFi Presence
 
-UniFi Presence is a Home Assistant device-tracker integration that logs into a UniFi controller, lets you pick which client devices to follow from a discovery list, and keeps their home/not_home state updated in real time via WebSocket with a configurable away threshold, fallback REST polling, and full UI flows for setup, options, reconfiguration, and diagnostics.
+A Home Assistant custom integration for presence detection using UniFi network controllers. Track selected devices with real-time WebSocket updates, configurable away thresholds, and fallback polling.
 
 ## Why not the official integration?
 
-The official [UniFi Network integration](https://www.home-assistant.io/integrations/unifi/) is powerful but can be overkill if you only need presence detection. It creates entities for every device ever seen on your network while this integration allows you to choose which devices to track.
+The official [UniFi Network integration](https://www.home-assistant.io/integrations/unifi/) is comprehensive but creates entities for all devices and network equipment. This integration focuses solely on presence detection and lets you select specific devices to track.
 
 ## Features
 
-- **Real-time updates**: WebSocket connection to the UniFi controller for instant presence detection
-- **UI-configured**: Set up entirely from the Home Assistant UI (no YAML)
-- **Auto-discovery**: Discovers all known clients from your UniFi controller for easy selection
-- **Fallback polling**: Configurable REST poll interval (default 5 min) catches any missed WebSocket events
-- **Configurable away threshold**: Set how many seconds a device is disconnected for before it is marked as away
-- **Options flow**: Adjust settings and tracked devices after setup without reconfiguring
-- **Reconfigure flow**: Change controller host/port/site/username/password/SSL verify without removing the integration
+- **Real-time updates**: WebSocket connection for instant presence detection
+- **Device selection**: Choose which devices to track from auto-discovered clients
+- **Configurable away threshold**: Set how long before marking a device as away (default: 60s)
+- **Fallback polling**: REST polling (default: 300s) catches missed WebSocket events
+- **UI-only configuration**: No YAML required
+- **Options flow**: Adjust tracked devices and settings after setup
+- **Reconfigure flow**: Change controller credentials without removing the integration
+- **Diagnostics**: Built-in diagnostics for troubleshooting
 
 ## Requirements
 
-- Home Assistant 2026.3+
-- UniFi Controller (UniFi OS or legacy)
-- A local user account on the UniFi controller
+- Home Assistant 2026.3.0 or later
+- UniFi Network Controller (UniFi OS or legacy)
+- Local user account with read access to clients
 
 ## Installation
 
 ### HACS (Recommended)
 
-1. Open HACS in Home Assistant
-2. Click the **⋮** menu (top right) → **Custom repositories**
-3. Enter `https://github.com/djchen/ha-unifi-presence` as the repository and select **Integration** as the category
-4. Click **Add**
-5. Search for **UniFi Presence** in HACS → **Integrations**
-6. Click **Download**
-7. Restart Home Assistant
+1. Open HACS → **Integrations**
+2. Click **⋮** (top right) → **Custom repositories**
+3. Add repository: `https://github.com/djchen/ha-unifi-presence`
+4. Category: **Integration**
+5. Click **Add**, then search for **UniFi Presence**
+6. Click **Download** and restart Home Assistant
 
 ### Manual
 
@@ -44,44 +44,60 @@ The official [UniFi Network integration](https://www.home-assistant.io/integrati
 1. Go to **Settings** → **Devices & Services** → **+ Add Integration**
 2. Search for **UniFi Presence**
 3. Enter your UniFi controller credentials:
-   - **Host**: IP address or hostname of your UniFi controller
-   - **Port**: 443 (UniFi OS) or 8443 (legacy controller)
-   - **Username**: Local UniFi user
-   - **Password**: Password
+   - **Host**: IP address or hostname
+   - **Port**: Default is 443 (use 8443 for legacy controllers)
+   - **Username**: Local UniFi username
+   - **Password**: Password for the account
    - **Site**: Site name (default: `default`)
-   - **Verify SSL certificate**: Whether to verify the SSL certificate (default: off)
+   - **Verify SSL certificate**: Enable SSL verification (default: disabled)
 4. Select devices to track from the discovered client list
 5. Click **Submit**
 
 ### Options
 
-After setup, click **Configure** on the integration to adjust:
+After setup, click **Configure** on the integration card to adjust:
 
-- **Tracked devices**: Add or remove devices
-- **Away threshold**: Seconds before marking a device as away (default: 60)
-- **Fallback poll interval**: How often to poll as a fallback when WebSocket is active (default: 300s, min: 60s)
+- **Tracked devices**: Add or remove devices from the list
+- **Away threshold**: Seconds before marking a device as away (default: 60, min: 1)
+- **Fallback poll interval**: REST polling interval in seconds (default: 300, min: 60)
 
 ### Reconfigure
 
-To change your UniFi controller connection settings without removing the integration:
+Change controller connection settings without removing the integration:
 
 1. Go to **Settings** → **Devices & Services**
-2. Click the **⋮** menu on the UniFi Presence integration
+2. Click **⋮** on the UniFi Presence integration card
 3. Select **Reconfigure**
-4. Enter any new controller host, port, username, password, site, or SSL verify values and click **Submit**
+4. Update host, port, username, password, site, or SSL verification settings
+5. Click **Submit** to save and reload
 
 ## Entities
 
 Each tracked device creates a `device_tracker` entity:
 
-- **Entity ID**: `device_tracker.<device_name>` or `device_tracker.<mac_address>` if no name
+- **Entity ID**: `device_tracker.<device_name>` (or `device_tracker.<mac_address>` if no name is available)
 - **State**: `home` or `not_home`
 - **Attributes**:
-  - `source_type`: `router`
-  - `ip_address`: Client IP (when available)
-  - `mac_address`: Client MAC address
-  - `is_wired`: Whether the client is connected via ethernet
-  - `last_seen`: Unix timestamp of when the client was last seen
+  - `source_type`: Always `router`
+  - `ip_address`: Current IP address (when connected)
+  - `mac_address`: Device MAC address
+  - `hostname`: Device hostname (when available)
+  - `is_wired`: `true` for ethernet, `false` for wireless
+  - `last_seen`: Unix timestamp of last activity
+
+## Diagnostics
+
+The integration provides diagnostics data for troubleshooting:
+
+1. Go to **Settings** → **Devices & Services**
+2. Click on the UniFi Presence integration
+3. Click **Download Diagnostics**
+
+Diagnostics include:
+- Redacted configuration (credentials masked)
+- Tracked device count and states
+- Away threshold and poll interval settings
+- WebSocket connection status
 
 ## Development
 
@@ -90,7 +106,8 @@ Each tracked device creates a `device_tracker` entity:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install pytest pytest-asyncio pytest-homeassistant-custom-component aiounifi ruff
+pip install -e .
+pip install pytest pytest-asyncio pytest-homeassistant-custom-component ruff
 ```
 
 ### Testing
@@ -100,12 +117,12 @@ source .venv/bin/activate
 pytest tests/ -v
 ```
 
-### Linting
+### Linting & Formatting
 
 ```bash
 source .venv/bin/activate
-ruff check .
-ruff format .
+ruff check .          # Check for issues
+ruff format .         # Format code
 ```
 
 ## License
