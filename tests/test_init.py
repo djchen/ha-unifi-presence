@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceEntryType
@@ -137,3 +138,23 @@ async def test_remove_config_entry_device_blocks_tracked(
 
     result = await async_remove_config_entry_device(hass, entry, device)
     assert result is False
+
+
+async def test_shutdown_event_stops_websocket(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that firing EVENT_HOMEASSISTANT_STOP calls websocket.stop()."""
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    ws = entry.runtime_data.websocket
+    assert ws is not None
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+
+    # The _async_shutdown listener should have called ws.stop()
+    assert ws._stopped is True

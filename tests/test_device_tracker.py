@@ -218,3 +218,13 @@ def test_tracker_attrs_none_no_data() -> None:
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
     assert tracker.extra_state_attributes is None
+
+
+def test_tracker_is_connected_missing_mac() -> None:
+    """Test that is_connected returns False when MAC is not in device_states."""
+    # Data exists but does not contain the tracker's MAC
+    data = _make_presence_data(home_macs=["11:22:33:44:55:66"])
+    coordinator = _make_coordinator(data)
+
+    tracker = UnifiPresenceTracker(coordinator, "ff:ff:ff:ff:ff:ff")
+    assert tracker.is_connected is False

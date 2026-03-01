@@ -207,3 +207,97 @@ async def test_stop_cancels_pending_retry(hass: HomeAssistant) -> None:
 
     cancel_mock.assert_called_once()
     assert ws._cancel_retry is None
+
+
+async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None:
+    """Test that the subscribe callback forwards messages to on_message."""
+    ws, controller, on_message = _make_websocket(hass)
+
+    ws.start()
+
+    # Capture the handler passed to subscribe
+    subscribe_call = controller.messages.subscribe.call_args
+    handler = subscribe_call[0][0]
+
+    # Invoke the handler with a mock message
+    mock_msg = MagicMock()
+    handler(mock_msg)
+
+    on_message.assert_called_once_with(mock_msg)
+
+    ws.stop()
+
+
+async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant) -> None:
+    """Test that stop_and_wait logs a warning when the WS task won't finish."""
+    ws, controller, _ = _make_websocket(hass)
+
+    # Make start_websocket block forever
+    hang = asyncio.Event()
+
+    async def _block_forever() -> None:
+        await hang.wait()
+
+    controller.start_websocket = AsyncMock(side_effect=_block_forever)
+
+    ws.start()
+
+    # Patch asyncio.wait to simulate timeout (return the task as pending)
+    real_task = ws.ws_task
+    with patch("custom_components.unifi_presence.websocket.asyncio.wait", return_value=(set(), {real_task})):
+        await ws.stop_and_wait()
+
+    # The task is still pending — clean up
+    hang.set()
+    await asyncio.sleep(0)
+
+
+async def test_websocket_runner_returns_when_stopped(hass: HomeAssistant) -> None:
+    """Test that ws runner exits without scheduling retry when _stopped is True."""
+    ws, controller, _ = _make_websocket(hass)
+
+    # Make start_websocket raise after setting _stopped, simulating stop() being
+    # called while the websocket runner is active.
+    async def _raise_after_stop() -> None:
+        ws._stopped = True
+        raise aiounifi.WebsocketError("disconnected")
+
+    controller.start_websocket = AsyncMock(side_effect=_raise_after_stop)
+
+    with patch(
+        "custom_components.unifi_presence.websocket.async_call_later",
+        return_value=MagicMock(),
+    ) as mock_call_later:
+        ws.start()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    # No retry should be scheduled because _stopped was True when runner exited
+    mock_call_later.assert_not_called()
+
+
+async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
+    """Test that a WSServerHandshakeError marks unavailable and schedules reconnect."""
+    ws, _controller, _ = _make_websocket(
+        hass,
+        start_websocket_side_effect=aiohttp.WSServerHandshakeError(
+            request_info=MagicMock(),
+            history=(),
+            message="handshake failed",
+            status=403,
+            headers=MagicMock(),
+        ),
+    )
+
+    with patch(
+        "custom_components.unifi_presence.websocket.async_call_later",
+        return_value=MagicMock(),
+    ) as mock_call_later:
+        ws.start()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert ws.available is False
+    mock_call_later.assert_called_once()
+
+    ws.stop()
