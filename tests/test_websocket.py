@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import aiounifi
+import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import (
@@ -229,7 +229,7 @@ async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None
     ws.stop()
 
 
-async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant, caplog: logging.Handler) -> None:
+async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant, caplog: pytest.LogCaptureFixture) -> None:
     """Test that stop_and_wait logs a warning when the WS task won't finish."""
     ws, controller, _ = _make_websocket(hass)
 
@@ -247,7 +247,7 @@ async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant, caplog: l
     real_task = ws.ws_task
     with (
         patch("custom_components.unifi_presence.websocket.asyncio.wait", return_value=(set(), {real_task})),
-        caplog.at_level(logging.WARNING),
+        caplog.at_level("WARNING"),
     ):
         await ws.stop_and_wait()
 
