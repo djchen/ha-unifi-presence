@@ -96,7 +96,7 @@ async def test_remove_config_entry_device_allows_untracked_mac(
     device_reg = dr.async_get(hass)
     device = device_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
-        connections={(CONNECTION_NETWORK_MAC, "zz:zz:zz:zz:zz:zz")},
+        connections={(CONNECTION_NETWORK_MAC, "22:33:44:55:66:77")},
     )
 
     result = await async_remove_config_entry_device(hass, entry, device)
