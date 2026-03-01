@@ -5,7 +5,9 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
+from .const import DOMAIN
 from .coordinator import UnifiPresenceCoordinator
 from .websocket import UnifiPresenceWebsocket
 
@@ -45,3 +47,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntr
         await coordinator.websocket.stop_and_wait()
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    config_entry: UnifiPresenceConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """Allow removal of a device if it is no longer tracked."""
+    coordinator = config_entry.runtime_data
+    tracked = frozenset(coordinator.tracked_devices)
+
+    # Allow removal only if the device MAC is not in the tracked set
+    return not any(
+        identifier for identifier in device_entry.identifiers if identifier[0] == DOMAIN and identifier[1] in tracked
+    )

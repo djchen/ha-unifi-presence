@@ -94,3 +94,53 @@ async def test_async_unload_entry(hass: HomeAssistant, enable_custom_integration
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_remove_config_entry_device_allows_untracked(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that async_remove_config_entry_device allows removal of untracked devices."""
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.unifi_presence import async_remove_config_entry_device
+
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Create a fake device entry with a MAC that is NOT tracked
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "zz:zz:zz:zz:zz:zz")},
+    )
+
+    result = await async_remove_config_entry_device(hass, entry, device)
+    assert result is True
+
+
+async def test_remove_config_entry_device_blocks_tracked(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that async_remove_config_entry_device blocks removal of tracked devices."""
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.unifi_presence import async_remove_config_entry_device
+
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Create a fake device entry with a MAC that IS tracked
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "aa:bb:cc:dd:ee:ff")},
+    )
+
+    result = await async_remove_config_entry_device(hass, entry, device)
+    assert result is False

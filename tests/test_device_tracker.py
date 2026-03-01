@@ -6,8 +6,12 @@ from unittest.mock import MagicMock
 
 from homeassistant.components.device_tracker import SourceType
 
+from custom_components.unifi_presence.const import DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceData
-from custom_components.unifi_presence.device_tracker import UnifiPresenceTracker
+from custom_components.unifi_presence.device_tracker import (
+    PARALLEL_UPDATES,
+    UnifiPresenceTracker,
+)
 
 
 def _make_coordinator(data: UnifiPresenceData | None = None) -> MagicMock:
@@ -15,6 +19,8 @@ def _make_coordinator(data: UnifiPresenceData | None = None) -> MagicMock:
     coordinator = MagicMock()
     coordinator.data = data
     coordinator.tracked_devices = list(data.device_states.keys()) if data else []
+    coordinator.config_entry = MagicMock()
+    coordinator.config_entry.entry_id = "test_entry_id"
     return coordinator
 
 
@@ -139,13 +145,14 @@ def test_tracker_hostname() -> None:
     assert tracker.hostname == "host-aa:bb:cc"
 
 
-def test_tracker_name_from_client_info() -> None:
-    """Test that name comes from client info when available."""
+def test_tracker_has_entity_name() -> None:
+    """Test that has_entity_name is True and name is None (inherits device name)."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.name == "Device aa:bb:cc"
+    assert tracker._attr_has_entity_name is True
+    assert tracker.name is None
 
 
 def test_tracker_extra_attributes() -> None:
@@ -160,12 +167,41 @@ def test_tracker_extra_attributes() -> None:
     assert attrs["last_seen"] == 1700000000
 
 
-def test_tracker_name_fallback_no_data() -> None:
-    """Test that name returns MAC when coordinator.data is None."""
+def test_tracker_device_info() -> None:
+    """Test that device_info is populated with correct identifiers and name."""
+    data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
+    coordinator = _make_coordinator(data)
+
+    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
+    device_info = tracker._attr_device_info
+    assert device_info is not None
+    assert (DOMAIN, "aa:bb:cc:dd:ee:ff") in device_info["identifiers"]
+    assert device_info["name"] == "Device aa:bb:cc"
+    assert device_info["manufacturer"] == "Ubiquiti"
+
+
+def test_tracker_device_info_fallback_no_data() -> None:
+    """Test that device_info uses MAC as name when coordinator.data is None."""
     coordinator = _make_coordinator(None)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.name == "aa:bb:cc:dd:ee:ff"
+    device_info = tracker._attr_device_info
+    assert device_info is not None
+    assert device_info["name"] == "aa:bb:cc:dd:ee:ff"
+
+
+def test_tracker_translation_key() -> None:
+    """Test that translation_key is set for entity translations."""
+    data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
+    coordinator = _make_coordinator(data)
+
+    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
+    assert tracker._attr_translation_key == "presence"
+
+
+def test_parallel_updates_is_zero() -> None:
+    """Test that PARALLEL_UPDATES is 0 (coordinator handles updates)."""
+    assert PARALLEL_UPDATES == 0
 
 
 def test_tracker_hostname_none_no_data() -> None:

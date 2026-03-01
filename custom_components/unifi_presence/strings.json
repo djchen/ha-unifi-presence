@@ -14,7 +14,23 @@
         },
         "data_description": {
           "host": "Hostname or IP address of your UniFi controller.",
-          "port": "Usually 443 or 8443."
+          "port": "Usually 443 or 8443.",
+          "username": "A local user account on the UniFi controller.",
+          "password": "Password for the UniFi user account.",
+          "site": "UniFi site name. Use 'default' for single-site controllers.",
+          "ssl_verify": "Enable to verify the SSL certificate. Disable for self-signed certificates."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate UniFi Controller",
+        "description": "The credentials for {host} are no longer valid. Please enter updated credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "A local user account on the UniFi controller.",
+          "password": "Password for the UniFi user account."
         }
       },
       "reconfigure": {
@@ -30,7 +46,11 @@
         },
         "data_description": {
           "host": "Hostname or IP address of your UniFi controller.",
-          "port": "Usually 443 or 8443."
+          "port": "Usually 443 or 8443.",
+          "username": "A local user account on the UniFi controller.",
+          "password": "Password for the UniFi user account.",
+          "site": "UniFi site name. Use 'default' for single-site controllers.",
+          "ssl_verify": "Enable to verify the SSL certificate. Disable for self-signed certificates."
         }
       },
       "devices": {
@@ -38,6 +58,9 @@
         "description": "Found {client_count} clients on your UniFi network. Select devices to track for presence detection.",
         "data": {
           "tracked_devices": "Discovered devices"
+        },
+        "data_description": {
+          "tracked_devices": "Select one or more devices to track for presence detection."
         }
       }
     },
@@ -50,7 +73,9 @@
     "abort": {
       "already_configured": "This UniFi controller and site is already configured",
       "no_devices_discovered": "No devices were discovered on this UniFi site",
-      "reconfigure_successful": "Configuration updated successfully"
+      "reauth_successful": "Re-authentication successful",
+      "reconfigure_successful": "Configuration updated successfully",
+      "wrong_account": "The credentials do not match the original account"
     }
   },
   "options": {
@@ -62,11 +87,31 @@
           "tracked_devices": "Tracked devices",
           "away_seconds": "Seconds before marking as away",
           "fallback_poll_interval": "Fallback poll interval (seconds)"
+        },
+        "data_description": {
+          "tracked_devices": "Select devices to track for presence detection.",
+          "away_seconds": "Number of seconds of inactivity before a device is marked as away.",
+          "fallback_poll_interval": "How often to poll the controller as a fallback to WebSocket updates."
         }
       }
     },
     "error": {
       "no_devices": "You must select at least one device to track"
+    }
+  },
+  "entity": {
+    "device_tracker": {
+      "presence": {
+        "name": "Presence"
+      }
+    }
+  },
+  "exceptions": {
+    "credentials_rejected": {
+      "message": "Credentials rejected by the UniFi controller"
+    },
+    "cannot_connect": {
+      "message": "Unable to connect to the UniFi controller at {host}"
     }
   }
 }

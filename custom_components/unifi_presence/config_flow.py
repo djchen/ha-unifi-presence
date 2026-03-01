@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import aiounifi
@@ -119,6 +120,57 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SSL_VERIFY): bool,
                 }
             ),
+            errors=errors,
+        )
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """Handle reauthentication triggered by ConfigEntryAuthFailed."""
+        self._host = entry_data[CONF_HOST]
+        self._port = entry_data[CONF_PORT]
+        self._site = entry_data.get(CONF_SITE, DEFAULT_SITE)
+        self._ssl_verify = entry_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Handle reauthentication confirmation dialog."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                await create_controller(
+                    self.hass,
+                    self._host,
+                    self._port,
+                    user_input[CONF_USERNAME],
+                    user_input[CONF_PASSWORD],
+                    self._site,
+                    self._ssl_verify,
+                )
+            except (aiounifi.LoginRequired, aiounifi.Unauthorized):
+                errors["base"] = "invalid_auth"
+            except aiounifi.AiounifiException:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected exception during UniFi re-authentication")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    self._get_reauth_entry(),
+                    data_updates={
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_USERNAME): str,
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
+            description_placeholders={"host": self._host},
             errors=errors,
         )
 
