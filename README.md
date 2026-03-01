@@ -113,9 +113,11 @@ If the WebSocket disconnects, the integration automatically reconnects with back
 
 ## Entities
 
-Each tracked device creates a `device_tracker` entity with a corresponding device in the device registry:
+Each tracked device creates a `device_tracker` entity and a matching device-registry entry:
 
-- **Entity ID**: `device_tracker.<device_name>_presence` (derived from the device name)
+- **Entity ID**: `device_tracker.<device_name_slug>`
+- **Friendly name**: Inherits the device name (e.g., `Dan's iPhone`)
+- **Device entry**: One per tracked client, keyed by MAC (identifiers `(unifi_presence, <mac>)` and connection `(network_mac, <mac>)`); defaults to manufacturer `Ubiquiti Networks`
 - **State**: `home` or `not_home`
 - **Attributes**:
   - `source_type`: Always `router`
