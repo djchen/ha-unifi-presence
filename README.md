@@ -13,31 +13,37 @@ The official [UniFi Network integration](https://www.home-assistant.io/integrati
 - **Configurable away threshold**: Set how long before marking a device as away (default: 60s)
 - **Fallback polling**: REST polling (default: 300s) catches missed WebSocket events
 - **UI-only configuration**: No YAML required
-- **Options flow**: Adjust tracked devices and settings after setup
-- **Reconfigure flow**: Change controller credentials without removing the integration
+- **Options flow**: Add or remove tracked devices after setup. Adjust away threshold and polling interval.
+- **Reconfigure flow**: Change controller settings without removing the integration
 - **Diagnostics**: Built-in diagnostics for troubleshooting
 
 ## Requirements
 
 - Home Assistant 2026.3.0 or later
 - UniFi Network Controller (UniFi OS or legacy)
-- Local user account with read access to clients
+- Local UniFi user account with read access to clients
 
 ## Installation
 
 ### HACS (Recommended)
 
-1. Open HACS → **Integrations**
+1. Open HACS
 2. Click **⋮** (top right) → **Custom repositories**
-3. Add repository: `https://github.com/djchen/ha-unifi-presence`
-4. Category: **Integration**
+3. Add Repository: `https://github.com/djchen/ha-unifi-presence`
+4. Select Type: **Integration**
 5. Click **Add**, then search for **UniFi Presence**
 6. Click **Download** and restart Home Assistant
 
 ### Manual
 
-1. Copy the `custom_components/unifi_presence` directory to your Home Assistant `config/custom_components/` directory
-2. Restart Home Assistant
+<details>
+<summary>Manual installation steps</summary>
+
+1. Download the latest release zip file
+2. Extract `custom_components/unifi_presence` to your Home Assistant `config/custom_components/` directory
+3. Restart Home Assistant
+
+</details>
 
 ## Configuration
 
@@ -72,11 +78,15 @@ Change controller connection settings without removing the integration:
 5. Click **Submit** to save and reload
 
 ## Removal
+<details>
+<summary>Click to show removal instructions</summary>
 
 1. Go to **Settings** → **Devices & Services**
 2. Click on the **UniFi Presence** integration card
 3. Click **⋮** → **Delete**
 4. Confirm deletion — all entities and devices created by this integration will be removed
+
+</details>
 
 ## Supported Devices
 
@@ -145,7 +155,7 @@ automation:
   - alias: "Turn on lights when I arrive"
     trigger:
       - platform: state
-        entity_id: device_tracker.my_phone_presence
+        entity_id: device_tracker.my_phone
         to: "home"
     action:
       - service: light.turn_on
@@ -161,14 +171,14 @@ automation:
     trigger:
       - platform: state
         entity_id:
-          - device_tracker.phone_alice_presence
-          - device_tracker.phone_bob_presence
+          - device_tracker.alice_phone
+          - device_tracker.bob_phone
     condition:
       - condition: state
-        entity_id: device_tracker.phone_alice_presence
+        entity_id: device_tracker.alice_phone
         state: "not_home"
       - condition: state
-        entity_id: device_tracker.phone_bob_presence
+        entity_id: device_tracker.bob_phone
         state: "not_home"
     action:
       - service: lock.lock
