@@ -71,11 +71,6 @@ async def async_remove_config_entry_device(
     config_entry: UnifiPresenceConfigEntry,
     device_entry: dr.DeviceEntry,
 ) -> bool:
-    """Allow removal of a device if it is no longer tracked."""
-    coordinator = config_entry.runtime_data
-    tracked = frozenset(coordinator.tracked_devices)
-
-    # Allow removal only if the device MAC is not in the tracked set
-    return not any(
-        identifier for identifier in device_entry.identifiers if identifier[0] == DOMAIN and identifier[1] in tracked
-    )
+    """Allow removal of a device unless it is the service device."""
+    # Block removal of the service device; allow anything else
+    return (DOMAIN, config_entry.entry_id) not in device_entry.identifiers

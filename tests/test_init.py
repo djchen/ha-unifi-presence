@@ -98,17 +98,17 @@ async def test_async_setup_entry_registers_hub_device(
     assert device.entry_type is DeviceEntryType.SERVICE
 
 
-async def test_remove_config_entry_device_allows_untracked(
+async def test_remove_config_entry_device_allows_non_service(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test that async_remove_config_entry_device allows removal of untracked devices."""
+    """Test that async_remove_config_entry_device allows removal of non-service devices."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-    # Create a fake device entry with a MAC that is NOT tracked
+    # Create a fake device entry that is NOT the service device
     device_reg = dr.async_get(hass)
     device = device_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
@@ -119,22 +119,20 @@ async def test_remove_config_entry_device_allows_untracked(
     assert result is True
 
 
-async def test_remove_config_entry_device_blocks_tracked(
+async def test_remove_config_entry_device_blocks_service_device(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test that async_remove_config_entry_device blocks removal of tracked devices."""
+    """Test that async_remove_config_entry_device blocks removal of the service device."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-    # Create a fake device entry with a MAC that IS tracked
+    # Get the service device
     device_reg = dr.async_get(hass)
-    device = device_reg.async_get_or_create(
-        config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, "aa:bb:cc:dd:ee:ff")},
-    )
+    device = device_reg.async_get_device({(DOMAIN, entry.entry_id)})
+    assert device is not None
 
     result = await async_remove_config_entry_device(hass, entry, device)
     assert result is False

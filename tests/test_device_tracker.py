@@ -93,7 +93,7 @@ def test_tracker_source_type() -> None:
 
 
 def test_tracker_unique_id() -> None:
-    """Test the unique ID format (ScannerEntity uses mac_address as unique_id)."""
+    """Test the unique ID is set to the MAC address."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 
@@ -146,13 +146,13 @@ def test_tracker_hostname() -> None:
 
 
 def test_tracker_has_entity_name() -> None:
-    """Test that has_entity_name is True and name is None (inherits device name)."""
+    """Test that has_entity_name is True and name is set from client info."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
     assert tracker._attr_has_entity_name is True
-    assert tracker.name is None
+    assert tracker.name == "Device aa:bb:cc"
 
 
 def test_tracker_extra_attributes() -> None:
@@ -168,26 +168,26 @@ def test_tracker_extra_attributes() -> None:
 
 
 def test_tracker_device_info() -> None:
-    """Test that device_info is populated with correct identifiers and name."""
+    """Test that device_info references the service device."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
     device_info = tracker._attr_device_info
     assert device_info is not None
-    assert (DOMAIN, "aa:bb:cc:dd:ee:ff") in device_info["identifiers"]
-    assert device_info["default_name"] == "Device aa:bb:cc"
-    assert device_info["default_manufacturer"] == "Ubiquiti Networks"
+    assert (DOMAIN, "test_entry_id") in device_info["identifiers"]
 
 
 def test_tracker_device_info_fallback_no_data() -> None:
-    """Test that device_info uses MAC as name when coordinator.data is None."""
+    """Test that device_info still references the service device when data is None."""
     coordinator = _make_coordinator(None)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
     device_info = tracker._attr_device_info
     assert device_info is not None
-    assert device_info["default_name"] == "aa:bb:cc:dd:ee:ff"
+    assert (DOMAIN, "test_entry_id") in device_info["identifiers"]
+    # Name falls back to MAC when no data is available
+    assert tracker.name == "aa:bb:cc:dd:ee:ff"
 
 
 def test_tracker_translation_key() -> None:

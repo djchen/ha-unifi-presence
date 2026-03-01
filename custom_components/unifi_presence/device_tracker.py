@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.components.device_tracker import ScannerEntity, SourceType
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -34,7 +34,6 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     """Represent a tracked UniFi client as a device tracker entity."""
 
     _attr_has_entity_name = True
-    _attr_name = None
     _attr_source_type = SourceType.ROUTER
     _attr_translation_key = "presence"
 
@@ -51,12 +50,10 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         info = self._client_info
         device_name = info.get("name", mac) if info else mac
 
+        self._attr_unique_id = mac
+        self._attr_name = device_name
         self._attr_device_info = DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, mac)},
-            identifiers={(DOMAIN, mac)},
-            default_name=device_name,
-            default_manufacturer="Ubiquiti Networks",
-            via_device=(DOMAIN, coordinator.config_entry.entry_id),
+            identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
         )
 
     @property
