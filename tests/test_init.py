@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device_registry import DeviceEntryType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence import async_remove_config_entry_device
 from custom_components.unifi_presence.const import DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
@@ -16,23 +19,6 @@ from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller"
-
-
-@pytest.fixture
-def mock_controller() -> MagicMock:
-    """Fully-wired mock aiounifi controller suitable for integration setup."""
-    clients = MagicMock()
-    clients.update = AsyncMock()
-    clients.get = MagicMock(return_value=None)
-
-    controller = AsyncMock()
-    controller.clients = clients
-    controller.login = AsyncMock()
-    controller.messages = MagicMock()
-    controller.messages.subscribe = MagicMock(return_value=MagicMock())
-    controller.connectivity = MagicMock()
-    controller.start_websocket = AsyncMock()
-    return controller
 
 
 def _make_config_entry(hass: HomeAssistant) -> MockConfigEntry:
@@ -94,3 +80,82 @@ async def test_async_unload_entry(hass: HomeAssistant, enable_custom_integration
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_async_setup_entry_registers_hub_device(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that async_setup_entry registers hub device for via_device references."""
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_device({(DOMAIN, entry.entry_id)})
+    assert device is not None
+    assert device.entry_type is DeviceEntryType.SERVICE
+
+
+async def test_remove_config_entry_device_allows_untracked(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that async_remove_config_entry_device allows removal of untracked devices."""
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Create a fake device entry with a MAC that is NOT tracked
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "zz:zz:zz:zz:zz:zz")},
+    )
+
+    result = await async_remove_config_entry_device(hass, entry, device)
+    assert result is True
+
+
+async def test_remove_config_entry_device_blocks_tracked(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that async_remove_config_entry_device blocks removal of tracked devices."""
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Create a fake device entry with a MAC that IS tracked
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "aa:bb:cc:dd:ee:ff")},
+    )
+
+    result = await async_remove_config_entry_device(hass, entry, device)
+    assert result is False
+
+
+async def test_shutdown_event_stops_websocket(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that firing EVENT_HOMEASSISTANT_STOP calls websocket.stop()."""
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    ws = entry.runtime_data.websocket
+    assert ws is not None
+    ws.stop = MagicMock(wraps=ws.stop)
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+
+    # The _async_shutdown listener should have called ws.stop()
+    ws.stop.assert_called_once()

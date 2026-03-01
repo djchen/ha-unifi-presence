@@ -6,11 +6,15 @@ from typing import Any
 
 from homeassistant.components.device_tracker import ScannerEntity, SourceType
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
+from .const import DOMAIN
 from .coordinator import UnifiPresenceCoordinator
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
@@ -29,7 +33,10 @@ async def async_setup_entry(
 class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerEntity):
     """Represent a tracked UniFi client as a device tracker entity."""
 
+    _attr_has_entity_name = True
+    _attr_name = None
     _attr_source_type = SourceType.ROUTER
+    _attr_translation_key = "presence"
 
     def __init__(
         self,
@@ -40,6 +47,18 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         super().__init__(coordinator)
         self._mac = mac
 
+        # Derive the initial device name from coordinator data if available
+        info = self._client_info
+        device_name = info.get("name", mac) if info else mac
+
+        self._attr_device_info = DeviceInfo(
+            connections={(CONNECTION_NETWORK_MAC, mac)},
+            identifiers={(DOMAIN, mac)},
+            default_name=device_name,
+            default_manufacturer="Ubiquiti Networks",
+            via_device=(DOMAIN, coordinator.config_entry.entry_id),
+        )
+
     @property
     def _client_info(self) -> dict[str, Any] | None:
         """Return the client info dict for this MAC, or None."""
@@ -47,16 +66,6 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         if data is None:
             return None
         return data.client_info.get(self._mac)
-
-    @property
-    def name(self) -> str:
-        """Return the name of the entity."""
-        info = self._client_info
-        if info is not None:
-            name = info.get("name", self._mac)
-            if name != self._mac:
-                return name
-        return self._mac
 
     @property
     def is_connected(self) -> bool:

@@ -148,27 +148,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         last_seen = raw.get("last_seen") or 0
         is_home = (now - last_seen) < self._away_seconds
 
-        # Check if state actually changed
-        if self.data is not None:
-            old_home = self.data.device_states.get(mac)
-            if old_home == is_home:
-                # No state change — silently update client_info for freshness
-                self.data.client_info[mac] = self._build_client_info(
-                    mac,
-                    name=raw.get("name", ""),
-                    hostname=raw.get("hostname", ""),
-                    ip=raw.get("ip", ""),
-                    is_wired=raw.get("is_wired", False),
-                    last_seen=last_seen,
-                )
-                return
-
-        # State changed — rebuild and push
-        new_states = dict(self.data.device_states) if self.data else {}
-        new_states[mac] = is_home
-
-        new_info = dict(self.data.client_info) if self.data else {}
-        new_info[mac] = self._build_client_info(
+        info = self._build_client_info(
             mac,
             name=raw.get("name", ""),
             hostname=raw.get("hostname", ""),
@@ -177,9 +157,24 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             last_seen=last_seen,
         )
 
+        # Check if state actually changed
+        if self.data is not None:
+            old_home = self.data.device_states.get(mac)
+            if old_home == is_home:
+                # No state change — silently update client_info for freshness
+                self.data.client_info[mac] = info
+                return
+
+        # State changed — rebuild and push
+        new_states = dict(self.data.device_states) if self.data else {}
+        new_states[mac] = is_home
+
+        new_info = dict(self.data.client_info) if self.data else {}
+        new_info[mac] = info
+
         _LOGGER.debug(
             "Device %s (%s) %s: %s",
-            new_info[mac]["name"],
+            info["name"],
             mac,
             "initial state" if self.data is None else "state changed",
             "home" if is_home else "away",
@@ -196,7 +191,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         try:
             controller = await self._ensure_controller()
             await controller.clients.update()
-        except aiounifi.LoginRequired, aiounifi.Unauthorized:
+        except (aiounifi.LoginRequired, aiounifi.Unauthorized):
             # Session expired or credentials rejected — force re-auth
             _LOGGER.info("UniFi session expired, re-authenticating")
             self._controller = None

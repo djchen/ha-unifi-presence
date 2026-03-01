@@ -17,10 +17,38 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+norecursedirs = [".git", ".venv"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py313"  # py314 has a ruff formatter bug that breaks except (X, Y): syntax
+# TODO: requires-python is >=3.14 — switch target-version back to py314 once Ruff fix ships
 line-length = 120
+fix = true
+show-fixes = true
+
+[tool.ruff.format]
+docstring-code-format = true
+line-ending = "auto"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "D", "PL"]
+ignore = [
+    "D100",    # Missing docstring in public module (we have file-level docstrings)
+    "D104",    # Missing docstring in public package
+    "D105",    # Missing docstring in magic method
+    "D107",    # Missing docstring in __init__ (we document __init__ in class docstrings)
+    "D203",    # No blank line before class (conflicts with D211)
+    "D212",    # Multi-line summary first line (conflicts with D213)
+    "PLR0913", # Too many arguments (create_controller needs 7)
+    "PLR2004", # Magic value comparisons
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 10
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.unifi_presence"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]

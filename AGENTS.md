@@ -13,18 +13,19 @@ For user-facing details (features, requirements, installation, configuration, op
 ```
 ha-unifi-presence/
 ├── custom_components/unifi_presence/
-│   ├── __init__.py          # Integration setup/unload, WS lifecycle, forwards to device_tracker platform
-│   ├── config_flow.py       # 2-step config flow (credentials → device selection) + options/reconfigure flows
+│   ├── __init__.py          # Integration setup/unload, WS lifecycle, forwards to device_tracker platform, async_remove_config_entry_device
+│   ├── config_flow.py       # 2-step config flow (credentials → device selection) + options/reconfigure/reauth flows
 │   ├── const.py             # Constants: domain, config keys, defaults
 │   ├── coordinator.py       # DataUpdateCoordinator — WS callback + fallback poll, determines home/away state
-│   ├── device_tracker.py    # ScannerEntity per tracked MAC, exposes home/not_home state
+│   ├── device_tracker.py    # ScannerEntity per tracked MAC, has_entity_name, DeviceInfo, PARALLEL_UPDATES=0
 │   ├── diagnostics.py       # Diagnostics platform — exposes redacted config, device states, WS status
 │   ├── helpers.py           # Shared async create_controller factory
+│   ├── icons.json           # Entity icon translations (mdi icons per platform/translation_key)
 │   ├── manifest.json        # HA integration manifest (HACS-compatible)
-│   ├── strings.json         # Translatable strings for config/options/reconfigure flows
+│   ├── strings.json         # Translatable strings for config/options/reconfigure/reauth flows + entity/exception translations
 │   ├── websocket.py         # WebSocket lifecycle manager — connect, reconnect, health check
 │   └── translations/
-│       └── en.json          # English translations
+│       └── en.json          # English translations (mirror of strings.json)
 ├── tests/                   # Tests
 ├── .github/workflows/
 │   └── validate.yml         # CI: ruff lint, pytest, HACS validation
@@ -36,31 +37,39 @@ ha-unifi-presence/
 
 ## Key Architecture
 
-- **Config flow** (`config_flow.py`): Two-step setup — first collects UniFi controller credentials and validates them, then fetches all known clients for the user to select which devices to track. If discovery returns no clients, setup aborts with `no_devices_discovered` instead of proceeding to an empty device-selection step. Options flow (subclassing `OptionsFlowWithReload`) allows post-setup changes to tracked devices, fallback poll interval, and away threshold; validates that at least one device is selected; automatically reloads the integration on change. Reconfigure flow allows changing controller host/port/site/username/password/ssl_verify without removing the integration; duplicate-unique-id check runs before credential validation.
+- **Config flow** (`config_flow.py`): Two-step setup — first collects UniFi controller credentials and validates them, then fetches all known clients for the user to select which devices to track. If discovery returns no clients, setup aborts with `no_devices_discovered` instead of proceeding to an empty device-selection step. Options flow (subclassing `OptionsFlowWithReload`) allows post-setup changes to tracked devices, fallback poll interval, and away threshold; validates that at least one device is selected; automatically reloads the integration on change. Reconfigure flow allows changing controller host/port/site/username/password/ssl_verify without removing the integration; duplicate-unique-id check runs before credential validation. Reauthentication flow (`async_step_reauth` / `async_step_reauth_confirm`) triggered by `ConfigEntryAuthFailed` allows updating credentials without removing the integration. All form steps include `data_description` for every field.
 
 - **Coordinator** (`coordinator.py`): Subclass of `DataUpdateCoordinator`. Uses WebSocket as primary update mechanism via `process_message()` callback for real-time `sta:sync` client events. Falls back to REST polling (default 300s) to catch missed events. Compares `last_seen` timestamps against the configurable `away_seconds` threshold to determine home/away state. Keeps the existing data object when device states haven't changed to avoid unnecessary entity writes, refreshing `client_info` in-place. Handles session re-authentication on expiry. Uses `frozenset` for O(1) tracked MAC lookups. Exposes a public `controller` property for external access to the cached controller. Uses a shared `_build_client_info()` static method for normalised client info construction.
 
 - **WebSocket** (`websocket.py`): Manages the persistent WebSocket connection to the UniFi controller. Subscribes to `MessageKey.CLIENT` (sta:sync) messages for real-time client state updates. Includes automatic reconnect with backoff on disconnection (using HA's `async_call_later`), periodic health checks, and dispatcher signals for availability changes. Uses a `_stopped` guard flag to prevent post-unload reconnect activity. Tracks `_cancel_retry` timer handle and `_reconnect_task` so `stop()` can cancel them. Modeled after the official HA UniFi integration pattern.
 
-- **Device tracker** (`device_tracker.py`): Each tracked MAC gets a `ScannerEntity` (subclass of `CoordinatorEntity`). Exposes `home`/`not_home` state, IP, hostname, MAC, wired status, and last_seen as attributes. `unique_id` is the MAC address (inherited from `ScannerEntity`). Reload on options change is handled by `OptionsFlowWithReload` — no manual update listener needed.
+- **Device tracker** (`device_tracker.py`): Each tracked MAC gets a `ScannerEntity` (subclass of `CoordinatorEntity`). Uses `has_entity_name = True` with `_attr_name = None` so the entity inherits the device name. Creates `DeviceInfo` with MAC-based identifiers, `CONNECTION_NETWORK_MAC`, `default_manufacturer` "Ubiquiti Networks", `default_name` (allows user overrides in device registry), and `via_device` linking to the config entry. Sets `PARALLEL_UPDATES = 0` (coordinator handles all data fetching). Uses `translation_key = "presence"` for translatable entity names. `unique_id` is the MAC address (inherited from `ScannerEntity`). Reload on options change is handled by `OptionsFlowWithReload` — no manual update listener needed.
 
-- **Helpers** (`helpers.py`): Shared async `create_controller` factory used by both config flow and coordinator. Creates an `aiounifi.Controller` with the given credentials, logs in, and returns it.
+- **Helpers** (`helpers.py`): Shared async `create_controller` factory used by both config flow and coordinator. Creates an `aiounifi.Controller` with the given credentials, logs in (with 10s timeout), and returns it. Uses `async_get_clientsession` for SSL-verified connections and `async_create_clientsession` with `CookieJar(unsafe=True)` for non-SSL (handles cookie domain issues with IP addresses, matching official UniFi integration pattern).
 
 - **Diagnostics** (`diagnostics.py`): Exposes redacted config entry data (credentials masked), options, tracked device count, device states, away threshold, fallback poll interval, and WebSocket connection status.
 
-- **Init** (`__init__.py`): Sets up the coordinator on entry load, starts the WebSocket connection for real-time updates, stores coordinator in `entry.runtime_data` (typed via `UnifiPresenceConfigEntry`), and forwards setup to the `device_tracker` platform. Stops WebSocket and cleans up on unload.
+- **Init** (`__init__.py`): Sets up the coordinator on entry load, starts the WebSocket connection for real-time updates, stores coordinator in `entry.runtime_data` (typed via `UnifiPresenceConfigEntry`), and forwards setup to the `device_tracker` platform. Registers `EVENT_HOMEASSISTANT_STOP` handler to cleanly stop WebSocket on HA shutdown. Stops WebSocket and cleans up on unload. Implements `async_remove_config_entry_device` to allow manual removal of untracked devices from the device registry.
 
 ## Canonical References
 
 - **README.md**:
   - Requirements and install steps
-  - Configuration / options / reconfigure UX
+  - Configuration / options / reconfigure / reauthentication UX
+  - Removal instructions
+  - Supported devices and functions
+  - How data is updated (push/poll strategy)
   - Entity behavior
+  - Use cases and automation examples
+  - Known limitations
+  - Troubleshooting
   - Local development setup, test, and lint commands
 - **`custom_components/unifi_presence/manifest.json`**: integration runtime requirements
 - **`pyproject.toml`**: dev tooling and lint/test configuration
 
 > **Important**: Always run `source .venv/bin/activate` before `pytest`, `ruff`, or `pip`. Never use system Python packages.
+>
+> **Ruff note**: `target-version` is set to `py313` in `pyproject.toml` due to a ruff 0.15.x formatter bug with `py314` that strips parentheses from `except (X, Y):` tuples. Tests must be run with `PYTHONPATH=. pytest tests/ -v` (editable install has py3.14 compat issues).
 
 ## Conventions
 
@@ -80,7 +89,7 @@ Follow official Home Assistant developer guidelines.
 - Poll via `DataUpdateCoordinator`; never poll inside entities
 - Entities subclass appropriate HA base (`ScannerEntity`, `CoordinatorEntity`)
 - Config via `ConfigFlow`/`async_step_user`; options via `OptionsFlow`; no YAML config
-- HTTP sessions via `async_get_clientsession()`; controller creation via `create_controller()` in `helpers.py`
+- HTTP sessions via `async_get_clientsession()` (SSL) / `async_create_clientsession()` (non-SSL with unsafe CookieJar); controller creation via `create_controller()` in `helpers.py`
 - Platform setup via `async_forward_entry_setups()`; cleanup via `async_unload_platforms()`
 - `unique_id` must be stable and globally unique (`ScannerEntity` uses `mac_address`)
 - Reload on options change via `OptionsFlowWithReload`; all API calls go through `aiounifi`
@@ -107,8 +116,11 @@ Follow official Home Assistant developer guidelines.
 
 ### Testing
 - Uses `pytest-homeassistant-custom-component`; requires `enable_custom_integrations` fixture for config flow tests
-- Patch `async_setup_entry` in config flow tests; mock `create_controller` from `helpers.py` (`MagicMock` for sync, `AsyncMock` for async methods)
-- All tests must pass: `pytest tests/ -v`
+- Patch `async_setup_entry` in config flow tests; mock `create_controller` from `helpers.py`
+- Use `MagicMock` for controller objects with explicit `AsyncMock()` for async methods (login, start_websocket, clients.update); never use bare `AsyncMock()` for controller objects (causes unawaited coroutine GC warnings)
+- All controller mocks must include `messages.subscribe = MagicMock(return_value=MagicMock())` and `connectivity = MagicMock()` for WebSocket setup
+- All tests must pass: `PYTHONPATH=. pytest tests/ -v`
+- Run ruff before committing: `ruff check . && ruff format .`
 
 ## Constants (const.py)
 

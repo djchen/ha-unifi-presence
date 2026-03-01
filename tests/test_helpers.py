@@ -13,7 +13,8 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
     """Test helper builds controller config, then logs in and returns controller."""
     session = MagicMock()
     config = MagicMock()
-    controller = AsyncMock()
+    controller = MagicMock()
+    controller.login = AsyncMock()
 
     with (
         patch("custom_components.unifi_presence.helpers.async_get_clientsession", return_value=session) as get_session,
@@ -34,7 +35,7 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
         )
 
     assert result is controller
-    get_session.assert_called_once_with(hass, verify_ssl=True)
+    get_session.assert_called_once_with(hass)
     configuration.assert_called_once_with(
         session,
         host="192.168.1.1",
@@ -49,12 +50,15 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
 
 
 async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
-    """Test helper passes ssl_verify=False through to session and controller config."""
+    """Test helper uses async_create_clientsession with unsafe CookieJar when SSL disabled."""
     session = MagicMock()
-    controller = AsyncMock()
+    controller = MagicMock()
+    controller.login = AsyncMock()
 
     with (
-        patch("custom_components.unifi_presence.helpers.async_get_clientsession", return_value=session) as get_session,
+        patch(
+            "custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session
+        ) as create_session,
         patch("custom_components.unifi_presence.helpers.Configuration") as configuration,
         patch("custom_components.unifi_presence.helpers.aiounifi.Controller", return_value=controller),
     ):
@@ -68,5 +72,12 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
             ssl_verify=False,
         )
 
-    get_session.assert_called_once_with(hass, verify_ssl=False)
+    create_session.assert_called_once()
+    call_args = create_session.call_args
+    assert call_args.args[0] is hass
+    call_kwargs = call_args.kwargs
+    assert call_kwargs["verify_ssl"] is False
+    assert "cookie_jar" in call_kwargs
+    jar = call_kwargs["cookie_jar"]
+    assert getattr(jar, "_unsafe", False) is True
     assert configuration.call_args.kwargs["ssl_context"] is False

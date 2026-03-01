@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import aiounifi
@@ -59,6 +60,38 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._controller: aiounifi.Controller | None = None
         self._available_clients: dict[str, str] = {}
 
+    async def _async_validate_login(
+        self,
+        *,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        site: str,
+        ssl_verify: bool,
+        log_context: str,
+    ) -> tuple[aiounifi.Controller | None, str | None]:
+        """Attempt controller login and return (controller, error_key)."""
+        try:
+            controller = await create_controller(
+                self.hass,
+                host,
+                port,
+                username,
+                password,
+                site,
+                ssl_verify,
+            )
+        except (aiounifi.LoginRequired, aiounifi.Unauthorized):
+            return None, "invalid_auth"
+        except aiounifi.AiounifiException:
+            return None, "cannot_connect"
+        except Exception:
+            _LOGGER.exception("Unexpected exception during %s", log_context)
+            return None, "unknown"
+
+        return controller, None
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> UnifiPresenceOptionsFlow:
@@ -77,24 +110,19 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             self._site = user_input.get(CONF_SITE, DEFAULT_SITE)
             self._ssl_verify = user_input.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)
 
-            try:
-                self._controller = await create_controller(
-                    self.hass,
-                    self._host,
-                    self._port,
-                    self._username,
-                    self._password,
-                    self._site,
-                    self._ssl_verify,
-                )
-            except aiounifi.LoginRequired, aiounifi.Unauthorized:
-                errors["base"] = "invalid_auth"
-            except aiounifi.AiounifiException:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected exception during UniFi login")
-                errors["base"] = "unknown"
+            controller, error = await self._async_validate_login(
+                host=self._host,
+                port=self._port,
+                username=self._username,
+                password=self._password,
+                site=self._site,
+                ssl_verify=self._ssl_verify,
+                log_context="UniFi login",
+            )
+            if error is not None:
+                errors["base"] = error
             else:
+                self._controller = controller
                 # Fetch clients for device selection step
                 try:
                     self._available_clients = await _fetch_all_clients(self._controller)
@@ -122,6 +150,51 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """Handle reauthentication triggered by ConfigEntryAuthFailed."""
+        self._host = entry_data[CONF_HOST]
+        self._port = entry_data[CONF_PORT]
+        self._site = entry_data.get(CONF_SITE, DEFAULT_SITE)
+        self._ssl_verify = entry_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Handle reauthentication confirmation dialog."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            _, error = await self._async_validate_login(
+                host=self._host,
+                port=self._port,
+                username=user_input[CONF_USERNAME],
+                password=user_input[CONF_PASSWORD],
+                site=self._site,
+                ssl_verify=self._ssl_verify,
+                log_context="UniFi re-authentication",
+            )
+            if error is not None:
+                errors["base"] = error
+            else:
+                return self.async_update_reload_and_abort(
+                    self._get_reauth_entry(),
+                    data_updates={
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_USERNAME): str,
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
+            description_placeholders={"host": self._host},
+            errors=errors,
+        )
+
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle reconfiguration of controller credentials."""
         errors: dict[str, str] = {}
@@ -139,23 +212,17 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if existing_entry is not None and existing_entry.entry_id != reconfigure_entry.entry_id:
                 errors["base"] = "already_configured"
             else:
-                try:
-                    await create_controller(
-                        self.hass,
-                        host,
-                        port,
-                        user_input[CONF_USERNAME],
-                        user_input[CONF_PASSWORD],
-                        site,
-                        ssl_verify,
-                    )
-                except aiounifi.LoginRequired, aiounifi.Unauthorized:
-                    errors["base"] = "invalid_auth"
-                except aiounifi.AiounifiException:
-                    errors["base"] = "cannot_connect"
-                except Exception:
-                    _LOGGER.exception("Unexpected exception during UniFi reconfigure")
-                    errors["base"] = "unknown"
+                _, error = await self._async_validate_login(
+                    host=host,
+                    port=port,
+                    username=user_input[CONF_USERNAME],
+                    password=user_input[CONF_PASSWORD],
+                    site=site,
+                    ssl_verify=ssl_verify,
+                    log_context="UniFi reconfigure",
+                )
+                if error is not None:
+                    errors["base"] = error
                 else:
                     updated_data = dict(current_data)
                     updated_data[CONF_HOST] = host

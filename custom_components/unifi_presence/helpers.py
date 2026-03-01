@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import aiounifi
+from aiohttp import CookieJar
 from aiounifi.models.configuration import Configuration
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import (
+    async_create_clientsession,
+    async_get_clientsession,
+)
 
 
 async def create_controller(
@@ -18,7 +24,10 @@ async def create_controller(
     ssl_verify: bool,
 ) -> aiounifi.Controller:
     """Create, authenticate, and return an aiounifi Controller."""
-    session = async_get_clientsession(hass, verify_ssl=ssl_verify)
+    if ssl_verify:
+        session = async_get_clientsession(hass)
+    else:
+        session = async_create_clientsession(hass, verify_ssl=False, cookie_jar=CookieJar(unsafe=True))
     config = Configuration(
         session,
         host=host,
@@ -26,8 +35,9 @@ async def create_controller(
         username=username,
         password=password,
         site=site,
-        ssl_context=ssl_verify,  # bool: False=skip, True=verify
+        ssl_context=ssl_verify,
     )
     controller = aiounifi.Controller(config)
-    await controller.login()
+    async with asyncio.timeout(10):
+        await controller.login()
     return controller
