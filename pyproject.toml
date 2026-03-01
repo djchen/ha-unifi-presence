@@ -1,0 +1,26 @@
+[project]
+name = "ha-unifi-presence"
+version = "0.1.0"
+description = "Home Assistant custom integration for UniFi presence detection"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.14"
+
+[project.optional-dependencies]
+dev = [
+    "aiounifi>=88",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-homeassistant-custom-component",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]

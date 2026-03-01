@@ -1,0 +1,13 @@
+{
+  "domain": "unifi_presence",
+  "name": "UniFi Presence",
+  "codeowners": ["@djchen"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/djchen/ha-unifi-presence",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/djchen/ha-unifi-presence/issues",
+  "requirements": ["aiounifi>=88"],
+  "version": "0.1.0"
+}
