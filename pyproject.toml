@@ -18,10 +18,6 @@ dev = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 norecursedirs = [".git", ".venv"]
-filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::pytest.PytestUnraisableExceptionWarning",
-]
 
 [tool.ruff]
 target-version = "py313"  # py314 has a ruff formatter bug that breaks except (X, Y): syntax
