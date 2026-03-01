@@ -74,7 +74,7 @@ To change your UniFi controller connection settings without removing the integra
 
 Each tracked device creates a `device_tracker` entity:
 
-- **Entity ID**: `device_tracker.unifi_presence_<mac>`
+- **Entity ID**: `device_tracker.<device_name>` or `device_tracker.<mac_address>` if no name
 - **State**: `home` or `not_home`
 - **Attributes**:
   - `source_type`: `router`
