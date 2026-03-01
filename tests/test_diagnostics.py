@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -14,23 +14,6 @@ from custom_components.unifi_presence.diagnostics import async_get_config_entry_
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller"
-
-
-@pytest.fixture
-def mock_controller() -> MagicMock:
-    """Fully-wired mock aiounifi controller for diagnostics tests."""
-    clients = MagicMock()
-    clients.update = AsyncMock()
-    clients.get = MagicMock(return_value=None)
-
-    controller = MagicMock()
-    controller.clients = clients
-    controller.login = AsyncMock()
-    controller.messages = MagicMock()
-    controller.messages.subscribe = MagicMock(return_value=MagicMock())
-    controller.connectivity = MagicMock()
-    controller.start_websocket = AsyncMock()
-    return controller
 
 
 @pytest.fixture

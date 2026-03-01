@@ -78,3 +78,20 @@ def mock_coordinator_controller() -> Generator[MagicMock]:
         return_value=controller,
     ):
         yield controller
+
+
+@pytest.fixture
+def mock_controller() -> MagicMock:
+    """Fully-wired mock aiounifi controller for integration tests."""
+    clients = MagicMock()
+    clients.update = AsyncMock()
+    clients.get = MagicMock(return_value=None)
+
+    controller = MagicMock()
+    controller.clients = clients
+    controller.login = AsyncMock()
+    controller.messages = MagicMock()
+    controller.messages.subscribe = MagicMock(return_value=MagicMock())
+    controller.connectivity = MagicMock()
+    controller.start_websocket = AsyncMock()
+    return controller
