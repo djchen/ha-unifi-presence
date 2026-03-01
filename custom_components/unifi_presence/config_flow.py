@@ -87,7 +87,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._site,
                     self._ssl_verify,
                 )
-            except aiounifi.LoginRequired, aiounifi.Unauthorized:
+            except (aiounifi.LoginRequired, aiounifi.Unauthorized):
                 errors["base"] = "invalid_auth"
             except aiounifi.AiounifiException:
                 errors["base"] = "cannot_connect"
@@ -149,7 +149,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                         site,
                         ssl_verify,
                     )
-                except aiounifi.LoginRequired, aiounifi.Unauthorized:
+                except (aiounifi.LoginRequired, aiounifi.Unauthorized):
                     errors["base"] = "invalid_auth"
                 except aiounifi.AiounifiException:
                     errors["base"] = "cannot_connect"

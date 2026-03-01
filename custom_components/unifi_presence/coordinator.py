@@ -196,7 +196,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         try:
             controller = await self._ensure_controller()
             await controller.clients.update()
-        except aiounifi.LoginRequired, aiounifi.Unauthorized:
+        except (aiounifi.LoginRequired, aiounifi.Unauthorized):
             # Session expired or credentials rejected — force re-auth
             _LOGGER.info("UniFi session expired, re-authenticating")
             self._controller = None

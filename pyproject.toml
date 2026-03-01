@@ -19,7 +19,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py313"  # py314 has a ruff formatter bug that breaks except (X, Y): syntax
 line-length = 120
 
 [tool.ruff.lint]

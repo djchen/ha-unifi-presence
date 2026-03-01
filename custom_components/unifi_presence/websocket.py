@@ -97,7 +97,7 @@ class UnifiPresenceWebsocket:
             """Run the WebSocket connection."""
             try:
                 await self.api.start_websocket()
-            except aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError:
+            except (aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError):
                 _LOGGER.error("WebSocket setup failed")
             except aiounifi.WebsocketError:
                 _LOGGER.error("WebSocket disconnected")
