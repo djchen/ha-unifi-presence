@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiounifi
 import pytest
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -66,6 +67,7 @@ def _bypass_setup(hass: HomeAssistant, enable_custom_integrations) -> Generator[
 def _mock_controller(
     login_side_effect: Exception | None = None,
     clients_all_items: list | None = None,
+    clients_items: list | None = None,
 ) -> AsyncMock:
     """Create a mock aiounifi Controller."""
     controller = AsyncMock()
@@ -73,6 +75,9 @@ def _mock_controller(
     controller.clients_all = MagicMock()
     controller.clients_all.update = AsyncMock()
     controller.clients_all.items.return_value = clients_all_items or []
+    controller.clients = MagicMock()
+    controller.clients.update = AsyncMock()
+    controller.clients.items.return_value = clients_items or []
     return controller
 
 
@@ -291,6 +296,7 @@ async def test_options_flow(hass: HomeAssistant, options_entry: MockConfigEntry)
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
     )
     options_entry.runtime_data = mock_coordinator
+    options_entry.mock_state(hass, ConfigEntryState.LOADED)
 
     result = await hass.config_entries.options.async_init(options_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
@@ -513,6 +519,7 @@ async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, o
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
     )
     options_entry.runtime_data = mock_coordinator
+    options_entry.mock_state(hass, ConfigEntryState.LOADED)
 
     result = await hass.config_entries.options.async_init(options_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
@@ -562,6 +569,7 @@ async def test_options_flow_runtime_data_no_controller_falls_back(
     mock_coordinator = MagicMock()
     mock_coordinator.controller = None
     config_entry.runtime_data = mock_coordinator
+    config_entry.mock_state(hass, ConfigEntryState.LOADED)
 
     controller = _mock_controller(
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]

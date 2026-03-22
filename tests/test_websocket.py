@@ -31,7 +31,7 @@ def _make_websocket(
 
     ws = UnifiPresenceWebsocket(
         hass,
-        controller,
+        lambda: controller,
         "test-signal",
         on_message,
     )
@@ -41,6 +41,10 @@ def _make_websocket(
 async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
     """Test that start() subscribes to messages and creates a WS task."""
     ws, controller, _ = _make_websocket(hass)
+
+    # Make start_websocket block so the task stays alive during assertions
+    hang = asyncio.Event()
+    controller.start_websocket = AsyncMock(side_effect=hang.wait)
 
     ws.start()
 
@@ -133,7 +137,7 @@ async def test_reconnect_relogins_and_restarts_ws(hass: HomeAssistant) -> None:
     ws.start()
     # Simulate a reconnect
     ws.available = False
-    ws._reconnect(log=True)
+    ws._reconnect()
 
     # Let the reconnect coroutine and nested _start_websocket task run
     for _ in range(5):
@@ -181,7 +185,7 @@ async def test_reconnect_blocked_after_stop(hass: HomeAssistant) -> None:
         "custom_components.unifi_presence.websocket.async_call_later",
         return_value=MagicMock(),
     ) as mock_call_later:
-        ws._reconnect(log=True)
+        ws._reconnect()
         await asyncio.sleep(0)
 
     # No reconnect should have been scheduled
@@ -282,6 +286,17 @@ async def test_websocket_runner_returns_when_stopped(hass: HomeAssistant) -> Non
     mock_call_later.assert_not_called()
 
 
+async def test_async_watch_websocket_logs_health(hass: HomeAssistant) -> None:
+    """Test that _async_watch_websocket runs without error."""
+    ws, controller, _ = _make_websocket(hass)
+    controller.connectivity.ws_message_received = "2025-01-01T00:00:00Z"
+
+    # Directly invoke the health check callback
+    ws._async_watch_websocket(None)
+
+    # No assertion needed — just verify it doesn't raise
+
+
 async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
     """Test that a WSServerHandshakeError marks unavailable and schedules reconnect."""
     ws, _controller, _ = _make_websocket(
@@ -307,3 +322,80 @@ async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
     mock_call_later.assert_called_once()
 
     ws.stop()
+
+
+async def test_unexpected_exception_sets_unavailable_and_schedules_reconnect(hass: HomeAssistant) -> None:
+    """Test that an unexpected exception in start_websocket is caught and triggers reconnect."""
+    ws, _controller, _ = _make_websocket(
+        hass,
+        start_websocket_side_effect=RuntimeError("something unexpected"),
+    )
+
+    with patch(
+        "custom_components.unifi_presence.websocket.async_call_later",
+        return_value=MagicMock(),
+    ) as mock_call_later:
+        ws.start()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert ws.available is False
+    mock_call_later.assert_called_once()
+
+    ws.stop()
+
+
+async def test_start_with_none_controller_skips_subscribe(hass: HomeAssistant) -> None:
+    """Test that start() handles a None controller gracefully."""
+    on_message = MagicMock()
+    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+
+    ws.start()
+
+    # No subscription should have been created
+    assert ws._unsub_messages is None
+
+    ws.stop()
+
+
+async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant) -> None:
+    """Test that the WS runner exits early when the controller getter returns None."""
+    on_message = MagicMock()
+    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+
+    with patch(
+        "custom_components.unifi_presence.websocket.async_call_later",
+        return_value=MagicMock(),
+    ) as mock_call_later:
+        ws._start_websocket()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    # Should not schedule a retry — just returns
+    mock_call_later.assert_not_called()
+
+
+async def test_reconnect_schedules_retry_when_controller_none(hass: HomeAssistant) -> None:
+    """Test that _reconnect schedules a retry when the controller getter returns None."""
+    on_message = MagicMock()
+    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+
+    with patch(
+        "custom_components.unifi_presence.websocket.async_call_later",
+        return_value=MagicMock(),
+    ) as mock_call_later:
+        ws._reconnect()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    mock_call_later.assert_called_once()
+    assert mock_call_later.call_args[0][1] == RETRY_TIMER
+
+
+async def test_health_check_with_none_controller(hass: HomeAssistant) -> None:
+    """Test that _async_watch_websocket handles a None controller gracefully."""
+    on_message = MagicMock()
+    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+
+    # Should not raise
+    ws._async_watch_websocket(None)
