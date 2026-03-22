@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiounifi
@@ -66,8 +67,8 @@ def _bypass_setup(hass: HomeAssistant, enable_custom_integrations) -> Generator[
 
 def _mock_controller(
     login_side_effect: Exception | None = None,
-    clients_all_items: list | None = None,
-    clients_items: list | None = None,
+    clients_all_items: list[Any] | None = None,
+    clients_items: list[Any] | None = None,
 ) -> MagicMock:
     """Create a mock aiounifi Controller."""
     controller = MagicMock()

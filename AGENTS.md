@@ -61,8 +61,8 @@ Follow official HA developer guidelines. Project-specific notes:
   except ConnectionError, TimeoutError:
       ...
 
-  # Binding the exception to a variable still requires `as`
-  except ConnectionError, TimeoutError as err:
+  # Binding the exception to a variable still requires `as` + parentheses
+  except (ConnectionError, TimeoutError) as err:
       log(err)
   ```
 
