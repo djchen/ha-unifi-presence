@@ -238,14 +238,17 @@ Diagnostics include:
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+pre-commit install
 ```
 
 ### Testing
 
 ```bash
 source .venv/bin/activate
-pytest tests/ -v
+PYTHONPATH=. pytest tests/ -v
 ```
+
+Coverage is enforced at 95% minimum and runs automatically with pytest.
 
 ### Linting & Formatting
 
@@ -253,6 +256,13 @@ pytest tests/ -v
 source .venv/bin/activate
 ruff check .          # Check for issues
 ruff format .         # Format code
+```
+
+### Type Checking
+
+```bash
+source .venv/bin/activate
+mypy custom_components/
 ```
 
 ## License

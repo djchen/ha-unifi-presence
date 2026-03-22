@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiounifi
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigEntryState,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import callback
 
@@ -28,19 +34,31 @@ from .const import (
 )
 from .helpers import create_controller
 
+if TYPE_CHECKING:
+    from aiounifi.controller import Controller
+
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _fetch_all_clients(controller: aiounifi.Controller) -> dict[str, str]:
+async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     """Fetch all known clients from the UniFi controller.
+
+    Merges active clients (``controller.clients``) with historical clients
+    (``controller.clients_all``).  Active data takes precedence so that
+    recently-connected devices that haven't yet appeared in the historical
+    endpoint are included.
 
     Returns a dict of {mac: display_name}.
     """
     await controller.clients_all.update()
+    await controller.clients.update()
+    # Merge historical + active; active wins on key collision
     clients: dict[str, str] = {}
-    for mac, client in controller.clients_all.items():
-        name = client.name or client.hostname or mac
-        clients[mac] = f"{name} ({mac})"
+    for store in (controller.clients_all, controller.clients):
+        for mac, client in store.items():
+            mac_lower = mac.lower()
+            name = client.name or client.hostname or mac_lower
+            clients[mac_lower] = f"{name} ({mac_lower})"
     return clients
 
 
@@ -57,7 +75,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._password: str = ""
         self._site: str = DEFAULT_SITE
         self._ssl_verify: bool = DEFAULT_SSL_VERIFY
-        self._controller: aiounifi.Controller | None = None
+        self._controller: Controller | None = None
         self._available_clients: dict[str, str] = {}
 
     async def _async_validate_login(
@@ -70,7 +88,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         site: str,
         ssl_verify: bool,
         log_context: str,
-    ) -> tuple[aiounifi.Controller | None, str | None]:
+    ) -> tuple[Controller | None, str | None]:
         """Attempt controller login and return (controller, error_key)."""
         try:
             controller = await create_controller(
@@ -82,7 +100,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 site,
                 ssl_verify,
             )
-        except (aiounifi.LoginRequired, aiounifi.Unauthorized):
+        except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
         except aiounifi.AiounifiException:
             return None, "cannot_connect"
@@ -125,7 +143,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._controller = controller
                 # Fetch clients for device selection step
                 try:
-                    self._available_clients = await _fetch_all_clients(self._controller)
+                    self._available_clients = await _fetch_all_clients(controller)  # type: ignore[arg-type]
                 except Exception:
                     _LOGGER.exception("Failed to fetch client list")
                     self._available_clients = {}
@@ -224,18 +242,18 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 if error is not None:
                     errors["base"] = error
                 else:
-                    updated_data = dict(current_data)
-                    updated_data[CONF_HOST] = host
-                    updated_data[CONF_PORT] = port
-                    updated_data[CONF_USERNAME] = user_input[CONF_USERNAME]
-                    updated_data[CONF_PASSWORD] = user_input[CONF_PASSWORD]
-                    updated_data[CONF_SITE] = site
-                    updated_data[CONF_SSL_VERIFY] = ssl_verify
                     return self.async_update_reload_and_abort(
                         reconfigure_entry,
                         unique_id=unique_id,
                         title=f"UniFi Presence ({host})",
-                        data=updated_data,
+                        data={
+                            CONF_HOST: host,
+                            CONF_PORT: port,
+                            CONF_USERNAME: user_input[CONF_USERNAME],
+                            CONF_PASSWORD: user_input[CONF_PASSWORD],
+                            CONF_SITE: site,
+                            CONF_SSL_VERIFY: ssl_verify,
+                        },
                     )
 
         return self.async_show_form(
@@ -329,10 +347,12 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         # Try to reuse the coordinator's authenticated controller, fall back to new login
         available_clients: dict[str, str] = {}
         try:
-            coordinator = getattr(self.config_entry, "runtime_data", None)
-            if coordinator is not None and coordinator.controller is not None:
-                controller = coordinator.controller
-            else:
+            controller = None
+            if self.config_entry.state is ConfigEntryState.LOADED:
+                coordinator = self.config_entry.runtime_data
+                if coordinator is not None and coordinator.controller is not None:
+                    controller = coordinator.controller
+            if controller is None:
                 data = self.config_entry.data
                 controller = await create_controller(
                     self.hass,

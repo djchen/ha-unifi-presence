@@ -27,9 +27,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - run: |
-          pip install pytest pytest-asyncio pytest-homeassistant-custom-component aiounifi
-      - run: pytest tests/
+      - run: pip install ".[dev]"
+      - run: PYTHONPATH=. pytest tests/ -v
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install ".[dev]"
+      - run: mypy custom_components/
 
   hacs:
     name: HACS Validation
