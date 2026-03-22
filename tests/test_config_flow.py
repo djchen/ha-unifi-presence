@@ -68,16 +68,19 @@ def _mock_controller(
     login_side_effect: Exception | None = None,
     clients_all_items: list | None = None,
     clients_items: list | None = None,
-) -> AsyncMock:
+) -> MagicMock:
     """Create a mock aiounifi Controller."""
-    controller = AsyncMock()
+    controller = MagicMock()
     controller.login = AsyncMock(side_effect=login_side_effect)
+    controller.start_websocket = AsyncMock()
     controller.clients_all = MagicMock()
     controller.clients_all.update = AsyncMock()
     controller.clients_all.items.return_value = clients_all_items or []
     controller.clients = MagicMock()
     controller.clients.update = AsyncMock()
     controller.clients.items.return_value = clients_items or []
+    controller.messages.subscribe = MagicMock(return_value=MagicMock())
+    controller.connectivity = MagicMock()
     return controller
 
 

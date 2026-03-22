@@ -54,7 +54,19 @@ Follow official HA developer guidelines. Project-specific notes:
 - `from __future__ import annotations` in every file; full type hints
 - Lazy `%s` in log messages; never log credentials
 - Google-style docstrings; file-level docstrings describe purpose
-- **Python 3.14+ specific**: Embrace the latest syntax features seamlessly (e.g., catching multiple exceptions without parentheses using `except Exception1, Exception2:`).
+- **Python 3.14+ specific**: Embrace the latest syntax features seamlessly. [PEP 758](https://peps.python.org/pep-0758/) allows catching multiple exceptions without parentheses — do **not** confuse this with the legacy Python 2 `except Type, variable:` binding form.
+
+  ```python
+  # PEP 758 — catch multiple exceptions (Python 3.14+)
+  except ConnectionError, TimeoutError:
+      ...
+
+  # Binding the exception to a variable still requires `as`
+  except ConnectionError, TimeoutError as err:
+      log(err)
+  ```
+
+  The old Python 2 form `except Exception, e:` (where `e` captured the exception) is **not** valid in Python 3 and looks deceptively similar — always use `as` for binding.
 
 ### Testing
 - `pytest-homeassistant-custom-component`; `enable_custom_integrations` fixture for config flow tests

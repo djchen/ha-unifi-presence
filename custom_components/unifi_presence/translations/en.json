@@ -65,14 +65,14 @@
       }
     },
     "error": {
-      "already_configured": "This UniFi controller and site is already configured",
+      "already_configured": "This UniFi controller and site are already configured",
       "invalid_auth": "Invalid username or password",
       "cannot_connect": "Unable to connect to the UniFi controller",
       "unknown": "An unexpected error occurred",
       "no_devices": "You must select at least one device to track"
     },
     "abort": {
-      "already_configured": "This UniFi controller and site is already configured",
+      "already_configured": "This UniFi controller and site are already configured",
       "no_devices_discovered": "No devices were discovered on this UniFi site",
       "reauth_successful": "Re-authentication successful",
       "reconfigure_successful": "Configuration updated successfully"
