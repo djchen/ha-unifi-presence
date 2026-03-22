@@ -6,7 +6,7 @@
 
 ## Project Structure
 
-```
+```text
 ha-unifi-presence/
 ├── custom_components/unifi_presence/
 │   ├── __init__.py        # Setup/unload, WS lifecycle, stale device cleanup
