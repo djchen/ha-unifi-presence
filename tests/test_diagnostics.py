@@ -116,6 +116,24 @@ def test_redact_mac_keys() -> None:
     assert "aa:bb:cc:dd:ee:ff" not in result
 
 
+async def test_diagnostics_preserves_mac_suffix_collisions(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
+    """Test that diagnostics keep all device states when redacted MAC keys collide."""
+    loaded_entry.runtime_data.data.device_states = {
+        "aa:bb:cc:dd:ee:ff": True,
+        "11:22:33:dd:ee:ff": False,
+    }
+
+    result = await async_get_config_entry_diagnostics(hass, loaded_entry)
+
+    colliding_entries = {
+        key: value for key, value in result["device_states"].items() if key.startswith("**:**:**:dd:ee:ff")
+    }
+    assert len(colliding_entries) == 2
+    assert list(colliding_entries.values()).count(True) == 1
+    assert list(colliding_entries.values()).count(False) == 1
+    assert set(colliding_entries) == {"**:**:**:dd:ee:ff", "**:**:**:dd:ee:ff (2)"}
+
+
 def test_redact_mac_list() -> None:
     """Test that MAC lists are partially redacted."""
     macs = ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"]

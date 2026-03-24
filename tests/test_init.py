@@ -238,6 +238,49 @@ async def test_shutdown_event_stops_websocket(
     ws.stop.assert_called_once()
 
 
+async def test_websocket_starts_after_shutdown_registration_and_cleanup(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that websocket startup is deferred until teardown hooks and cleanup are done."""
+    entry = _make_config_entry(hass)
+    stale_mac = "99:99:99:99:99:99"
+    device_reg = dr.async_get(hass)
+    device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        connections={(CONNECTION_NETWORK_MAC, stale_mac)},
+    )
+
+    forward_complete = False
+    shutdown_registered = False
+    original_forward = hass.config_entries.async_forward_entry_setups
+    original_async_on_unload = entry.async_on_unload
+
+    async def _forward_and_record(*args, **kwargs):
+        nonlocal forward_complete
+        result = await original_forward(*args, **kwargs)
+        forward_complete = True
+        return result
+
+    def _async_on_unload_and_record(*args, **kwargs):
+        nonlocal shutdown_registered
+        shutdown_registered = True
+        return original_async_on_unload(*args, **kwargs)
+
+    def _assert_start_after_setup(_websocket: UnifiPresenceWebsocket) -> None:
+        assert forward_complete is True
+        assert shutdown_registered is True
+        assert device_reg.async_get_device(connections={(CONNECTION_NETWORK_MAC, stale_mac)}) is None
+
+    with (
+        patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller),
+        patch.object(hass.config_entries, "async_forward_entry_setups", side_effect=_forward_and_record),
+        patch.object(entry, "async_on_unload", side_effect=_async_on_unload_and_record),
+        patch.object(UnifiPresenceWebsocket, "start", autospec=True, side_effect=_assert_start_after_setup),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+
 async def test_entity_states_reflect_coordinator_data(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:

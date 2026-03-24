@@ -30,7 +30,15 @@ def _partial_redact_mac(mac: str) -> str:
 
 def _redact_mac_keys(data: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of a dict with MAC-address keys partially redacted."""
-    return {_partial_redact_mac(k): v for k, v in data.items()}
+    redacted: dict[str, Any] = {}
+    counts: dict[str, int] = {}
+    for key, value in data.items():
+        redacted_key = _partial_redact_mac(key)
+        count = counts.get(redacted_key, 0) + 1
+        counts[redacted_key] = count
+        unique_key = redacted_key if count == 1 else f"{redacted_key} ({count})"
+        redacted[unique_key] = value
+    return redacted
 
 
 def _redact_mac_list(macs: list[str]) -> list[str]:

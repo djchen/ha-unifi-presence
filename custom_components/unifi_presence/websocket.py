@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import timedelta
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -25,6 +26,8 @@ _LOGGER = logging.getLogger(__name__)
 RETRY_TIMER = 15
 RETRY_MAX = 300
 CHECK_WEBSOCKET_INTERVAL = timedelta(minutes=1)
+STALE_WEBSOCKET_INTERVAL = timedelta(minutes=5)
+WEBSOCKET_READY_TIMEOUT = 5.0
 
 
 class UnifiPresenceWebsocket:
@@ -49,7 +52,7 @@ class UnifiPresenceWebsocket:
         self._reconnect_task: asyncio.Task[None] | None = None
         self._unsub_messages: Callable[[], None] | None = None
 
-        self.available = True
+        self.available = False
         self._stopped = False
         self._retry_delay = RETRY_TIMER
 
@@ -123,6 +126,10 @@ class UnifiPresenceWebsocket:
     @callback
     def _start_websocket(self) -> None:
         """Create the WebSocket runner task."""
+        if self._stopped:
+            return
+        if self.ws_task is not None and not self.ws_task.done():
+            return
 
         async def _websocket_runner() -> None:
             """Run the WebSocket connection."""
@@ -131,42 +138,84 @@ class UnifiPresenceWebsocket:
                 _LOGGER.warning("No controller available for WebSocket")
                 return
 
+            websocket_task = asyncio.create_task(api.start_websocket())
+
             try:
-                await api.start_websocket()
+                done, _ = await asyncio.wait({websocket_task}, timeout=WEBSOCKET_READY_TIMEOUT)
+                if not done and not self._stopped:
+                    self._set_available(True)
+                    self._retry_delay = RETRY_TIMER
+                    self._clear_retry()
+
+                await websocket_task
             except aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError:
                 _LOGGER.error("WebSocket setup failed")
             except aiounifi.WebsocketError:
                 _LOGGER.error("WebSocket disconnected")
+            except asyncio.CancelledError:
+                websocket_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await websocket_task
+                raise
             except Exception:
                 _LOGGER.exception("Unexpected WebSocket error")
+            finally:
+                if self.ws_task is asyncio.current_task():
+                    self.ws_task = None
 
             if self._stopped:
                 return
 
-            self.available = False
-            async_dispatcher_send(self.hass, self.signal)
+            self._set_available(False, force_signal=True)
             self._schedule_retry()
-
-        if not self.available:
-            self.available = True
-            self._retry_delay = RETRY_TIMER
-            async_dispatcher_send(self.hass, self.signal)
 
         self.ws_task = self.hass.async_create_background_task(_websocket_runner(), name="unifi_presence_websocket")
 
     @callback
     def _schedule_retry(self) -> None:
         """Schedule a reconnect with exponential backoff."""
+        if self._cancel_retry is not None:
+            return
+
         delay = self._retry_delay
         self._retry_delay = min(self._retry_delay * 2, RETRY_MAX)
         _LOGGER.info("Will try to reconnect to UniFi controller in %s seconds", delay)
-        self._cancel_retry = async_call_later(self.hass, delay, lambda _now: self._reconnect())
+
+        @callback
+        def _run_retry(_now: object) -> None:
+            self._cancel_retry = None
+            self._reconnect()
+
+        self._cancel_retry = async_call_later(self.hass, delay, _run_retry)
+
+    @callback
+    def _clear_retry(self) -> None:
+        """Cancel any pending reconnect timer."""
+        if self._cancel_retry is not None:
+            self._cancel_retry()
+            self._cancel_retry = None
+
+    @callback
+    def _set_available(self, available: bool, *, force_signal: bool = False) -> None:
+        """Update availability and notify listeners when it changes."""
+        if self.available == available and not force_signal:
+            return
+
+        self.available = available
+        async_dispatcher_send(self.hass, self.signal)
 
     @callback
     def _reconnect(self) -> None:
         """Reconnect to the UniFi controller."""
         if self._stopped:
             return
+
+        self._cancel_retry = None
+        self._set_available(False, force_signal=True)
+
+        if self.ws_task is not None:
+            self.ws_task.cancel()
+            self.ws_task = None
 
         async def _do_reconnect() -> None:
             """Attempt re-authentication and restart WebSocket."""
@@ -192,16 +241,33 @@ class UnifiPresenceWebsocket:
                 # Re-subscribe in case the controller was replaced during re-auth
                 self._subscribe_messages()
                 self._start_websocket()
+            finally:
+                self._reconnect_task = None
 
         self._reconnect_task = self.hass.async_create_background_task(_do_reconnect(), name="unifi_presence_reconnect")
 
     @callback
     def _async_watch_websocket(self, _now: object) -> None:
-        """Log WebSocket health check."""
+        """Log WebSocket health and reconnect stale sessions."""
         api = self._get_api()
-        ws_message_received = api.connectivity.ws_message_received if api is not None else "N/A"
+        ws_message_received = api.connectivity.ws_message_received if api is not None else None
         _LOGGER.debug(
             "WebSocket health check — available: %s, last message: %s",
             self.available,
             ws_message_received,
         )
+
+        if self._stopped or not self.available:
+            return
+
+        if self.ws_task is None or self.ws_task.done():
+            _LOGGER.warning("WebSocket task ended unexpectedly, reconnecting")
+            self._reconnect()
+            return
+
+        if (
+            isinstance(ws_message_received, datetime)
+            and datetime.now(UTC) - ws_message_received > STALE_WEBSOCKET_INTERVAL
+        ):
+            _LOGGER.warning("WebSocket stale, reconnecting")
+            self._reconnect()

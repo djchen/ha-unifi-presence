@@ -30,7 +30,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
             coordinator.signal_reachable,
             coordinator.process_message,
         )
-        websocket.start()
         coordinator.websocket = websocket
 
     entry.runtime_data = coordinator
@@ -54,6 +53,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
             coordinator.websocket.stop()
 
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown))
+
+    if coordinator.websocket is not None:
+        coordinator.websocket.start()
 
     return True
 
