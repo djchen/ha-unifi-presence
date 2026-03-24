@@ -97,7 +97,7 @@
       }
     },
     "error": {
-      "cannot_discover_devices": "Connected to the UniFi controller, but could not fetch clients from this site",
+      "cannot_discover_devices": "Could not refresh the client list; showing previously tracked devices",
       "no_devices": "You must select at least one device to track"
     },
     "abort": {

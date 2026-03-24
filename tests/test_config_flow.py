@@ -157,7 +157,7 @@ async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
     assert result["errors"] == {"base": "unknown"}
 
 
-async def test_user_step_client_fetch_failure_aborts(hass: HomeAssistant) -> None:
+async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAssistant) -> None:
     """Test that setup shows a discovery error if client discovery fails after login."""
     controller = _mock_controller(clients_all_items=[])
     controller.clients_all.update = AsyncMock(side_effect=Exception("fetch failed"))
@@ -697,6 +697,31 @@ async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, conf
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_TRACKED_DEVICES] == ["aa:bb:cc:dd:ee:ff"]
+
+
+async def test_options_flow_discovery_failure_preserves_validation_error(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Test submit validation errors are not masked by discovery failures."""
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("offline")):
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    assert result["errors"] == {"base": "cannot_discover_devices"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_TRACKED_DEVICES: [],
+            CONF_AWAY_SECONDS: 90,
+            CONF_FALLBACK_POLL_INTERVAL: 600,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    assert result["errors"] == {"base": "no_devices"}
 
 
 async def test_options_flow_discovery_failure_without_tracked_devices_aborts(
