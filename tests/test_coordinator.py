@@ -74,6 +74,20 @@ async def test_coordinator_fetches_clients(
     assert data.device_states["11:22:33:44:55:66"] is False
 
 
+async def test_coordinator_uses_hostname_when_name_missing(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that hostname is used as the runtime display name fallback."""
+    now = int(time.time())
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", hostname="dan-phone", last_seen=now)
+    mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    data = await coordinator._async_update_data()
+
+    assert data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "dan-phone"
+
+
 async def test_coordinator_marks_unknown_device_not_home(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
@@ -240,6 +254,25 @@ async def test_process_message_updates_state(
     # State should now be home
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+
+
+async def test_process_message_uses_hostname_when_name_missing(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that websocket updates fall back to hostname for display name."""
+    now = int(time.time())
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+
+    message = MagicMock()
+    message.data = {
+        "mac": "aa:bb:cc:dd:ee:ff",
+        "hostname": "dan-phone",
+        "last_seen": now,
+    }
+    coordinator.process_message(message)
+
+    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "dan-phone"
 
 
 async def test_process_message_ignores_untracked_mac(

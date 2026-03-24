@@ -134,10 +134,11 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         mac: str,
         *,
         name: str = "",
+        hostname: str = "",
     ) -> ClientInfo:
         """Build a normalised client_info dict."""
         return {
-            "name": name or mac,
+            "name": name or hostname or mac,
             "mac": mac,
         }
 
@@ -157,6 +158,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         info = self._build_client_info(
             mac,
             name=raw.get("name", ""),
+            hostname=raw.get("hostname", ""),
         )
 
         # Check if state actually changed
@@ -237,6 +239,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 client_info[mac] = self._build_client_info(
                     mac,
                     name=client.name or "",
+                    hostname=client.hostname or "",
                 )
             else:
                 is_home = False
