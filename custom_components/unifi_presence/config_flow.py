@@ -51,7 +51,10 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     Returns a dict of {mac: display_name}.
     """
     await controller.clients_all.update()
-    await controller.clients.update()
+    try:
+        await controller.clients.update()
+    except Exception:
+        _LOGGER.debug("Failed to refresh active UniFi clients; using historical clients only")
     # Merge historical + active; active wins on key collision
     clients: dict[str, str] = {}
     for store in (controller.clients_all, controller.clients):

@@ -176,6 +176,25 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
     assert result["step_id"] == "devices"
 
 
+async def test_user_step_active_client_refresh_failure_uses_historical_clients(
+    hass: HomeAssistant,
+) -> None:
+    """Test that setup still proceeds when active client refresh fails."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
+    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active clients unavailable"))
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=MOCK_CONFIG_DATA,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"
+
+
 async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
     """Test that selecting devices creates a config entry."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
@@ -584,6 +603,22 @@ async def test_options_flow_runtime_data_no_controller_falls_back(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
     create_ctrl.assert_called_once()
+
+
+async def test_options_flow_active_client_refresh_failure_uses_historical_clients(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Test options flow still shows devices when active refresh fails."""
+    controller = _mock_controller(
+        clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
+    )
+    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active clients unavailable"))
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
 
 
 async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
