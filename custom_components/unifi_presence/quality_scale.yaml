@@ -1,0 +1,94 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: This integration does not provide service actions.
+  appropriate-polling: done
+  brands: done
+  common-modules: done
+  config-flow-test-coverage: done
+  config-flow: done
+  dependency-transparency: done
+  docs-actions:
+    status: exempt
+    comment: This integration does not provide service actions.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: This integration does not provide service actions.
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage: done
+
+  # Gold
+  devices: done
+  diagnostics: done
+  discovery:
+    status: exempt
+    comment: |
+      UniFi controllers are not discoverable via standard HA discovery
+      methods (mDNS/SSDP/DHCP). The official HA UniFi integration also
+      does not implement discovery.
+  discovery-update-info:
+    status: exempt
+    comment: |
+      Not applicable — the integration connects to a user-specified
+      controller host and does not use discovery.
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices:
+    status: exempt
+    comment: |
+      Tracked devices are explicitly selected by the user in the config
+      or options flow. New devices require user action via the options
+      flow, which triggers a reload.
+  entity-category:
+    status: exempt
+    comment: |
+      The device tracker presence entity is the primary entity per device
+      and does not need an EntityCategory override.
+  entity-device-class:
+    status: exempt
+    comment: ScannerEntity does not have device classes.
+  entity-disabled-by-default:
+    status: exempt
+    comment: |
+      All entities are user-selected during setup. There are no noisy or
+      less popular entities to disable by default.
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow: done
+  repair-issues:
+    status: exempt
+    comment: |
+      Auth failures trigger ConfigEntryAuthFailed which surfaces the
+      reauth flow. No other user-actionable repair scenarios exist.
+  stale-devices: done
+
+  # Platinum
+  async-dependency: done
+  inject-websession: done
+  strict-typing: done

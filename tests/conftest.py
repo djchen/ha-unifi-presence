@@ -87,6 +87,8 @@ def _build_controller(*, clients: MagicMock | _MockClientStore) -> MagicMock:
     """Create a fully wired controller mock with shared defaults."""
     controller = MagicMock()
     controller.clients = clients
+    controller.clients_all = MagicMock()
+    controller.clients_all.update = AsyncMock()
     controller.login = AsyncMock()
     controller.messages = MagicMock()
     controller.messages.subscribe = MagicMock(return_value=MagicMock())

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from homeassistant.components.device_tracker import ScannerEntity, SourceType
+from homeassistant.components.device_tracker import ScannerEntity, SourceType  # type: ignore[attr-defined]
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -12,7 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
 from .const import DOMAIN
-from .coordinator import UnifiPresenceCoordinator
+from .coordinator import ClientInfo, UnifiPresenceCoordinator
 
 PARALLEL_UPDATES = 0
 
@@ -52,7 +50,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
 
         self._attr_unique_id = mac
         self._attr_name = None
-        self._attr_device_info = DeviceInfo(
+        self._attr_device_info = DeviceInfo(  # type: ignore[assignment]
             identifiers={(DOMAIN, mac)},
             connections={(CONNECTION_NETWORK_MAC, mac)},
             default_manufacturer="Ubiquiti Networks",
@@ -60,18 +58,18 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         )
 
     @property
-    def _client_info(self) -> dict[str, Any] | None:
+    def _client_info(self) -> ClientInfo | None:
         """Return the client info dict for this MAC, or None."""
         data = self.coordinator.data
         if data is None:
-            return None
+            return None  # type: ignore[unreachable]
         return data.client_info.get(self._mac)
 
     @property
     def is_connected(self) -> bool:
         """Return true if the device is connected (home)."""
         if self.coordinator.data is None:
-            return False
+            return False  # type: ignore[unreachable]
         return self.coordinator.data.device_states.get(self._mac, False)
 
     @property
@@ -84,8 +82,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         """Return the IP address of the device."""
         info = self._client_info
         if info is not None:
-            ip = info.get("ip", "")
-            return ip if ip else None
+            return info["ip"] or None
         return None
 
     @property
@@ -93,8 +90,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         """Return the hostname of the device."""
         info = self._client_info
         if info is not None:
-            hostname = info.get("hostname", "")
-            return hostname if hostname else None
+            return info["hostname"] or None
         return None
 
     @property
@@ -103,7 +99,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         info = self._client_info
         if info is not None:
             return {
-                "is_wired": info.get("is_wired", False),
-                "last_seen": info.get("last_seen", 0),
+                "is_wired": info["is_wired"],
+                "last_seen": info["last_seen"],
             }
         return None
