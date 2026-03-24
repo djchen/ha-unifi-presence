@@ -194,6 +194,29 @@ async def test_stale_device_cleanup_on_setup(
     assert tracked_device is not None
 
 
+async def test_stale_device_cleanup_keeps_tracked_mac_with_different_case(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+    mock_controller: MagicMock,
+) -> None:
+    """Test that stale device cleanup matches tracked MACs case-insensitively."""
+    entry = _make_config_entry(hass)
+
+    tracked_mac = "AA:BB:CC:DD:EE:FF"
+    device_reg = dr.async_get(hass)
+    device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        connections={(CONNECTION_NETWORK_MAC, tracked_mac)},
+    )
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    tracked_device = device_reg.async_get_device(connections={(CONNECTION_NETWORK_MAC, tracked_mac)})
+    assert tracked_device is not None
+
+
 async def test_shutdown_event_stops_websocket(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:

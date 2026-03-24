@@ -41,7 +41,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
     tracked_set = frozenset(coordinator.tracked_devices)
     device_registry = dr.async_get(hass)
     for device_entry in dr.async_entries_for_config_entry(device_registry, entry.entry_id):
-        device_macs = {mac for conn_type, mac in device_entry.connections if conn_type == CONNECTION_NETWORK_MAC}
+        device_macs = {
+            mac.lower() for conn_type, mac in device_entry.connections if conn_type == CONNECTION_NETWORK_MAC
+        }
         if not device_macs & tracked_set:
             device_registry.async_update_device(device_entry.id, remove_config_entry_id=entry.entry_id)
 
