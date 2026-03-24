@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: mypy
+        entry: .venv/bin/mypy
         args: [custom_components/]
         language: system
         types: [python]
