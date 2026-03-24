@@ -104,6 +104,7 @@ class UnifiPresenceWebsocket:
 
         if self.ws_task is not None:
             self.ws_task.cancel()
+            self.ws_task = None
 
     async def stop_and_wait(self) -> None:
         """Stop WebSocket and await task completion."""

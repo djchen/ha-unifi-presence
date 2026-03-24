@@ -678,3 +678,56 @@ async def test_reauth_unknown_error(hass: HomeAssistant, config_entry: MockConfi
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "unknown"}
+
+
+# ── Client merge / edge-case tests ───────────────────────────────────────
+
+
+async def test_fetch_all_clients_active_wins_on_key_collision(hass: HomeAssistant) -> None:
+    """Test that active client name takes precedence over historical on same MAC."""
+    historical = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Old Name")
+    active = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Current Name")
+
+    controller = _mock_controller(
+        clients_all_items=[("aa:bb:cc:dd:ee:ff", historical)],
+        clients_items=[("aa:bb:cc:dd:ee:ff", active)],
+    )
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=MOCK_CONFIG_DATA,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"
+
+    # The multi-select should show the active name, not the historical one
+    schema = result["data_schema"].schema
+    tracked_key = next(k for k in schema if str(k) == CONF_TRACKED_DEVICES)
+    options = schema[tracked_key].options
+    assert "aa:bb:cc:dd:ee:ff" in options
+    assert "Current Name" in options["aa:bb:cc:dd:ee:ff"]
+
+
+async def test_options_flow_empty_clients_and_empty_tracked_aborts(
+    hass: HomeAssistant,
+) -> None:
+    """Test that options flow aborts when no clients and no tracked MACs."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="UniFi Presence (192.168.1.1)",
+        data=MOCK_CONFIG_DATA,
+        unique_id="192.168.1.1_default",
+        options={CONF_TRACKED_DEVICES: [], **{k: v for k, v in MOCK_OPTIONS.items() if k != CONF_TRACKED_DEVICES}},
+    )
+    entry.add_to_hass(hass)
+
+    # Client discovery returns nothing, and there are no currently tracked MACs
+    controller = _mock_controller(clients_all_items=[], clients_items=[])
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_devices_discovered"

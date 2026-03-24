@@ -306,9 +306,12 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         if self._available_clients:
             client_options = dict(sorted(self._available_clients.items(), key=lambda x: x[1].lower()))
 
-        schema_fields: dict[Any, Any] = {}
-        if client_options:
-            schema_fields[vol.Optional(CONF_TRACKED_DEVICES, default=[])] = cv.multi_select(client_options)
+        if not client_options:
+            return self.async_abort(reason="no_devices_discovered")
+
+        schema_fields: dict[Any, Any] = {
+            vol.Optional(CONF_TRACKED_DEVICES, default=[]): cv.multi_select(client_options),
+        }
 
         return self.async_show_form(
             step_id="devices",
@@ -383,6 +386,8 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         schema_fields: dict[Any, Any] = {}
         if client_options:
             schema_fields[vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked)] = cv.multi_select(client_options)
+        else:
+            return self.async_abort(reason="no_devices_discovered")
         schema_fields[
             vol.Optional(
                 CONF_AWAY_SECONDS,

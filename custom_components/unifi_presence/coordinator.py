@@ -153,6 +153,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     def process_message(self, message: Any) -> None:
         """Handle a sta:sync WebSocket message for a tracked client."""
         raw = message.data
+        if not isinstance(raw, dict):
+            return
         mac = raw.get("mac", "").lower()
         if mac not in self._tracked_set:
             return

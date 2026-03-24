@@ -139,10 +139,10 @@ Each tracked device creates a `device_tracker` entity and a matching device-regi
 
 ## Reauthentication
 
-If the UniFi controller rejects the stored credentials (e.g., after a password change), the integration will show a **Reconfigure** notification:
+If the UniFi controller rejects the stored credentials (e.g., after a password change), the integration will show a **Reauth** notification:
 
 1. Click the notification or go to **Settings** → **Devices & Services**
-2. Click **Reconfigure** on the UniFi Presence card
+2. Click **Reauthenticate** on the UniFi Presence card
 3. Enter updated username and password
 4. Click **Submit** — the integration reloads automatically
 
@@ -196,8 +196,8 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 
 ## Known Limitations
 
-- **No GPS tracking**: This integration uses network presence only — it cannot determine geographic location or zones.
 - **Away detection delay**: Devices are marked away only after the configured `away_seconds` threshold elapses since the last activity seen by the controller. Some devices sleep aggressively and may appear away prematurely.
+- **Clock skew**: Presence detection compares the Home Assistant server's clock with the controller's `last_seen` timestamps. If the two clocks diverge significantly, devices may be incorrectly marked home or away.
 - **Single controller**: Each integration instance connects to one UniFi controller and site. Add multiple instances for multiple controllers.
 - **Client visibility**: Only devices that have previously connected to the UniFi network appear in the client list. New devices must connect at least once before they can be tracked.
 - **UniFi OS / legacy differences**: Port defaults differ (443 for UniFi OS, 8443 for legacy). Ensure the correct port is configured.
@@ -237,7 +237,7 @@ Diagnostics include:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install ".[dev]"
 pre-commit install
 ```
 

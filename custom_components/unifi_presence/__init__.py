@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 
+from .const import CONF_TRACKED_DEVICES
 from .coordinator import UnifiPresenceCoordinator
 from .websocket import UnifiPresenceWebsocket
 
@@ -70,8 +71,13 @@ async def async_remove_config_entry_device(
     device_entry: dr.DeviceEntry,
 ) -> bool:
     """Allow removal of a device only if it is no longer tracked."""
-    coordinator = config_entry.runtime_data
-    tracked = frozenset(coordinator.tracked_devices)
+    coordinator = getattr(config_entry, "runtime_data", None)
+    if coordinator is not None:
+        tracked = frozenset(coordinator.tracked_devices)
+    else:
+        tracked = frozenset(mac.strip().lower() for mac in config_entry.options.get(CONF_TRACKED_DEVICES, []))
     return not any(
-        mac for conn_type, mac in device_entry.connections if conn_type == CONNECTION_NETWORK_MAC and mac in tracked
+        mac
+        for conn_type, mac in device_entry.connections
+        if conn_type == CONNECTION_NETWORK_MAC and mac.lower() in tracked
     )

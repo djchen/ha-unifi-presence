@@ -74,6 +74,26 @@ async def test_diagnostics_websocket_none(hass: HomeAssistant, loaded_entry: Moc
     assert result["websocket_connected"] is False
 
 
+async def test_diagnostics_without_runtime_data(hass: HomeAssistant) -> None:
+    """Test that diagnostics falls back to config entry data when runtime_data is unavailable."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="UniFi Presence (192.168.1.1)",
+        data=MOCK_CONFIG_DATA,
+        unique_id="192.168.1.1_default",
+        options=MOCK_OPTIONS,
+    )
+    entry.add_to_hass(hass)
+
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["tracked_device_count"] == len(MOCK_OPTIONS["tracked_devices"])
+    assert result["device_states"] == {}
+    assert result["away_seconds"] == MOCK_OPTIONS["away_seconds"]
+    assert result["fallback_poll_interval_seconds"] == MOCK_OPTIONS["fallback_poll_interval"]
+    assert result["websocket_connected"] is False
+
+
 def test_partial_redact_mac_standard() -> None:
     """Test partial MAC redaction keeps last 3 octets."""
     assert _partial_redact_mac("aa:bb:cc:dd:ee:ff") == "**:**:**:dd:ee:ff"

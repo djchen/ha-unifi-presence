@@ -9,6 +9,13 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
 from . import UnifiPresenceConfigEntry
+from .const import (
+    CONF_AWAY_SECONDS,
+    CONF_FALLBACK_POLL_INTERVAL,
+    CONF_TRACKED_DEVICES,
+    DEFAULT_AWAY_SECONDS,
+    DEFAULT_FALLBACK_POLL_INTERVAL,
+)
 
 TO_REDACT = {CONF_PASSWORD, CONF_USERNAME}
 
@@ -36,19 +43,31 @@ async def async_get_config_entry_diagnostics(
     entry: UnifiPresenceConfigEntry,
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    coordinator = entry.runtime_data
+    coordinator = getattr(entry, "runtime_data", None)
 
     device_states: dict[str, bool] = {}
-    tracked_count = len(coordinator.tracked_devices)
-    if coordinator.data is not None:
+    tracked_devices = entry.options.get(CONF_TRACKED_DEVICES, [])
+    tracked_count = len(tracked_devices)
+    away_seconds = entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
+    fallback_poll_interval_seconds = entry.options.get(
+        CONF_FALLBACK_POLL_INTERVAL,
+        DEFAULT_FALLBACK_POLL_INTERVAL,
+    )
+    websocket_connected = False
+    if coordinator is not None:
+        tracked_count = len(coordinator.tracked_devices)
+        away_seconds = coordinator.away_seconds
+        fallback_poll_interval_seconds = (
+            coordinator.update_interval.total_seconds() if coordinator.update_interval else None
+        )
+        websocket_connected = coordinator.websocket is not None and coordinator.websocket.available
+    if coordinator is not None and coordinator.data is not None:
         device_states = coordinator.data.device_states
-
-    websocket_connected = coordinator.websocket is not None and coordinator.websocket.available
 
     # Redact options containing MAC addresses
     redacted_options = dict(entry.options)
-    if "tracked_devices" in redacted_options:
-        redacted_options["tracked_devices"] = _redact_mac_list(redacted_options["tracked_devices"])
+    if CONF_TRACKED_DEVICES in redacted_options:
+        redacted_options[CONF_TRACKED_DEVICES] = _redact_mac_list(redacted_options[CONF_TRACKED_DEVICES])
 
     return {
         "config_entry": {
@@ -57,9 +76,7 @@ async def async_get_config_entry_diagnostics(
         },
         "tracked_device_count": tracked_count,
         "device_states": _redact_mac_keys(device_states),
-        "away_seconds": coordinator.away_seconds,
-        "fallback_poll_interval_seconds": coordinator.update_interval.total_seconds()
-        if coordinator.update_interval
-        else None,
+        "away_seconds": away_seconds,
+        "fallback_poll_interval_seconds": fallback_poll_interval_seconds,
         "websocket_connected": websocket_connected,
     }

@@ -127,6 +127,39 @@ async def test_remove_config_entry_device_blocks_tracked_mac(
     assert result is False
 
 
+async def test_remove_config_entry_device_blocks_tracked_mac_without_runtime_data(
+    hass: HomeAssistant,
+) -> None:
+    """Test that tracked MACs are still blocked when runtime_data is unavailable."""
+    entry = _make_config_entry(hass)
+    tracked_mac = next(iter(MOCK_OPTIONS[CONF_TRACKED_DEVICES]))
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        connections={(CONNECTION_NETWORK_MAC, tracked_mac.upper())},
+    )
+
+    result = await async_remove_config_entry_device(hass, entry, device)
+
+    assert result is False
+
+
+async def test_remove_config_entry_device_allows_untracked_mac_without_runtime_data(
+    hass: HomeAssistant,
+) -> None:
+    """Test that untracked MACs are removable when runtime_data is unavailable."""
+    entry = _make_config_entry(hass)
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        connections={(CONNECTION_NETWORK_MAC, "22:33:44:55:66:77")},
+    )
+
+    result = await async_remove_config_entry_device(hass, entry, device)
+
+    assert result is True
+
+
 async def test_stale_device_cleanup_on_setup(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:

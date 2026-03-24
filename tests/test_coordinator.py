@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiounifi
@@ -25,7 +26,7 @@ def _make_reauth_side_effect(
     exception: type[Exception],
     *,
     recover: bool = True,
-) -> Callable[[], None]:
+) -> Callable[[], Coroutine[Any, Any, None]]:
     """Return an async update side effect that raises exception on first call.
 
     If recover=True, the second call succeeds. If recover=False, it raises again.
@@ -159,10 +160,13 @@ async def test_coordinator_reauth_network_failure_raises_update_failed(
     """Test that network failure after re-auth raises UpdateFailed."""
 
     async def _network_fails_after_reauth() -> None:
-        _network_fails_after_reauth.count = getattr(_network_fails_after_reauth, "count", 0) + 1
-        if _network_fails_after_reauth.count == 1:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
             raise exception
         raise aiounifi.AiounifiException("still down")
+
+    call_count = 0
 
     mock_coordinator_controller.clients.update_async.side_effect = _network_fails_after_reauth
 
@@ -391,3 +395,51 @@ async def test_controller_property(hass: HomeAssistant, config_entry: MagicMock)
     mock_ctrl = MagicMock()
     coordinator._controller = mock_ctrl
     assert coordinator.controller is mock_ctrl
+
+
+# ── Malformed message tests ──────────────────────────────────────────────
+
+
+async def test_process_message_none_data(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores a message with None data."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = None
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_missing_mac(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores a message with no mac field."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = {"last_seen": int(time.time())}
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_non_dict_data(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores a message with non-dict data."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = "not a dict"
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data

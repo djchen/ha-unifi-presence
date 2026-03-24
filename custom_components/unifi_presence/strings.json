@@ -97,6 +97,9 @@
     },
     "error": {
       "no_devices": "You must select at least one device to track"
+    },
+    "abort": {
+      "no_devices_discovered": "No devices were discovered on this UniFi site"
     }
   },
   "entity": {
