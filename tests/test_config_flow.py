@@ -131,6 +131,19 @@ async def test_user_step_cannot_connect(hass: HomeAssistant) -> None:
     assert result["errors"] == {"base": "cannot_connect"}
 
 
+async def test_user_step_timeout_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """Test that controller login timeouts show a connectivity error."""
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=MOCK_CONFIG_DATA,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
 async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
     """Test that unexpected errors surface as unknown."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("boom")):
@@ -466,6 +479,26 @@ async def test_reconfigure_flow_cannot_connect(hass: HomeAssistant) -> None:
     assert result["errors"] == {"base": "cannot_connect"}
 
 
+async def test_reconfigure_flow_timeout_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """Test that reconfigure surfaces login timeouts as cannot_connect."""
+    entry = _make_reconfigure_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": MOCK_CONFIG_DATA["host"],
+                "port": MOCK_CONFIG_DATA["port"],
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
 async def test_reconfigure_flow_unknown_error(hass: HomeAssistant) -> None:
     """Test that reconfigure flow surfaces unexpected errors as unknown."""
     entry = _make_reconfigure_entry(hass)
@@ -583,6 +616,29 @@ async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAss
     assert entry.data["username"] == "newadmin"
     assert entry.data["password"] == "newpass"
     assert entry.unique_id == "192.168.1.1_default"
+
+
+async def test_reauth_confirm_timeout_shows_cannot_connect(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    """Test that reauth surfaces login timeouts as cannot_connect."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_REAUTH, "entry_id": config_entry.entry_id},
+        data=config_entry.data,
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_options_flow_runtime_data_no_controller_falls_back(

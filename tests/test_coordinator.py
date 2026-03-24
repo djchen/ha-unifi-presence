@@ -280,6 +280,24 @@ async def test_fallback_poll_diff_returns_existing_data(
     assert data2 is data1
 
 
+async def test_async_refresh_skips_listener_update_when_state_unchanged(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that unchanged fallback polls do not notify listeners."""
+    now = int(time.time())
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
+    mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    coordinator.async_update_listeners = MagicMock()
+
+    await coordinator.async_refresh()
+    assert coordinator.async_update_listeners.call_count == 1
+
+    await coordinator.async_refresh()
+    assert coordinator.async_update_listeners.call_count == 1
+
+
 async def test_signal_reachable_property(hass: HomeAssistant, config_entry: MagicMock) -> None:
     """Test that signal_reachable returns a unique signal per entry."""
     coordinator = UnifiPresenceCoordinator(hass, config_entry)

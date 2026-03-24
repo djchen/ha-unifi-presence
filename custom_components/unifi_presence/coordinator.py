@@ -91,6 +91,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             name=DOMAIN,
             update_interval=timedelta(seconds=fallback_interval),
             config_entry=config_entry,
+            # We return the existing data object when presence state is unchanged,
+            # so listener updates can be suppressed on no-op fallback polls.
+            always_update=False,
         )
 
     @property

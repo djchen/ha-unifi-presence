@@ -76,30 +76,3 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     def mac_address(self) -> str:
         """Return the MAC address of the device."""
         return self._mac
-
-    @property
-    def ip_address(self) -> str | None:
-        """Return the IP address of the device."""
-        info = self._client_info
-        if info is not None:
-            return info["ip"] or None
-        return None
-
-    @property
-    def hostname(self) -> str | None:
-        """Return the hostname of the device."""
-        info = self._client_info
-        if info is not None:
-            return info["hostname"] or None
-        return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, str | int | bool] | None:
-        """Return extra state attributes."""
-        info = self._client_info
-        if info is not None:
-            return {
-                "is_wired": info["is_wired"],
-                "last_seen": info["last_seen"],
-            }
-        return None

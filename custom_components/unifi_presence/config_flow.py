@@ -105,7 +105,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
-        except aiounifi.AiounifiException:
+        except TimeoutError, aiounifi.AiounifiException:
             return None, "cannot_connect"
         except Exception:
             _LOGGER.exception("Unexpected exception during %s", log_context)
