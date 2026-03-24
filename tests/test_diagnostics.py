@@ -111,6 +111,8 @@ def test_redact_mac_keys() -> None:
     result = _redact_mac_keys(data)
     assert "**:**:**:dd:ee:ff" in result
     assert "**:**:**:44:55:66" in result
+    assert result["**:**:**:dd:ee:ff"] is True
+    assert result["**:**:**:44:55:66"] is False
     assert "aa:bb:cc:dd:ee:ff" not in result
 
 
