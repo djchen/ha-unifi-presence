@@ -232,9 +232,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                     translation_domain=DOMAIN,
                     translation_key="credentials_rejected",
                 ) from err
-            except aiounifi.AiounifiException as err:
+            except (TimeoutError, aiounifi.AiounifiException) as err:
                 raise self._connect_error() from err
-        except aiounifi.AiounifiException as err:
+        except (TimeoutError, aiounifi.AiounifiException) as err:
             raise self._connect_error() from err
 
         _LOGGER.debug("Fallback poll for tracked device(s)")

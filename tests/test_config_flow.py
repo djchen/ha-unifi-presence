@@ -158,7 +158,7 @@ async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
 
 
 async def test_user_step_client_fetch_failure_aborts(hass: HomeAssistant) -> None:
-    """Test that setup aborts if client discovery fails after login."""
+    """Test that setup shows a discovery error if client discovery fails after login."""
     controller = _mock_controller(clients_all_items=[])
     controller.clients_all.update = AsyncMock(side_effect=Exception("fetch failed"))
 
@@ -169,8 +169,9 @@ async def test_user_step_client_fetch_failure_aborts(hass: HomeAssistant) -> Non
             user_input=MOCK_CONFIG_DATA,
         )
 
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "no_devices_discovered"
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "cannot_discover_devices"}
 
 
 async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
@@ -678,12 +679,13 @@ async def test_options_flow_active_client_refresh_failure_uses_historical_client
 
 
 async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
-    """Test options flow still saves non-device options when client fetch fails."""
+    """Test options flow stays editable and surfaces discovery errors."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("offline")):
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
+    assert result["errors"] == {"base": "cannot_discover_devices"}
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -695,6 +697,26 @@ async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, conf
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_TRACKED_DEVICES] == ["aa:bb:cc:dd:ee:ff"]
+
+
+async def test_options_flow_discovery_failure_without_tracked_devices_aborts(
+    hass: HomeAssistant,
+) -> None:
+    """Test options flow aborts on discovery failure when no tracked devices exist."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="UniFi Presence (192.168.1.1)",
+        data=MOCK_CONFIG_DATA,
+        unique_id="192.168.1.1_default",
+        options={CONF_TRACKED_DEVICES: []},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("offline")):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "cannot_discover_devices"
 
 
 # ── Reauthentication flow tests ──────────────────────────────────────────

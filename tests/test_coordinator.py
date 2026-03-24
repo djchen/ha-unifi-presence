@@ -116,6 +116,23 @@ async def test_coordinator_update_failed(
         await coordinator._async_update_data()
 
 
+async def test_coordinator_initial_timeout_raises_update_failed(
+    hass: HomeAssistant,
+    config_entry: MagicMock,
+) -> None:
+    """Test that timeouts during initial controller creation are transient failures."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    with (
+        patch(
+            "custom_components.unifi_presence.coordinator.create_controller",
+            side_effect=TimeoutError,
+        ),
+        pytest.raises(UpdateFailed),
+    ):
+        await coordinator._async_update_data()
+
+
 async def test_coordinator_fallback_interval(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
@@ -169,6 +186,28 @@ async def test_coordinator_reauth_network_failure_raises_update_failed(
     call_count = 0
 
     mock_coordinator_controller.clients.update_async.side_effect = _network_fails_after_reauth
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+
+@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
+async def test_coordinator_reauth_timeout_raises_update_failed(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock, exception: type[Exception]
+) -> None:
+    """Test that timeouts during re-auth remain transient failures."""
+
+    async def _timeout_after_reauth() -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise exception
+        raise TimeoutError
+
+    call_count = 0
+
+    mock_coordinator_controller.clients.update_async.side_effect = _timeout_after_reauth
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(UpdateFailed):

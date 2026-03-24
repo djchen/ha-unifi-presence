@@ -68,6 +68,7 @@
       "already_configured": "This UniFi controller and site are already configured",
       "invalid_auth": "Invalid username or password",
       "cannot_connect": "Unable to connect to the UniFi controller",
+      "cannot_discover_devices": "Connected to the UniFi controller, but could not fetch clients from this site",
       "unknown": "An unexpected error occurred",
       "no_devices": "You must select at least one device to track"
     },
@@ -96,9 +97,11 @@
       }
     },
     "error": {
+      "cannot_discover_devices": "Connected to the UniFi controller, but could not fetch clients from this site",
       "no_devices": "You must select at least one device to track"
     },
     "abort": {
+      "cannot_discover_devices": "Connected to the UniFi controller, but could not fetch clients from this site",
       "no_devices_discovered": "No devices were discovered on this UniFi site"
     }
   },

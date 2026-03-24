@@ -149,12 +149,12 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._available_clients = await _fetch_all_clients(controller)  # type: ignore[arg-type]
                 except Exception:
                     _LOGGER.exception("Failed to fetch client list")
-                    self._available_clients = {}
+                    errors["base"] = "cannot_discover_devices"
+                else:
+                    if not self._available_clients:
+                        return self.async_abort(reason="no_devices_discovered")
 
-                if not self._available_clients:
-                    return self.async_abort(reason="no_devices_discovered")
-
-                return await self.async_step_devices()
+                    return await self.async_step_devices()
 
         return self.async_show_form(
             step_id="user",
@@ -352,6 +352,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
 
         # Try to reuse the coordinator's authenticated controller, fall back to new login
         available_clients: dict[str, str] = {}
+        discovery_failed = False
         try:
             controller = None
             if self.config_entry.state is ConfigEntryState.LOADED:
@@ -372,6 +373,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             available_clients = await _fetch_all_clients(controller)
         except Exception:
             _LOGGER.warning("Could not fetch UniFi clients for options flow")
+            discovery_failed = True
 
         current_options = self.config_entry.options
         current_tracked = current_options.get(CONF_TRACKED_DEVICES, [])
@@ -390,7 +392,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         if client_options:
             schema_fields[vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked)] = cv.multi_select(client_options)
         else:
-            return self.async_abort(reason="no_devices_discovered")
+            return self.async_abort(reason="cannot_discover_devices" if discovery_failed else "no_devices_discovered")
         schema_fields[
             vol.Optional(
                 CONF_AWAY_SECONDS,
@@ -407,5 +409,5 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema_fields),
-            errors=errors,
+            errors={"base": "cannot_discover_devices"} if discovery_failed else errors,
         )
