@@ -233,16 +233,13 @@ async def test_process_message_updates_state(
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
         "name": "Dan Phone",
-        "hostname": "dan-phone",
-        "ip": "192.168.1.100",
-        "is_wired": False,
         "last_seen": now,
     }
     coordinator.process_message(message)
 
     # State should now be home
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["ip"] == "192.168.1.100"
+    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
 
 
 async def test_process_message_ignores_untracked_mac(
@@ -270,7 +267,7 @@ async def test_process_message_no_state_change_updates_info_silently(
 ) -> None:
     """Test that process_message updates client_info without triggering state change."""
     now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", ip="192.168.1.100", last_seen=now)
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
@@ -281,14 +278,11 @@ async def test_process_message_no_state_change_updates_info_silently(
     assert data.device_states["aa:bb:cc:dd:ee:ff"] is True
     original_data = coordinator.data
 
-    # Send WS message with same home state but different IP
+    # Send WS message with same home state but updated name
     message = MagicMock()
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
-        "name": "Dan Phone",
-        "hostname": "dan-phone",
-        "ip": "192.168.1.200",
-        "is_wired": False,
+        "name": "Dan Phone Updated",
         "last_seen": now,
     }
     coordinator.process_message(message)
@@ -296,7 +290,7 @@ async def test_process_message_no_state_change_updates_info_silently(
     # Data object should be the same (no async_set_updated_data called for state change)
     assert coordinator.data is original_data
     # But client_info should be updated in-place
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["ip"] == "192.168.1.200"
+    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone Updated"
 
 
 async def test_fallback_poll_diff_returns_existing_data(
@@ -359,9 +353,6 @@ async def test_process_message_when_data_is_none(
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
         "name": "Dan Phone",
-        "hostname": "dan-phone",
-        "ip": "192.168.1.100",
-        "is_wired": False,
         "last_seen": now,
     }
     coordinator.process_message(message)
@@ -369,7 +360,7 @@ async def test_process_message_when_data_is_none(
     # Should have created data with the device home
     assert coordinator.data is not None
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["ip"] == "192.168.1.100"
+    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
 
 
 async def test_process_message_case_insensitive_mac(

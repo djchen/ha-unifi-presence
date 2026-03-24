@@ -37,22 +37,14 @@ def _make_presence_data(
         states[mac] = True
         info[mac] = {
             "name": f"Device {mac[:8]}",
-            "hostname": f"host-{mac[:8]}",
-            "ip": "192.168.1.100",
             "mac": mac,
-            "is_wired": False,
-            "last_seen": 1700000000,
         }
 
     for mac in away_macs or []:
         states[mac] = False
         info[mac] = {
             "name": mac,
-            "hostname": "",
-            "ip": "",
             "mac": mac,
-            "is_wired": False,
-            "last_seen": 0,
         }
 
     return UnifiPresenceData(device_states=states, client_info=info)

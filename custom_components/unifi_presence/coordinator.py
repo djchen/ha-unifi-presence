@@ -40,11 +40,7 @@ class ClientInfo(TypedDict):
     """Typed dictionary describing a single UniFi client."""
 
     name: str
-    hostname: str
-    ip: str
     mac: str
-    is_wired: bool
-    last_seen: int
 
 
 class UnifiPresenceData:
@@ -61,7 +57,7 @@ class UnifiPresenceData:
 
         Args:
             device_states: MAC address -> is_home (True = home, False = not_home).
-            client_info: MAC address -> extra client attributes (name, hostname, ip, etc.).
+            client_info: MAC address -> client metadata used by entities.
         """
         self.device_states = device_states
         self.client_info = client_info
@@ -138,19 +134,11 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         mac: str,
         *,
         name: str = "",
-        hostname: str = "",
-        ip: str = "",
-        is_wired: bool = False,
-        last_seen: int = 0,
     ) -> ClientInfo:
         """Build a normalised client_info dict."""
         return {
-            "name": name or hostname or mac,
-            "hostname": hostname or "",
-            "ip": ip or "",
+            "name": name or mac,
             "mac": mac,
-            "is_wired": is_wired,
-            "last_seen": last_seen,
         }
 
     def process_message(self, message: Any) -> None:
@@ -169,10 +157,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         info = self._build_client_info(
             mac,
             name=raw.get("name", ""),
-            hostname=raw.get("hostname", ""),
-            ip=raw.get("ip", ""),
-            is_wired=raw.get("is_wired", False),
-            last_seen=last_seen,
         )
 
         # Check if state actually changed
@@ -253,10 +237,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 client_info[mac] = self._build_client_info(
                     mac,
                     name=client.name or "",
-                    hostname=client.hostname or "",
-                    ip=client.ip or "",
-                    is_wired=client.is_wired,
-                    last_seen=last_seen,
                 )
             else:
                 is_home = False
