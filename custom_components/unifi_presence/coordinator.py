@@ -40,11 +40,7 @@ class ClientInfo(TypedDict):
     """Typed dictionary describing a single UniFi client."""
 
     name: str
-    hostname: str
-    ip: str
     mac: str
-    is_wired: bool
-    last_seen: int
 
 
 class UnifiPresenceData:
@@ -61,7 +57,7 @@ class UnifiPresenceData:
 
         Args:
             device_states: MAC address -> is_home (True = home, False = not_home).
-            client_info: MAC address -> extra client attributes (name, hostname, ip, etc.).
+            client_info: MAC address -> client metadata used by entities.
         """
         self.device_states = device_states
         self.client_info = client_info
@@ -91,6 +87,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             name=DOMAIN,
             update_interval=timedelta(seconds=fallback_interval),
             config_entry=config_entry,
+            # We return the existing data object when presence state is unchanged,
+            # so listener updates can be suppressed on no-op fallback polls.
+            always_update=False,
         )
 
     @property
@@ -136,18 +135,11 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         *,
         name: str = "",
         hostname: str = "",
-        ip: str = "",
-        is_wired: bool = False,
-        last_seen: int = 0,
     ) -> ClientInfo:
         """Build a normalised client_info dict."""
         return {
             "name": name or hostname or mac,
-            "hostname": hostname or "",
-            "ip": ip or "",
             "mac": mac,
-            "is_wired": is_wired,
-            "last_seen": last_seen,
         }
 
     def process_message(self, message: Any) -> None:
@@ -167,9 +159,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             mac,
             name=raw.get("name", ""),
             hostname=raw.get("hostname", ""),
-            ip=raw.get("ip", ""),
-            is_wired=raw.get("is_wired", False),
-            last_seen=last_seen,
         )
 
         # Check if state actually changed
@@ -229,9 +218,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                     translation_domain=DOMAIN,
                     translation_key="credentials_rejected",
                 ) from err
-            except aiounifi.AiounifiException as err:
+            except (TimeoutError, aiounifi.AiounifiException) as err:
                 raise self._connect_error() from err
-        except aiounifi.AiounifiException as err:
+        except (TimeoutError, aiounifi.AiounifiException) as err:
             raise self._connect_error() from err
 
         _LOGGER.debug("Fallback poll for tracked device(s)")
@@ -251,9 +240,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                     mac,
                     name=client.name or "",
                     hostname=client.hostname or "",
-                    ip=client.ip or "",
-                    is_wired=client.is_wired,
-                    last_seen=last_seen,
                 )
             else:
                 is_home = False

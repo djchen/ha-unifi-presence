@@ -105,7 +105,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
-        except aiounifi.AiounifiException:
+        except TimeoutError, aiounifi.AiounifiException:
             return None, "cannot_connect"
         except Exception:
             _LOGGER.exception("Unexpected exception during %s", log_context)
@@ -149,12 +149,12 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._available_clients = await _fetch_all_clients(controller)  # type: ignore[arg-type]
                 except Exception:
                     _LOGGER.exception("Failed to fetch client list")
-                    self._available_clients = {}
+                    errors["base"] = "cannot_discover_devices"
+                else:
+                    if not self._available_clients:
+                        return self.async_abort(reason="no_devices_discovered")
 
-                if not self._available_clients:
-                    return self.async_abort(reason="no_devices_discovered")
-
-                return await self.async_step_devices()
+                    return await self.async_step_devices()
 
         return self.async_show_form(
             step_id="user",
@@ -329,6 +329,30 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
     """Handle options for UniFi Presence."""
 
+    async def _async_fetch_available_clients(self) -> tuple[dict[str, str], bool]:
+        """Fetch available clients for the options flow."""
+        try:
+            controller = None
+            if self.config_entry.state is ConfigEntryState.LOADED:
+                coordinator = self.config_entry.runtime_data
+                if coordinator is not None and coordinator.controller is not None:
+                    controller = coordinator.controller
+            if controller is None:
+                data = self.config_entry.data
+                controller = await create_controller(
+                    self.hass,
+                    data[CONF_HOST],
+                    data[CONF_PORT],
+                    data[CONF_USERNAME],
+                    data[CONF_PASSWORD],
+                    data.get(CONF_SITE, DEFAULT_SITE),
+                    data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+                )
+            return await _fetch_all_clients(controller), False
+        except Exception:
+            _LOGGER.warning("Could not fetch UniFi clients for options flow")
+            return {}, True
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         errors: dict[str, str] = {}
@@ -351,27 +375,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                 )
 
         # Try to reuse the coordinator's authenticated controller, fall back to new login
-        available_clients: dict[str, str] = {}
-        try:
-            controller = None
-            if self.config_entry.state is ConfigEntryState.LOADED:
-                coordinator = self.config_entry.runtime_data
-                if coordinator is not None and coordinator.controller is not None:
-                    controller = coordinator.controller
-            if controller is None:
-                data = self.config_entry.data
-                controller = await create_controller(
-                    self.hass,
-                    data[CONF_HOST],
-                    data[CONF_PORT],
-                    data[CONF_USERNAME],
-                    data[CONF_PASSWORD],
-                    data.get(CONF_SITE, DEFAULT_SITE),
-                    data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
-                )
-            available_clients = await _fetch_all_clients(controller)
-        except Exception:
-            _LOGGER.warning("Could not fetch UniFi clients for options flow")
+        available_clients, discovery_failed = await self._async_fetch_available_clients()
 
         current_options = self.config_entry.options
         current_tracked = current_options.get(CONF_TRACKED_DEVICES, [])
@@ -390,7 +394,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         if client_options:
             schema_fields[vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked)] = cv.multi_select(client_options)
         else:
-            return self.async_abort(reason="no_devices_discovered")
+            return self.async_abort(reason="cannot_discover_devices" if discovery_failed else "no_devices_discovered")
         schema_fields[
             vol.Optional(
                 CONF_AWAY_SECONDS,
@@ -403,6 +407,8 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                 default=current_options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL),
             )
         ] = vol.All(int, vol.Range(min=60))
+        if discovery_failed and "base" not in errors:
+            errors["base"] = "cannot_discover_devices"
 
         return self.async_show_form(
             step_id="init",

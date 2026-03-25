@@ -131,11 +131,7 @@ Each tracked device creates a `device_tracker` entity and a matching device-regi
 - **State**: `home` or `not_home`
 - **Attributes**:
   - `source_type`: Always `router`
-  - `ip_address`: Current IP address (when connected)
   - `mac_address`: Device MAC address
-  - `hostname`: Device hostname (when available)
-  - `is_wired`: `true` for ethernet, `false` for wireless
-  - `last_seen`: Unix timestamp of last activity
 
 ## Reauthentication
 
@@ -210,7 +206,7 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 | **"Unable to connect"** during setup | Verify the host, port, and that the controller is reachable from your HA instance. Try port 8443 for legacy controllers. |
 | **"Invalid username or password"** | Ensure you are using a **local** UniFi account, not a Ubiquiti cloud (SSO) account. |
 | **No devices discovered** | The controller returned no clients. Ensure devices have connected to this controller and site at least once. |
-| **Device stuck as "home" or "away"** | Lower the away threshold in options, or check the device's `last_seen` attribute to see if the controller is reporting activity. |
+| **Device stuck as "home" or "away"** | Lower the away threshold in options and confirm the controller is still reporting the device in the UniFi client list. |
 | **WebSocket disconnecting frequently** | Check network stability between HA and the controller. Download diagnostics to confirm WebSocket status. |
 | **Entities become unavailable** | The controller is unreachable. Check network connectivity and controller status. The integration will automatically reconnect. |
 

@@ -333,9 +333,10 @@ async def test_entity_states_reflect_coordinator_data(
     assert home_state.state == "home"
     assert away_state.state == "not_home"
 
-    # Verify attributes flow through
-    assert home_state.attributes["ip"] == "192.168.1.100"
+    # Verify only the core tracker attributes remain
     assert home_state.attributes["mac"] == "aa:bb:cc:dd:ee:ff"
-    assert home_state.attributes["host_name"] == "dan-phone"
-    assert home_state.attributes["is_wired"] is False
+    assert "ip" not in home_state.attributes
+    assert "host_name" not in home_state.attributes
+    assert "is_wired" not in home_state.attributes
+    assert "last_seen" not in home_state.attributes
     assert home_state.attributes["source_type"] == "router"

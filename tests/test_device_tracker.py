@@ -37,22 +37,14 @@ def _make_presence_data(
         states[mac] = True
         info[mac] = {
             "name": f"Device {mac[:8]}",
-            "hostname": f"host-{mac[:8]}",
-            "ip": "192.168.1.100",
             "mac": mac,
-            "is_wired": False,
-            "last_seen": 1700000000,
         }
 
     for mac in away_macs or []:
         states[mac] = False
         info[mac] = {
             "name": mac,
-            "hostname": "",
-            "ip": "",
             "mac": mac,
-            "is_wired": False,
-            "last_seen": 0,
         }
 
     return UnifiPresenceData(device_states=states, client_info=info)
@@ -111,41 +103,6 @@ def test_tracker_mac_address() -> None:
     assert tracker.mac_address == "aa:bb:cc:dd:ee:ff"
 
 
-def test_tracker_ip_address() -> None:
-    """Test that ip_address returns the client IP when available."""
-    data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
-    coordinator = _make_coordinator(data)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.ip_address == "192.168.1.100"
-
-
-def test_tracker_ip_address_none_when_empty() -> None:
-    """Test that ip_address returns None when not available."""
-    data = _make_presence_data(away_macs=["aa:bb:cc:dd:ee:ff"])
-    coordinator = _make_coordinator(data)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.ip_address is None
-
-
-def test_tracker_ip_address_none_no_data() -> None:
-    """Test that ip_address returns None when coordinator.data is None."""
-    coordinator = _make_coordinator(None)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.ip_address is None
-
-
-def test_tracker_hostname() -> None:
-    """Test that hostname returns the client hostname."""
-    data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
-    coordinator = _make_coordinator(data)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.hostname == "host-aa:bb:cc"
-
-
 def test_tracker_has_entity_name() -> None:
     """Test that has_entity_name is True and _attr_name is None (inherits device name)."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
@@ -154,18 +111,6 @@ def test_tracker_has_entity_name() -> None:
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
     assert tracker._attr_has_entity_name is True
     assert tracker._attr_name is None
-
-
-def test_tracker_extra_attributes() -> None:
-    """Test extra state attributes."""
-    data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
-    coordinator = _make_coordinator(data)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    attrs = tracker.extra_state_attributes
-    assert attrs is not None
-    assert attrs["is_wired"] is False
-    assert attrs["last_seen"] == 1700000000
 
 
 def test_tracker_device_info() -> None:
@@ -208,22 +153,6 @@ def test_tracker_translation_key() -> None:
 def test_parallel_updates_is_zero() -> None:
     """Test that PARALLEL_UPDATES is 0 (coordinator handles updates)."""
     assert PARALLEL_UPDATES == 0
-
-
-def test_tracker_hostname_none_no_data() -> None:
-    """Test that hostname returns None when coordinator.data is None."""
-    coordinator = _make_coordinator(None)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.hostname is None
-
-
-def test_tracker_attrs_none_no_data() -> None:
-    """Test that extra_state_attributes returns None when coordinator.data is None."""
-    coordinator = _make_coordinator(None)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.extra_state_attributes is None
 
 
 def test_tracker_is_connected_missing_mac() -> None:
