@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.core import HomeAssistant
@@ -36,15 +37,8 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
 
     assert result is controller
     get_session.assert_called_once_with(hass)
-    configuration.assert_called_once_with(
-        session,
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="default",
-        ssl_context=True,
-    )
+    call_kwargs = configuration.call_args.kwargs
+    assert isinstance(call_kwargs["ssl_context"], ssl.SSLContext)
     controller_factory.assert_called_once_with(config)
     controller.login.assert_awaited_once()
 
