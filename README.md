@@ -16,6 +16,7 @@ The official [UniFi Network integration](https://www.home-assistant.io/integrati
 - **Options flow**: Add or remove tracked devices after setup. Adjust away threshold and polling interval.
 - **Reconfigure flow**: Change controller settings without removing the integration
 - **Diagnostics**: Built-in diagnostics for troubleshooting
+- **System health**: Built-in system health summary for controller and WebSocket status
 
 ## Requirements
 
@@ -187,7 +188,7 @@ automation:
 Assign the device tracker to a [Person](https://www.home-assistant.io/integrations/person/) for zone-aware presence:
 
 1. Go to **Settings** → **People**
-2. Select a person and add the `device_tracker.my_phone_presence` entity
+2. Select a person and add the `device_tracker.my_phone` entity
 3. HA will combine GPS and network presence for a more accurate result
 
 ## Known Limitations
