@@ -38,7 +38,12 @@ rules:
   test-coverage: done
 
   # Gold
-  devices: done
+  devices:
+    status: exempt
+    comment: |
+      This integration follows the official HA ScannerEntity pattern and
+      does not create per-client device-registry entries. Entities appear
+      in the entity registry only.
   diagnostics: done
   discovery:
     status: exempt
@@ -86,7 +91,12 @@ rules:
     comment: |
       Auth failures trigger ConfigEntryAuthFailed which surfaces the
       reauth flow. No other user-actionable repair scenarios exist.
-  stale-devices: done
+  stale-devices:
+    status: exempt
+    comment: |
+      This integration follows the official HA ScannerEntity pattern and
+      does not create per-client device-registry entries. There are no
+      integration-owned device entries to become stale.
 
   # Platinum
   async-dependency: done

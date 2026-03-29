@@ -9,7 +9,7 @@
 ```text
 ha-unifi-presence/
 ├── custom_components/unifi_presence/
-│   ├── __init__.py        # Setup/unload, WS lifecycle, stale device cleanup
+│   ├── __init__.py        # Setup/unload, WS lifecycle
 │   ├── config_flow.py     # Credentials → device selection + options/reconfigure/reauth
 │   ├── const.py           # Constants and defaults
 │   ├── coordinator.py     # DataUpdateCoordinator — WS push + REST poll fallback
@@ -33,8 +33,8 @@ ha-unifi-presence/
 - **Config flow**: 2-step (credentials → device selection). Options via `OptionsFlowWithReload`. Reconfigure and reauth flows. Aborts on no clients discovered.
 - **Coordinator**: WS primary (`process_message` for `sta:sync`), REST poll fallback. Re-auths on session expiry. `frozenset` for O(1) MAC lookups. Skips entity writes when state unchanged.
 - **WebSocket**: Auto-reconnect with backoff, health checks, `_stopped` guard. Modeled after official HA UniFi integration.
-- **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. Per-client `DeviceInfo` with MAC identifiers. `has_entity_name = True`, `_attr_name = None`.
-- **Init**: Coordinator → WS start → platform forward. Stale device cleanup on reload. `async_remove_config_entry_device` blocks removal of tracked MACs.
+- **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. No per-client device entries (follows official HA UniFi pattern). `has_entity_name = True`, `_attr_name = None`.
+- **Init**: Coordinator → WS start → platform forward.
 
 ## Development
 

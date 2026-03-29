@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
-from .coordinator import ClientInfo, UnifiPresenceCoordinator
+from .coordinator import UnifiPresenceCoordinator
 
 PARALLEL_UPDATES = 0
 
@@ -54,14 +54,6 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
 
         self._attr_unique_id = mac
         self._attr_name = None
-
-    @property
-    def _client_info(self) -> ClientInfo | None:
-        """Return the client info dict for this MAC, or None."""
-        data = self.coordinator.data
-        if data is None:
-            return None  # type: ignore[unreachable]
-        return data.client_info.get(self._mac)
 
     @property
     def is_connected(self) -> bool:
