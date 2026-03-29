@@ -158,9 +158,10 @@ async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
 
 
 async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAssistant) -> None:
-    """Test that setup shows a discovery error if client discovery fails after login."""
+    """Test that setup shows a discovery error if both client sources fail after login."""
     controller = _mock_controller(clients_all_items=[])
-    controller.clients_all.update = AsyncMock(side_effect=Exception("fetch failed"))
+    controller.clients_all.update = AsyncMock(side_effect=Exception("historical fetch failed"))
+    controller.clients.update = AsyncMock(side_effect=Exception("active fetch failed"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
@@ -178,6 +179,25 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
     """Test successful login proceeds to device selection."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=MOCK_CONFIG_DATA,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"
+
+
+async def test_user_step_historical_client_failure_uses_active_clients(
+    hass: HomeAssistant,
+) -> None:
+    """Test that setup still proceeds when historical client refresh fails but active succeeds."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
+    controller = _mock_controller(clients_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    controller.clients_all.update = AsyncMock(side_effect=Exception("historical clients unavailable"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})

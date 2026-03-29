@@ -44,17 +44,32 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     """Fetch all known clients from the UniFi controller.
 
     Merges active clients (``controller.clients``) with historical clients
-    (``controller.clients_all``).  Active data takes precedence so that
-    recently-connected devices that haven't yet appeared in the historical
-    endpoint are included.
+    (``controller.clients_all``).  Both sources are best-effort: if one
+    endpoint fails the other is still used.  Active data takes precedence
+    so that recently-connected devices that haven't yet appeared in the
+    historical endpoint are included.
 
     Returns a dict of {mac: display_name}.
+
+    Raises:
+        Exception: Only if *both* client sources fail to update.
     """
-    await controller.clients_all.update()
+    sources_ok = 0
+    try:
+        await controller.clients_all.update()
+        sources_ok += 1
+    except Exception:
+        _LOGGER.debug("Failed to refresh historical UniFi clients")
     try:
         await controller.clients.update()
+        sources_ok += 1
     except Exception:
-        _LOGGER.debug("Failed to refresh active UniFi clients; using historical clients only")
+        _LOGGER.debug("Failed to refresh active UniFi clients")
+
+    if sources_ok == 0:
+        msg = "Both active and historical client sources failed"
+        raise RuntimeError(msg)
+
     # Merge historical + active; active wins on key collision
     clients: dict[str, str] = {}
     for store in (controller.clients_all, controller.clients):
