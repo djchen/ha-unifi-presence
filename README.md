@@ -4,7 +4,7 @@ A Home Assistant custom integration for presence detection using UniFi network c
 
 ## Why not the official integration?
 
-The official [UniFi Network integration](https://www.home-assistant.io/integrations/unifi/) is comprehensive but creates entities for all devices and network equipment. This integration focuses solely on presence detection and lets you select specific devices to track.
+The official [UniFi Network integration](https://www.home-assistant.io/integrations/unifi/) is broader and imports both UniFi infrastructure devices and network clients into Home Assistant. This integration is focused only on presence detection and includes an explicit per-device selection step, so you can track just the clients you care about.
 
 ## Features
 
@@ -111,6 +111,7 @@ Any client device (wireless or wired) that has connected to your UniFi network a
 | **Reauthentication** | Update credentials when they expire without removing the integration |
 | **Reconfiguration** | Change controller host/port/site/SSL without re-adding |
 | **Diagnostics** | Download redacted diagnostics data for troubleshooting |
+| **System health** | View controller, coordinator, and WebSocket summary information |
 
 ## How Data is Updated
 
@@ -132,7 +133,7 @@ Each tracked device creates a `device_tracker` entity:
 - **State**: `home` or `not_home`
 - **Attributes**:
   - `source_type`: Always `router`
-  - `mac_address`: Device MAC address
+  - `mac`: Device MAC address
 
 > **Note:** This integration follows the official HA `ScannerEntity` pattern and does not create per-client device-registry entries. Tracker entities appear in the entity registry only.
 
@@ -231,6 +232,16 @@ Diagnostics include:
 - Tracked device count and states
 - Away threshold and poll interval settings
 - WebSocket connection status
+
+## System Health
+
+The integration also adds a system health summary to Home Assistant. It reports:
+
+- Number of configured and loaded UniFi Presence entries
+- Number of entries with successful coordinator updates
+- Number of active WebSocket connections
+- Total tracked device count
+- Configured controller host and site targets
 
 ## Development
 
