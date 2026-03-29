@@ -53,9 +53,12 @@ rules:
   discovery:
     status: exempt
     comment: |
-      UniFi controllers are not discoverable via standard HA discovery
-      methods (mDNS/SSDP/DHCP). The official HA UniFi integration also
-      does not implement discovery.
+      SSDP discovery for UDM hardware is technically feasible but would
+      conflict with the official UniFi Network integration, which already
+      registers for the same SSDP matchers. Triggering competing config
+      flows for the same device would be a poor user experience.
+      Software-only controllers do not advertise via SSDP at all.
+      Manual setup is intentional.
   discovery-update-info:
     status: exempt
     comment: |
