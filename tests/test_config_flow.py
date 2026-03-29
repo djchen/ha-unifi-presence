@@ -77,9 +77,11 @@ def _mock_controller(
     controller.clients_all = MagicMock()
     controller.clients_all.update = AsyncMock()
     controller.clients_all.items.return_value = clients_all_items or []
+    controller.clients_all.__bool__ = lambda self: bool(clients_all_items)
     controller.clients = MagicMock()
     controller.clients.update = AsyncMock()
     controller.clients.items.return_value = clients_items or []
+    controller.clients.__bool__ = lambda self: bool(clients_items)
     controller.messages.subscribe = MagicMock(return_value=MagicMock())
     controller.connectivity = MagicMock()
     return controller
@@ -889,3 +891,21 @@ async def test_options_flow_empty_clients_and_empty_tracked_aborts(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_devices_discovered"
+
+
+async def test_user_step_both_updates_fail_but_cached_data_proceeds(hass: HomeAssistant) -> None:
+    """Test that setup proceeds when both update() calls fail but stores have cached data."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone")
+    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    controller.clients_all.update = AsyncMock(side_effect=Exception("historical fetch failed"))
+    controller.clients.update = AsyncMock(side_effect=Exception("active fetch failed"))
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=MOCK_CONFIG_DATA,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"

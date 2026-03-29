@@ -52,7 +52,8 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     Returns a dict of {mac: display_name}.
 
     Raises:
-        Exception: Only if *both* client sources fail to update.
+        Exception: Only if *both* client sources fail to update and
+            neither store contains cached data.
     """
     sources_ok = 0
     try:
@@ -66,7 +67,7 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     except Exception:
         _LOGGER.debug("Failed to refresh active UniFi clients")
 
-    if sources_ok == 0:
+    if sources_ok == 0 and not controller.clients_all and not controller.clients:
         msg = "Both active and historical client sources failed"
         raise RuntimeError(msg)
 
