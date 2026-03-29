@@ -459,6 +459,33 @@ async def test_reauth_resets_controller_before_retry(
     assert coordinator._controller is not None
 
 
+@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
+async def test_reauth_triggers_websocket_reconnect(
+    hass: HomeAssistant, config_entry: MagicMock, exception: type[Exception]
+) -> None:
+    """Test that websocket.reconnect() is called after a poll-triggered controller swap."""
+    now = int(time.time())
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
+
+    controller = AsyncMock()
+    controller.clients = MagicMock()
+    controller.clients.get = MagicMock(return_value=client1)
+    controller.login = AsyncMock()
+    controller.clients.update = AsyncMock(side_effect=_make_reauth_side_effect(exception, recover=True))
+
+    mock_ws = MagicMock()
+
+    with patch(
+        "custom_components.unifi_presence.coordinator.create_controller",
+        return_value=controller,
+    ):
+        coordinator = UnifiPresenceCoordinator(hass, config_entry)
+        coordinator.websocket = mock_ws
+        await coordinator._async_update_data()
+
+    mock_ws.reconnect.assert_called_once()
+
+
 async def test_controller_property(hass: HomeAssistant, config_entry: MagicMock) -> None:
     """Test that the public controller property returns the cached controller."""
     coordinator = UnifiPresenceCoordinator(hass, config_entry)

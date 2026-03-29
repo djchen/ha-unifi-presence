@@ -201,6 +201,27 @@ class UnifiPresenceWebsocket:
         self.available = available
 
     @callback
+    def reconnect(self) -> None:
+        """Restart the WebSocket against the (possibly replaced) controller.
+
+        Called by the coordinator after a poll-triggered re-auth swaps the
+        controller object.  Skips the login step because the coordinator
+        already authenticated the new controller.
+        """
+        if self._stopped:
+            return
+
+        self._clear_retry()
+        self._set_available(False, force_signal=True)
+
+        if self.ws_task is not None:
+            self.ws_task.cancel()
+            self.ws_task = None
+
+        self._subscribe_messages()
+        self._start_websocket()
+
+    @callback
     def _reconnect(self) -> None:
         """Reconnect to the UniFi controller."""
         if self._stopped:

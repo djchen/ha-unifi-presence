@@ -457,3 +457,45 @@ async def test_async_watch_websocket_reconnects_stale_session(hass: HomeAssistan
         ws._async_watch_websocket(None)
 
     mock_reconnect.assert_called_once()
+
+
+async def test_reconnect_public_resubscribes_and_restarts(hass: HomeAssistant) -> None:
+    """Test that the public reconnect() re-subscribes and restarts the websocket."""
+    ws, controller, _ = _make_websocket(hass)
+
+    # Make start_websocket block so the task stays alive
+    hang = asyncio.Event()
+    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
+        ws.start()
+        await asyncio.sleep(0)
+
+    first_subscribe_count = controller.messages.subscribe.call_count
+    first_task = ws.ws_task
+
+    # Simulate coordinator replacing the controller and calling reconnect()
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
+        ws.reconnect()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    # Should have re-subscribed and created a new task
+    assert controller.messages.subscribe.call_count > first_subscribe_count
+    assert ws.ws_task is not first_task
+
+    ws.stop()
+
+
+async def test_reconnect_public_noop_after_stop(hass: HomeAssistant) -> None:
+    """Test that the public reconnect() is a no-op after stop()."""
+    ws, controller, _ = _make_websocket(hass)
+
+    ws.start()
+    ws.stop()
+
+    controller.messages.subscribe.reset_mock()
+    ws.reconnect()
+
+    controller.messages.subscribe.assert_not_called()
+    assert ws.ws_task is None

@@ -215,6 +215,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 ) from err
             except (TimeoutError, aiounifi.AiounifiException) as err:
                 raise self._connect_error() from err
+
+            # Controller was replaced — restart websocket so it binds to the new one
+            if self.websocket is not None:
+                self.websocket.reconnect()
         except (TimeoutError, aiounifi.AiounifiException) as err:
             raise self._connect_error() from err
 
