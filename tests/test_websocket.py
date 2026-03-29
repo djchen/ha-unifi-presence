@@ -460,28 +460,44 @@ async def test_async_watch_websocket_reconnects_stale_session(hass: HomeAssistan
 
 
 async def test_reconnect_public_resubscribes_and_restarts(hass: HomeAssistant) -> None:
-    """Test that the public reconnect() re-subscribes and restarts the websocket."""
-    ws, controller, _ = _make_websocket(hass)
+    """Test that the public reconnect() re-subscribes to the new controller."""
+    # Build the first controller and start the websocket against it
+    old_controller = AsyncMock()
+    old_controller.messages = MagicMock()
+    old_controller.messages.subscribe = MagicMock(return_value=MagicMock())
+    old_controller.login = AsyncMock()
 
-    # Make start_websocket block so the task stays alive
     hang = asyncio.Event()
-    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+    old_controller.start_websocket = AsyncMock(side_effect=hang.wait)
+
+    # Mutable holder so the lambda can be swapped to a new controller
+    current = {"api": old_controller}
+    on_message = MagicMock()
+    ws = UnifiPresenceWebsocket(hass, lambda: current["api"], on_message)
 
     with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
         ws.start()
         await asyncio.sleep(0)
 
-    first_subscribe_count = controller.messages.subscribe.call_count
     first_task = ws.ws_task
 
-    # Simulate coordinator replacing the controller and calling reconnect()
+    # Build a second controller to simulate the coordinator swapping it
+    new_controller = AsyncMock()
+    new_controller.messages = MagicMock()
+    new_controller.messages.subscribe = MagicMock(return_value=MagicMock())
+    new_controller.login = AsyncMock()
+    new_hang = asyncio.Event()
+    new_controller.start_websocket = AsyncMock(side_effect=new_hang.wait)
+
+    current["api"] = new_controller
+
     with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
         ws.reconnect()
         for _ in range(5):
             await asyncio.sleep(0)
 
-    # Should have re-subscribed and created a new task
-    assert controller.messages.subscribe.call_count > first_subscribe_count
+    # Should have subscribed on the *new* controller and created a new task
+    new_controller.messages.subscribe.assert_called_once()
     assert ws.ws_task is not first_task
 
     ws.stop()

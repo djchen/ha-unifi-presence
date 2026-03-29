@@ -33,7 +33,7 @@ ha-unifi-presence/
 - **Config flow**: 2-step (credentials → device selection). Options via `OptionsFlowWithReload`. Reconfigure and reauth flows. Aborts on no clients discovered.
 - **Coordinator**: WS primary (`process_message` for `sta:sync`), REST poll fallback. Re-auths on session expiry. `frozenset` for O(1) MAC lookups. Skips entity writes when state unchanged.
 - **WebSocket**: Auto-reconnect with backoff, health checks, `_stopped` guard. Modeled after official HA UniFi integration.
-- **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. No per-client device entries (follows official HA UniFi pattern). `has_entity_name = True`, `_attr_name = None`.
+- **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. No per-client device entries (follows official HA UniFi pattern). `has_entity_name = False`, entity name derived from coordinator `client_info`.
 - **Init**: Coordinator → WS start → platform forward.
 
 ## Development
@@ -70,7 +70,7 @@ Follow official HA developer guidelines. Project-specific notes:
 
 ### Testing
 - `pytest-homeassistant-custom-component`; `enable_custom_integrations` fixture for config flow tests
-- Mock `create_controller` from `helpers.py`; use `MagicMock` for controller with explicit `AsyncMock()` for async methods
+- Mock `create_controller` via the module-local alias (e.g. `custom_components.unifi_presence.config_flow.create_controller` or `custom_components.unifi_presence.coordinator.create_controller`); use `MagicMock` for controller with explicit `AsyncMock()` for async methods
 - Controller mocks must include `messages.subscribe = MagicMock(return_value=MagicMock())` and `connectivity = MagicMock()`
 
 ### Error Handling

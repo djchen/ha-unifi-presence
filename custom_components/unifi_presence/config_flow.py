@@ -67,9 +67,12 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     except Exception:
         _LOGGER.debug("Failed to refresh active UniFi clients")
 
-    if sources_ok == 0 and not controller.clients_all and not controller.clients:
-        msg = "Both active and historical client sources failed"
-        raise RuntimeError(msg)
+    if sources_ok == 0:
+        # Neither update() succeeded — check if the stores have any cached data
+        has_cached = any(True for _ in controller.clients_all) or any(True for _ in controller.clients)
+        if not has_cached:
+            msg = "Both active and historical client sources failed"
+            raise RuntimeError(msg)
 
     # Merge historical + active; active wins on key collision
     clients: dict[str, str] = {}

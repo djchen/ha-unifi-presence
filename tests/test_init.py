@@ -165,8 +165,8 @@ async def test_entity_states_reflect_coordinator_data(
 
     assert entry.state is ConfigEntryState.LOADED
 
-    home_state = hass.states.get("device_tracker.unifi_presence_aa_bb_cc_dd_ee_ff")
-    away_state = hass.states.get("device_tracker.unifi_presence_11_22_33_44_55_66")
+    home_state = hass.states.get("device_tracker.dan_phone")
+    away_state = hass.states.get("device_tracker.jane_phone")
     assert home_state is not None
     assert away_state is not None
 
@@ -175,3 +175,6 @@ async def test_entity_states_reflect_coordinator_data(
 
     assert home_state.attributes["mac"] == "aa:bb:cc:dd:ee:ff"
     assert home_state.attributes["source_type"] == "router"
+
+    assert away_state.attributes["mac"] == "11:22:33:44:55:66"
+    assert away_state.attributes["source_type"] == "router"

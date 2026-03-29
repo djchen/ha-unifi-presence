@@ -84,7 +84,7 @@ Change controller connection settings without removing the integration:
 1. Go to **Settings** → **Devices & Services**
 2. Click on the **UniFi Presence** integration card
 3. Click **⋮** → **Delete**
-4. Confirm deletion — all entities and devices created by this integration will be removed
+4. Confirm deletion — all entities created by this integration will be removed
 
 </details>
 
@@ -188,7 +188,7 @@ automation:
 Assign the device tracker to a [Person](https://www.home-assistant.io/integrations/person/) for zone-aware presence:
 
 1. Go to **Settings** → **People**
-2. Select a person and add the `device_tracker.my_phone_presence` entity
+2. Select a person and add the `device_tracker.my_phone` entity
 3. HA will combine GPS and network presence for a more accurate result
 
 ## Known Limitations

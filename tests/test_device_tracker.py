@@ -102,13 +102,13 @@ def test_tracker_mac_address() -> None:
 
 
 def test_tracker_has_entity_name() -> None:
-    """Test that has_entity_name is True and _attr_name is None (inherits device name)."""
+    """Test that has_entity_name is False and name comes from coordinator client_info."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker._attr_has_entity_name is True
-    assert tracker._attr_name is None
+    assert tracker._attr_has_entity_name is False
+    assert tracker.name == "Device aa:bb:cc"
 
 
 def test_tracker_entity_registry_enabled_default() -> None:
@@ -121,12 +121,11 @@ def test_tracker_entity_registry_enabled_default() -> None:
 
 
 def test_tracker_translation_key() -> None:
-    """Test that translation_key is set for entity translations."""
-    data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
-    coordinator = _make_coordinator(data)
+    """Test that name falls back to MAC when coordinator has no data."""
+    coordinator = _make_coordinator(None)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker._attr_translation_key == "presence"
+    assert tracker.name == "aa:bb:cc:dd:ee:ff"
 
 
 def test_parallel_updates_is_zero() -> None:

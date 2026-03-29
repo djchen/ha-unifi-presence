@@ -17,7 +17,12 @@ rules:
   docs-removal-instructions: done
   entity-event-setup: done
   entity-unique-id: done
-  has-entity-name: done
+  has-entity-name:
+    status: exempt
+    comment: |
+      Entity names are derived from the UniFi client name at runtime
+      via a name property (has_entity_name = False) because this
+      integration does not create per-client device-registry entries.
   runtime-data: done
   test-before-configure: done
   test-before-setup: done
@@ -82,9 +87,17 @@ rules:
     comment: |
       All entities are user-selected during setup. There are no noisy or
       less popular entities to disable by default.
-  entity-translations: done
+  entity-translations:
+    status: exempt
+    comment: |
+      Entity names are derived from the UniFi client name at runtime
+      (has_entity_name = False), so translation keys are not used.
   exception-translations: done
-  icon-translations: done
+  icon-translations:
+    status: exempt
+    comment: |
+      Entity names are set dynamically, not via translation keys, so
+      icon-translations do not apply.
   reconfiguration-flow: done
   repair-issues:
     status: exempt

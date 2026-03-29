@@ -77,11 +77,11 @@ def _mock_controller(
     controller.clients_all = MagicMock()
     controller.clients_all.update = AsyncMock()
     controller.clients_all.items.return_value = clients_all_items or []
-    controller.clients_all.__bool__ = lambda self: bool(clients_all_items)
+    controller.clients_all.__iter__ = lambda self: iter(k for k, _v in (clients_all_items or []))
     controller.clients = MagicMock()
     controller.clients.update = AsyncMock()
     controller.clients.items.return_value = clients_items or []
-    controller.clients.__bool__ = lambda self: bool(clients_items)
+    controller.clients.__iter__ = lambda self: iter(k for k, _v in (clients_items or []))
     controller.messages.subscribe = MagicMock(return_value=MagicMock())
     controller.connectivity = MagicMock()
     return controller

@@ -29,9 +29,7 @@ async def async_setup_entry(
 class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerEntity):
     """Represent a tracked UniFi client as a device tracker entity."""
 
-    _attr_has_entity_name = True
     _attr_source_type = SourceType.ROUTER
-    _attr_translation_key = "presence"
 
     @property
     def entity_registry_enabled_default(self) -> bool:
@@ -53,7 +51,16 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         self._mac = mac
 
         self._attr_unique_id = mac
-        self._attr_name = None
+        self._attr_has_entity_name = False
+
+    @property
+    def name(self) -> str:
+        """Return the display name from coordinator client_info, falling back to MAC."""
+        if self.coordinator.data is not None:
+            info = self.coordinator.data.client_info.get(self._mac)
+            if info:
+                return info["name"]
+        return self._mac
 
     @property
     def is_connected(self) -> bool:
