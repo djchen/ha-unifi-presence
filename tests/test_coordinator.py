@@ -364,14 +364,6 @@ async def test_async_refresh_skips_listener_update_when_state_unchanged(
     assert coordinator.async_update_listeners.call_count == 1
 
 
-async def test_signal_reachable_property(hass: HomeAssistant, config_entry: MagicMock) -> None:
-    """Test that signal_reachable returns a unique signal per entry."""
-    coordinator = UnifiPresenceCoordinator(hass, config_entry)
-
-    assert "unifi_presence-reachable-" in coordinator.signal_reachable
-    assert config_entry.entry_id in coordinator.signal_reachable
-
-
 async def test_process_message_when_data_is_none(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:

@@ -34,7 +34,6 @@ def _make_websocket(
     ws = UnifiPresenceWebsocket(
         hass,
         lambda: controller,
-        "test-signal",
         on_message,
     )
     return ws, controller, on_message
@@ -393,7 +392,7 @@ async def test_unexpected_exception_sets_unavailable_and_schedules_reconnect(has
 async def test_start_with_none_controller_skips_subscribe(hass: HomeAssistant) -> None:
     """Test that start() handles a None controller gracefully."""
     on_message = MagicMock()
-    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+    ws = UnifiPresenceWebsocket(hass, lambda: None, on_message)
 
     ws.start()
 
@@ -406,7 +405,7 @@ async def test_start_with_none_controller_skips_subscribe(hass: HomeAssistant) -
 async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant) -> None:
     """Test that the WS runner exits early when the controller getter returns None."""
     on_message = MagicMock()
-    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+    ws = UnifiPresenceWebsocket(hass, lambda: None, on_message)
 
     with patch(
         "custom_components.unifi_presence.websocket.async_call_later",
@@ -423,7 +422,7 @@ async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant
 async def test_reconnect_schedules_retry_when_controller_none(hass: HomeAssistant) -> None:
     """Test that _reconnect schedules a retry when the controller getter returns None."""
     on_message = MagicMock()
-    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+    ws = UnifiPresenceWebsocket(hass, lambda: None, on_message)
 
     with patch(
         "custom_components.unifi_presence.websocket.async_call_later",
@@ -440,7 +439,7 @@ async def test_reconnect_schedules_retry_when_controller_none(hass: HomeAssistan
 async def test_health_check_with_none_controller(hass: HomeAssistant) -> None:
     """Test that _async_watch_websocket handles a None controller gracefully."""
     on_message = MagicMock()
-    ws = UnifiPresenceWebsocket(hass, lambda: None, "test-signal", on_message)
+    ws = UnifiPresenceWebsocket(hass, lambda: None, on_message)
 
     # Should not raise
     ws._async_watch_websocket(None)

@@ -27,7 +27,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
         websocket = UnifiPresenceWebsocket(
             hass,
             lambda: coordinator.controller,
-            coordinator.signal_reachable,
             coordinator.process_message,
         )
         coordinator.websocket = websocket

@@ -78,7 +78,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._password: str = ""
         self._site: str = DEFAULT_SITE
         self._ssl_verify: bool = DEFAULT_SSL_VERIFY
-        self._controller: Controller | None = None
         self._available_clients: dict[str, str] = {}
 
     async def _async_validate_login(
@@ -143,7 +142,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if error is not None:
                 errors["base"] = error
             else:
-                self._controller = controller
                 # Fetch clients for device selection step
                 try:
                     self._available_clients = await _fetch_all_clients(controller)  # type: ignore[arg-type]
