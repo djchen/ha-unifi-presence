@@ -105,7 +105,23 @@
       "no_devices_discovered": "No devices were discovered on this UniFi site"
     }
   },
-  "entity": {},
+  "entity": {
+    "device_tracker": {
+      "presence": {
+        "name": "Presence"
+      }
+    }
+  },
+  "system_health": {
+    "info": {
+      "config_entry_count": "Config entries",
+      "loaded_entry_count": "Loaded entries",
+      "coordinator_available_count": "Entries with successful polling",
+      "websocket_connected_count": "Entries with connected WebSocket",
+      "tracked_device_count": "Tracked devices",
+      "controllers": "Configured controllers"
+    }
+  },
   "exceptions": {
     "credentials_rejected": {
       "message": "Credentials rejected by the UniFi controller"
