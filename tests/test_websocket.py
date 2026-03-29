@@ -499,3 +499,32 @@ async def test_reconnect_public_noop_after_stop(hass: HomeAssistant) -> None:
 
     controller.messages.subscribe.assert_not_called()
     assert ws.ws_task is None
+
+
+async def test_reconnect_public_cancels_inflight_reconnect_task(hass: HomeAssistant) -> None:
+    """Test that the public reconnect() cancels an in-flight _reconnect_task."""
+    ws, controller, _ = _make_websocket(hass)
+
+    hang = asyncio.Event()
+    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
+        ws.start()
+        await asyncio.sleep(0)
+
+    # Simulate an in-flight _reconnect_task (e.g. from a prior health-check reconnect)
+    stale_task = MagicMock()
+    stale_task.cancel = MagicMock()
+    ws._reconnect_task = stale_task
+
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
+        ws.reconnect()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    # The stale _reconnect_task should have been cancelled and cleared
+    stale_task.cancel.assert_called_once()
+    # After reconnect(), _reconnect_task should be None (not the stale one)
+    assert ws._reconnect_task is None
+
+    ws.stop()

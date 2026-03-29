@@ -214,6 +214,10 @@ class UnifiPresenceWebsocket:
         self._clear_retry()
         self._set_available(False, force_signal=True)
 
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            self._reconnect_task = None
+
         if self.ws_task is not None:
             self.ws_task.cancel()
             self.ws_task = None
