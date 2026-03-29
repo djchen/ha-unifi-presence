@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from homeassistant.components.device_tracker import ScannerEntity, SourceType  # type: ignore[attr-defined]
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
-from .const import DOMAIN
 from .coordinator import ClientInfo, UnifiPresenceCoordinator
 
 PARALLEL_UPDATES = 0
@@ -35,6 +33,16 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     _attr_source_type = SourceType.ROUTER
     _attr_translation_key = "presence"
 
+    @property
+    def entity_registry_enabled_default(self) -> bool:
+        """Enable entities by default.
+
+        ScannerEntity disables entities when no device entry exists, but this
+        integration intentionally does not create per-client device entries
+        (matching the official HA UniFi integration pattern).
+        """
+        return True
+
     def __init__(
         self,
         coordinator: UnifiPresenceCoordinator,
@@ -44,18 +52,8 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         super().__init__(coordinator)
         self._mac = mac
 
-        # Derive the initial device name from coordinator data if available
-        info = self._client_info
-        device_name = info.get("name", mac) if info else mac
-
         self._attr_unique_id = mac
         self._attr_name = None
-        self._attr_device_info = DeviceInfo(  # type: ignore[assignment]
-            identifiers={(DOMAIN, mac)},
-            connections={(CONNECTION_NETWORK_MAC, mac)},
-            default_manufacturer="Ubiquiti Networks",
-            default_name=device_name,
-        )
 
     @property
     def _client_info(self) -> ClientInfo | None:
