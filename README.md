@@ -16,6 +16,7 @@ The official [UniFi Network integration](https://www.home-assistant.io/integrati
 - **Options flow**: Add or remove tracked devices after setup. Adjust away threshold and polling interval.
 - **Reconfigure flow**: Change controller settings without removing the integration
 - **Diagnostics**: Built-in diagnostics for troubleshooting
+- **System health**: Built-in system health summary for controller and WebSocket status
 
 ## Requirements
 
