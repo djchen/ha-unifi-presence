@@ -77,9 +77,11 @@ def _mock_controller(
     controller.clients_all = MagicMock()
     controller.clients_all.update = AsyncMock()
     controller.clients_all.items.return_value = clients_all_items or []
+    controller.clients_all.__iter__ = lambda self: iter(k for k, _v in (clients_all_items or []))
     controller.clients = MagicMock()
     controller.clients.update = AsyncMock()
     controller.clients.items.return_value = clients_items or []
+    controller.clients.__iter__ = lambda self: iter(k for k, _v in (clients_items or []))
     controller.messages.subscribe = MagicMock(return_value=MagicMock())
     controller.connectivity = MagicMock()
     return controller
@@ -158,9 +160,10 @@ async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
 
 
 async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAssistant) -> None:
-    """Test that setup shows a discovery error if client discovery fails after login."""
+    """Test that setup shows a discovery error if both client sources fail after login."""
     controller = _mock_controller(clients_all_items=[])
-    controller.clients_all.update = AsyncMock(side_effect=Exception("fetch failed"))
+    controller.clients_all.update = AsyncMock(side_effect=Exception("historical fetch failed"))
+    controller.clients.update = AsyncMock(side_effect=Exception("active fetch failed"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
@@ -178,6 +181,25 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
     """Test successful login proceeds to device selection."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=MOCK_CONFIG_DATA,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"
+
+
+async def test_user_step_historical_client_failure_uses_active_clients(
+    hass: HomeAssistant,
+) -> None:
+    """Test that setup still proceeds when historical client refresh fails but active succeeds."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
+    controller = _mock_controller(clients_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    controller.clients_all.update = AsyncMock(side_effect=Exception("historical clients unavailable"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
@@ -869,3 +891,21 @@ async def test_options_flow_empty_clients_and_empty_tracked_aborts(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_devices_discovered"
+
+
+async def test_user_step_both_updates_fail_but_cached_data_proceeds(hass: HomeAssistant) -> None:
+    """Test that setup proceeds when both update() calls fail but stores have cached data."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone")
+    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    controller.clients_all.update = AsyncMock(side_effect=Exception("historical fetch failed"))
+    controller.clients.update = AsyncMock(side_effect=Exception("active fetch failed"))
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=MOCK_CONFIG_DATA,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"

@@ -1,9 +1,3 @@
 {
-  "entity": {
-    "device_tracker": {
-      "presence": {
-        "default": "mdi:access-point-network"
-      }
-    }
-  }
+  "entity": {}
 }

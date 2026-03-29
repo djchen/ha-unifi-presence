@@ -44,17 +44,36 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     """Fetch all known clients from the UniFi controller.
 
     Merges active clients (``controller.clients``) with historical clients
-    (``controller.clients_all``).  Active data takes precedence so that
-    recently-connected devices that haven't yet appeared in the historical
-    endpoint are included.
+    (``controller.clients_all``).  Both sources are best-effort: if one
+    endpoint fails the other is still used.  Active data takes precedence
+    so that recently-connected devices that haven't yet appeared in the
+    historical endpoint are included.
 
     Returns a dict of {mac: display_name}.
+
+    Raises:
+        Exception: Only if *both* client sources fail to update and
+            neither store contains cached data.
     """
-    await controller.clients_all.update()
+    sources_ok = 0
+    try:
+        await controller.clients_all.update()
+        sources_ok += 1
+    except Exception:
+        _LOGGER.debug("Failed to refresh historical UniFi clients")
     try:
         await controller.clients.update()
+        sources_ok += 1
     except Exception:
-        _LOGGER.debug("Failed to refresh active UniFi clients; using historical clients only")
+        _LOGGER.debug("Failed to refresh active UniFi clients")
+
+    if sources_ok == 0:
+        # Neither update() succeeded — check if the stores have any cached data
+        has_cached = any(True for _ in controller.clients_all) or any(True for _ in controller.clients)
+        if not has_cached:
+            msg = "Both active and historical client sources failed"
+            raise RuntimeError(msg)
+
     # Merge historical + active; active wins on key collision
     clients: dict[str, str] = {}
     for store in (controller.clients_all, controller.clients):
@@ -78,7 +97,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._password: str = ""
         self._site: str = DEFAULT_SITE
         self._ssl_verify: bool = DEFAULT_SSL_VERIFY
-        self._controller: Controller | None = None
         self._available_clients: dict[str, str] = {}
 
     async def _async_validate_login(
@@ -143,7 +161,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if error is not None:
                 errors["base"] = error
             else:
-                self._controller = controller
                 # Fetch clients for device selection step
                 try:
                     self._available_clients = await _fetch_all_clients(controller)  # type: ignore[arg-type]

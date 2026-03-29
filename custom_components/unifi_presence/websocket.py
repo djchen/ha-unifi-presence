@@ -13,7 +13,6 @@ import aiohttp
 import aiounifi
 from aiounifi.models.message import Message, MessageKey
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 
 from .const import DOMAIN
@@ -37,13 +36,11 @@ class UnifiPresenceWebsocket:
         self,
         hass: HomeAssistant,
         get_api: Callable[[], Controller | None],
-        signal_reachable: str,
         on_message: Callable[[Message], None],
     ) -> None:
         """Initialize the WebSocket manager."""
         self.hass = hass
         self._get_api = get_api
-        self.signal = signal_reachable
         self._on_message = on_message
 
         self.ws_task: asyncio.Task[None] | None = None
@@ -197,12 +194,36 @@ class UnifiPresenceWebsocket:
 
     @callback
     def _set_available(self, available: bool, *, force_signal: bool = False) -> None:
-        """Update availability and notify listeners when it changes."""
+        """Update availability state."""
         if self.available == available and not force_signal:
             return
 
         self.available = available
-        async_dispatcher_send(self.hass, self.signal)
+
+    @callback
+    def reconnect(self) -> None:
+        """Restart the WebSocket against the (possibly replaced) controller.
+
+        Called by the coordinator after a poll-triggered re-auth swaps the
+        controller object.  Skips the login step because the coordinator
+        already authenticated the new controller.
+        """
+        if self._stopped:
+            return
+
+        self._clear_retry()
+        self._set_available(False, force_signal=True)
+
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            self._reconnect_task = None
+
+        if self.ws_task is not None:
+            self.ws_task.cancel()
+            self.ws_task = None
+
+        self._subscribe_messages()
+        self._start_websocket()
 
     @callback
     def _reconnect(self) -> None:

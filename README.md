@@ -84,7 +84,7 @@ Change controller connection settings without removing the integration:
 1. Go to **Settings** → **Devices & Services**
 2. Click on the **UniFi Presence** integration card
 3. Click **⋮** → **Delete**
-4. Confirm deletion — all entities and devices created by this integration will be removed
+4. Confirm deletion — all entities created by this integration will be removed
 
 </details>
 
@@ -123,15 +123,17 @@ If the WebSocket disconnects, the integration automatically reconnects with back
 
 ## Entities
 
-Each tracked device creates a `device_tracker` entity and a matching device-registry entry:
+Each tracked device creates a `device_tracker` entity:
 
-- **Entity ID**: `device_tracker.<device_name_slug>`
-- **Friendly name**: Inherits the device name (e.g., `Dan's iPhone`)
-- **Device entry**: One per tracked client, keyed by MAC (identifiers `(unifi_presence, <mac>)` and connection `(network_mac, <mac>)`); defaults to manufacturer `Ubiquiti Networks`
+- **Entity ID**: `device_tracker.<device_name_slug>` (derived from the UniFi client name)
+- **Friendly name**: The device name as reported by the UniFi controller (e.g., `Dan's iPhone`)
+- **Unique ID**: The device's MAC address
 - **State**: `home` or `not_home`
 - **Attributes**:
   - `source_type`: Always `router`
   - `mac_address`: Device MAC address
+
+> **Note:** This integration follows the official HA `ScannerEntity` pattern and does not create per-client device-registry entries. Tracker entities appear in the entity registry only.
 
 ## Reauthentication
 
@@ -143,6 +145,8 @@ If the UniFi controller rejects the stored credentials (e.g., after a password c
 4. Click **Submit** — the integration reloads automatically
 
 ## Use Cases & Automation Examples
+
+> **Note:** The entity IDs below (e.g., `device_tracker.my_phone`) are examples. Your actual entity IDs are derived from the UniFi client names and may differ. Check **Settings → Devices & Services → Entities** for the exact IDs.
 
 ### Arrive home — turn on lights
 
@@ -187,7 +191,7 @@ automation:
 Assign the device tracker to a [Person](https://www.home-assistant.io/integrations/person/) for zone-aware presence:
 
 1. Go to **Settings** → **People**
-2. Select a person and add the `device_tracker.my_phone_presence` entity
+2. Select a person and add the `device_tracker.my_phone` entity
 3. HA will combine GPS and network presence for a more accurate result
 
 ## Known Limitations
@@ -206,6 +210,7 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 | **"Unable to connect"** during setup | Verify the host, port, and that the controller is reachable from your HA instance. Try port 8443 for legacy controllers. |
 | **"Invalid username or password"** | Ensure you are using a **local** UniFi account, not a Ubiquiti cloud (SSO) account. |
 | **No devices discovered** | The controller returned no clients. Ensure devices have connected to this controller and site at least once. |
+| **"Could not fetch clients"** during setup or options | Connected to the controller, but client discovery failed for this site. Verify the user account has read access and the site name is correct. |
 | **Device stuck as "home" or "away"** | Lower the away threshold in options and confirm the controller is still reporting the device in the UniFi client list. |
 | **WebSocket disconnecting frequently** | Check network stability between HA and the controller. Download diagnostics to confirm WebSocket status. |
 | **Entities become unavailable** | The controller is unreachable. Check network connectivity and controller status. The integration will automatically reconnect. |

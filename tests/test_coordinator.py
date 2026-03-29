@@ -364,14 +364,6 @@ async def test_async_refresh_skips_listener_update_when_state_unchanged(
     assert coordinator.async_update_listeners.call_count == 1
 
 
-async def test_signal_reachable_property(hass: HomeAssistant, config_entry: MagicMock) -> None:
-    """Test that signal_reachable returns a unique signal per entry."""
-    coordinator = UnifiPresenceCoordinator(hass, config_entry)
-
-    assert "unifi_presence-reachable-" in coordinator.signal_reachable
-    assert config_entry.entry_id in coordinator.signal_reachable
-
-
 async def test_process_message_when_data_is_none(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
@@ -465,6 +457,33 @@ async def test_reauth_resets_controller_before_retry(
     # create_controller called twice: once for initial, once after _controller reset to None
     assert mock_create.call_count == 2
     assert coordinator._controller is not None
+
+
+@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
+async def test_reauth_triggers_websocket_reconnect(
+    hass: HomeAssistant, config_entry: MagicMock, exception: type[Exception]
+) -> None:
+    """Test that websocket.reconnect() is called after a poll-triggered controller swap."""
+    now = int(time.time())
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
+
+    controller = AsyncMock()
+    controller.clients = MagicMock()
+    controller.clients.get = MagicMock(return_value=client1)
+    controller.login = AsyncMock()
+    controller.clients.update = AsyncMock(side_effect=_make_reauth_side_effect(exception, recover=True))
+
+    mock_ws = MagicMock()
+
+    with patch(
+        "custom_components.unifi_presence.coordinator.create_controller",
+        return_value=controller,
+    ):
+        coordinator = UnifiPresenceCoordinator(hass, config_entry)
+        coordinator.websocket = mock_ws
+        await coordinator._async_update_data()
+
+    mock_ws.reconnect.assert_called_once()
 
 
 async def test_controller_property(hass: HomeAssistant, config_entry: MagicMock) -> None:

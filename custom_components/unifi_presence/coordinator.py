@@ -93,11 +93,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         )
 
     @property
-    def signal_reachable(self) -> str:
-        """Return the dispatcher signal for WebSocket reachability changes."""
-        return f"{DOMAIN}-reachable-{self.config_entry.entry_id}"
-
-    @property
     def tracked_devices(self) -> tuple[str, ...]:
         """Return the tuple of tracked MAC addresses (pre-lowercased)."""
         return self._tracked_macs
@@ -220,6 +215,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 ) from err
             except (TimeoutError, aiounifi.AiounifiException) as err:
                 raise self._connect_error() from err
+
+            # Controller was replaced — restart websocket so it binds to the new one
+            if self.websocket is not None:
+                self.websocket.reconnect()
         except (TimeoutError, aiounifi.AiounifiException) as err:
             raise self._connect_error() from err
 

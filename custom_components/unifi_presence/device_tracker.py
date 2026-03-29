@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from homeassistant.components.device_tracker import ScannerEntity, SourceType  # type: ignore[attr-defined]
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
-from .const import DOMAIN
-from .coordinator import ClientInfo, UnifiPresenceCoordinator
+from .coordinator import UnifiPresenceCoordinator
 
 PARALLEL_UPDATES = 0
 
@@ -31,9 +29,17 @@ async def async_setup_entry(
 class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerEntity):
     """Represent a tracked UniFi client as a device tracker entity."""
 
-    _attr_has_entity_name = True
     _attr_source_type = SourceType.ROUTER
-    _attr_translation_key = "presence"
+
+    @property
+    def entity_registry_enabled_default(self) -> bool:
+        """Enable entities by default.
+
+        ScannerEntity disables entities when no device entry exists, but this
+        integration intentionally does not create per-client device entries
+        (matching the official HA UniFi integration pattern).
+        """
+        return True
 
     def __init__(
         self,
@@ -44,26 +50,17 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         super().__init__(coordinator)
         self._mac = mac
 
-        # Derive the initial device name from coordinator data if available
-        info = self._client_info
-        device_name = info.get("name", mac) if info else mac
-
         self._attr_unique_id = mac
-        self._attr_name = None
-        self._attr_device_info = DeviceInfo(  # type: ignore[assignment]
-            identifiers={(DOMAIN, mac)},
-            connections={(CONNECTION_NETWORK_MAC, mac)},
-            default_manufacturer="Ubiquiti Networks",
-            default_name=device_name,
-        )
+        self._attr_has_entity_name = False
 
     @property
-    def _client_info(self) -> ClientInfo | None:
-        """Return the client info dict for this MAC, or None."""
-        data = self.coordinator.data
-        if data is None:
-            return None  # type: ignore[unreachable]
-        return data.client_info.get(self._mac)
+    def name(self) -> str:
+        """Return the display name from coordinator client_info, falling back to MAC."""
+        if self.coordinator.data is not None:
+            info = self.coordinator.data.client_info.get(self._mac)
+            if info:
+                return info["name"]
+        return self._mac
 
     @property
     def is_connected(self) -> bool:
