@@ -705,17 +705,17 @@ async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, conf
     with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("offline")):
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "init"
-    assert result["errors"] == {"base": "cannot_discover_devices"}
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "init"
+        assert result["errors"] == {"base": "cannot_discover_devices"}
 
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_AWAY_SECONDS: 90,
-            CONF_FALLBACK_POLL_INTERVAL: 600,
-        },
-    )
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_AWAY_SECONDS: 90,
+                CONF_FALLBACK_POLL_INTERVAL: 600,
+            },
+        )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_TRACKED_DEVICES] == ["aa:bb:cc:dd:ee:ff"]
@@ -728,18 +728,18 @@ async def test_options_flow_discovery_failure_preserves_validation_error(
     with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("offline")):
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "init"
-    assert result["errors"] == {"base": "cannot_discover_devices"}
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "init"
+        assert result["errors"] == {"base": "cannot_discover_devices"}
 
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_TRACKED_DEVICES: [],
-            CONF_AWAY_SECONDS: 90,
-            CONF_FALLBACK_POLL_INTERVAL: 600,
-        },
-    )
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_TRACKED_DEVICES: [],
+                CONF_AWAY_SECONDS: 90,
+                CONF_FALLBACK_POLL_INTERVAL: 600,
+            },
+        )
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
