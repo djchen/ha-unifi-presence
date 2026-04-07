@@ -240,6 +240,30 @@ async def test_user_step_multiple_sites_shows_friendly_selector(hass: HomeAssist
     }
 
 
+async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssistant) -> None:
+    """Test setup can reach site selection without default-site access."""
+    controller = _mock_controller(
+        sites=[
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+            _make_mock_site("site-guest-id", "guest", "Guest"),
+        ]
+    )
+
+    def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
+        site = args[5] if len(args) > 5 else kwargs["site"]
+        if site == "default":
+            raise aiounifi.Unauthorized
+        return controller
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=_create_controller_side_effect) as mock_create_controller:
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+    assert mock_create_controller.call_args.args[5] == ""
+
+
 async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant) -> None:
     """Test setup stores the UniFi site short name but keys the entry by site_id."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
@@ -645,6 +669,45 @@ async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
     assert entry.data["ssl_verify"] is True
     assert entry.unique_id == DEFAULT_SITE_ID
     assert entry.title == "Home"
+
+
+async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass: HomeAssistant) -> None:
+    """Test reconfigure does not require access to the default site."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Office",
+        data={**MOCK_CONFIG_DATA, "site": "office"},
+        unique_id=OFFICE_SITE_ID,
+        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+    )
+    entry.runtime_data = None
+    entry.add_to_hass(hass)
+
+    controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
+
+    def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
+        site = args[5] if len(args) > 5 else kwargs["site"]
+        if site == "default":
+            raise aiounifi.Unauthorized
+        return controller
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=_create_controller_side_effect) as mock_create_controller:
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": "10.0.0.1",
+                "port": 8443,
+                "username": "officeadmin",
+                "password": "newpass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data["site"] == "office"
+    assert entry.unique_id == OFFICE_SITE_ID
+    assert mock_create_controller.call_args_list[0].args[5] == "office"
 
 
 @pytest.mark.parametrize(

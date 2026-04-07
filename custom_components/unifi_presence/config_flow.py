@@ -226,7 +226,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 port=self._port,
                 username=self._username,
                 password=self._password,
-                site=DEFAULT_SITE,
+                site="",
                 ssl_verify=self._ssl_verify,
                 log_context="UniFi login",
             )
@@ -402,7 +402,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 port=self._port,
                 username=self._username,
                 password=self._password,
-                site=DEFAULT_SITE,
+                site=current_data.get(CONF_SITE, DEFAULT_SITE),
                 ssl_verify=self._ssl_verify,
                 log_context="UniFi reconfigure",
             )

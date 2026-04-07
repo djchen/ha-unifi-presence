@@ -72,6 +72,5 @@ warn_unreachable = true
 [[tool.mypy.overrides]]
 module = [
     "aiounifi.*",
-    "pytest_homeassistant_custom_component.*",
 ]
 ignore_missing_imports = true

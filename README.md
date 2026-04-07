@@ -57,10 +57,10 @@ This integration intentionally does not implement discovery. UniFi hardware disc
    - **Port**: Default is 443 (use 8443 for legacy controllers)
    - **Username**: Local UniFi username
    - **Password**: Password for the account
-   - **Site**: Site name (default: `default`)
    - **Verify SSL certificate**: Enable SSL verification (default: disabled)
-4. Select devices to track from the discovered client list
-5. Click **Submit**
+4. Select the UniFi site in the second step
+5. Select devices to track from the discovered client list
+6. Click **Submit**
 
 ### Options
 
@@ -77,8 +77,9 @@ Change controller connection settings without removing the integration:
 1. Go to **Settings** → **Devices & Services**
 2. Click **⋮** on the UniFi Presence integration card
 3. Select **Reconfigure**
-4. Update host, port, username, password, site, or SSL verification settings
-5. Click **Submit** to save and reload
+4. Update host, port, username, password, or SSL verification settings for the existing site
+5. If multiple UniFi sites are accessible, confirm the existing site in the second step
+6. Click **Submit** to save and reload
 
 ## Removal
 <details>
@@ -111,7 +112,7 @@ Any client device (wireless or wired) that has connected to your UniFi network a
 | **Device selection** | Choose specific devices to track during setup or in options |
 | **Away threshold** | Configure how long before a device is marked away |
 | **Reauthentication** | Update credentials when they expire without removing the integration |
-| **Reconfiguration** | Change controller host/port/site/SSL without re-adding |
+| **Reconfiguration** | Change controller host/port/credentials/SSL for the existing site without re-adding; if multiple sites are accessible, confirm the existing site in a second step |
 | **Diagnostics** | Download redacted diagnostics data for troubleshooting |
 | **System health** | View controller, coordinator, and WebSocket summary information |
 
@@ -131,7 +132,7 @@ Each tracked device creates a `device_tracker` entity:
 
 - **Entity ID**: `device_tracker.<device_name_slug>` (derived from the UniFi client name)
 - **Friendly name**: The device name as reported by the UniFi controller (e.g., `Dan's iPhone`)
-- **Unique ID**: The device's MAC address
+- **Unique ID**: The UniFi site ID and device MAC address
 - **State**: `home` or `not_home`
 - **Attributes**:
   - `source_type`: Always `router`
