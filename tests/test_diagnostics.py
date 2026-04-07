@@ -44,11 +44,13 @@ async def test_diagnostics_redacts_credentials(hass: HomeAssistant, loaded_entry
     """Test that diagnostics redacts sensitive credentials and MAC addresses."""
     result = await async_get_config_entry_diagnostics(hass, loaded_entry)
 
-    # Credentials should be redacted
+    # Sensitive config entry data should be redacted.
+    assert result["config_entry"]["data"]["host"] == "**REDACTED**"
     assert result["config_entry"]["data"]["username"] == "**REDACTED**"
     assert result["config_entry"]["data"]["password"] == "**REDACTED**"
-    # Non-sensitive data should be present
-    assert result["config_entry"]["data"]["host"] == "192.168.1.1"
+
+    # Site remains visible in diagnostics data.
+    assert result["config_entry"]["data"]["site"] == "default"
     assert result["tracked_device_count"] == 2
     assert "device_states" in result
     assert "away_seconds" in result

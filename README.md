@@ -6,6 +6,8 @@ A Home Assistant custom integration for presence detection using UniFi network c
 
 The official [UniFi Network integration](https://www.home-assistant.io/integrations/unifi/) is broader and imports both UniFi infrastructure devices and network clients into Home Assistant. This integration is focused only on presence detection and includes an explicit per-device selection step, so you can track just the clients you care about.
 
+This integration intentionally does not implement discovery. UniFi hardware discovery would overlap with the official UniFi integration and can create duplicate discovery prompts for the same controller, so setup stays manual by design.
+
 ## Features
 
 - **Real-time updates**: WebSocket connection for instant presence detection
@@ -275,7 +277,7 @@ ruff format .         # Format code
 
 ```bash
 source .venv/bin/activate
-mypy custom_components/
+mypy --strict custom_components/unifi_presence/
 ```
 
 ## License

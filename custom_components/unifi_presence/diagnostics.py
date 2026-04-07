@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
 from . import UnifiPresenceConfigEntry
@@ -17,7 +17,7 @@ from .const import (
     DEFAULT_FALLBACK_POLL_INTERVAL,
 )
 
-TO_REDACT = {CONF_PASSWORD, CONF_USERNAME}
+TO_REDACT = {CONF_HOST, CONF_PASSWORD, CONF_USERNAME}
 
 
 def _partial_redact_mac(mac: str) -> str:
