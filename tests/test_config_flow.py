@@ -25,6 +25,9 @@ from custom_components.unifi_presence.const import (
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.config_flow.create_controller"
+DEFAULT_SITE_ID = "site-default-id"
+OFFICE_SITE_ID = "site-office-id"
+USER_STEP_INPUT = {k: v for k, v in MOCK_CONFIG_DATA.items() if k != "site"}
 
 
 @pytest.fixture
@@ -32,9 +35,9 @@ def config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Standard config entry added to hass."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        title="UniFi Presence (192.168.1.1)",
+        title="Home",
         data=MOCK_CONFIG_DATA,
-        unique_id="192.168.1.1_default",
+        unique_id=DEFAULT_SITE_ID,
         options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
     )
     entry.add_to_hass(hass)
@@ -46,9 +49,9 @@ def options_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Config entry with full options added to hass."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        title="UniFi Presence (192.168.1.1)",
+        title="Home",
         data=MOCK_CONFIG_DATA,
-        unique_id="192.168.1.1_default",
+        unique_id=DEFAULT_SITE_ID,
         options=MOCK_OPTIONS,
     )
     entry.add_to_hass(hass)
@@ -69,6 +72,7 @@ def _mock_controller(
     login_side_effect: Exception | None = None,
     clients_all_items: list[Any] | None = None,
     clients_items: list[Any] | None = None,
+    sites: list[Any] | None = None,
 ) -> MagicMock:
     """Create a mock aiounifi Controller."""
     controller = MagicMock()
@@ -82,9 +86,23 @@ def _mock_controller(
     controller.clients.update = AsyncMock()
     controller.clients.items.return_value = clients_items or []
     controller.clients.__iter__ = lambda self: iter(k for k, _v in (clients_items or []))
+    controller.sites = MagicMock()
+    controller.sites.update = AsyncMock()
+    controller.sites.values.return_value = (
+        sites if sites is not None else [_make_mock_site(DEFAULT_SITE_ID, "default", "Home")]
+    )
     controller.messages.subscribe = MagicMock(return_value=MagicMock())
     controller.connectivity = MagicMock()
     return controller
+
+
+def _make_mock_site(site_id: str, name: str, description: str = "") -> MagicMock:
+    """Create a mock aiounifi site object."""
+    site = MagicMock()
+    site.site_id = site_id
+    site.name = name
+    site.description = description
+    return site
 
 
 async def test_user_step_shows_form(hass: HomeAssistant) -> None:
@@ -100,7 +118,7 @@ async def test_user_step_invalid_auth(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -113,7 +131,7 @@ async def test_user_step_unauthorized(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -126,7 +144,7 @@ async def test_user_step_cannot_connect(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -139,7 +157,7 @@ async def test_user_step_timeout_shows_cannot_connect(hass: HomeAssistant) -> No
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -152,7 +170,7 @@ async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -169,11 +187,11 @@ async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAs
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
+    assert result["step_id"] == "site"
     assert result["errors"] == {"base": "cannot_discover_devices"}
 
 
@@ -186,11 +204,79 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
+
+
+async def test_user_step_multiple_sites_shows_friendly_selector(hass: HomeAssistant) -> None:
+    """Test multi-site setup shows human-friendly site labels."""
+    controller = _mock_controller(
+        sites=[
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+        ]
+    )
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+    site_field = next(iter(result["data_schema"].schema))
+    assert result["data_schema"].schema[site_field].container == {
+        DEFAULT_SITE_ID: "Home",
+        OFFICE_SITE_ID: "Office",
+    }
+
+
+async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant) -> None:
+    """Test setup stores the UniFi site short name but keys the entry by site_id."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
+    controller = _mock_controller(
+        clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)],
+        sites=[
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+        ],
+    )
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={"site": OFFICE_SITE_ID})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]}
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Office"
+    assert result["data"]["site"] == "office"
+    assert result["result"].unique_id == OFFICE_SITE_ID
+
+
+async def test_devices_step_uses_site_name_when_description_missing(hass: HomeAssistant) -> None:
+    """Test site titles fall back to the site short name."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
+    controller = _mock_controller(
+        clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)],
+        sites=[_make_mock_site(OFFICE_SITE_ID, "office", "")],
+    )
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]}
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "office"
+    assert result["data"]["site"] == "office"
+    assert result["result"].unique_id == OFFICE_SITE_ID
 
 
 async def test_user_step_historical_client_failure_uses_active_clients(
@@ -205,7 +291,7 @@ async def test_user_step_historical_client_failure_uses_active_clients(
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -224,7 +310,7 @@ async def test_user_step_active_client_refresh_failure_uses_historical_clients(
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -240,7 +326,7 @@ async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -250,29 +336,31 @@ async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "UniFi Presence (192.168.1.1)"
+    assert result["title"] == "Home"
     assert result["data"][CONF_HOST] == "192.168.1.1"
+    assert result["data"]["site"] == "default"
+    assert result["result"].unique_id == DEFAULT_SITE_ID
     assert "aa:bb:cc:dd:ee:ff" in result["options"][CONF_TRACKED_DEVICES]
 
 
 @pytest.mark.parametrize(
-    ("host", "site", "expected_unique_id"),
+    ("host", "expected_unique_id"),
     [
-        ("192.168.1.1", "default", "192.168.1.1_default"),
-        ("::1", "default", "::1_default"),
-        ("fd12:3456:789a::1", "mysite", "fd12:3456:789a::1_mysite"),
-        ("unifi.local", "default", "unifi.local_default"),
-        ("controller.example.com", "office", "controller.example.com_office"),
+        ("192.168.1.1", DEFAULT_SITE_ID),
+        ("::1", DEFAULT_SITE_ID),
+        ("fd12:3456:789a::1", DEFAULT_SITE_ID),
+        ("unifi.local", DEFAULT_SITE_ID),
+        ("controller.example.com", DEFAULT_SITE_ID),
     ],
 )
 async def test_devices_step_creates_entry_host_variants(
-    hass: HomeAssistant, host: str, site: str, expected_unique_id: str
+    hass: HomeAssistant, host: str, expected_unique_id: str
 ) -> None:
-    """Test that setup works with IPv4, IPv6, and hostname host values."""
+    """Test that setup identity is based on site_id, not host."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
-    config_data = {**MOCK_CONFIG_DATA, CONF_HOST: host, "site": site}
+    config_data = {**USER_STEP_INPUT, CONF_HOST: host}
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
@@ -288,24 +376,56 @@ async def test_devices_step_creates_entry_host_variants(
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == f"UniFi Presence ({host})"
+    assert result["title"] == "Home"
     assert result["data"][CONF_HOST] == host
     assert result["result"].unique_id == expected_unique_id
 
 
-async def test_user_step_no_devices_discovered_aborts(hass: HomeAssistant) -> None:
-    """Test that setup aborts if UniFi returns no clients to choose from."""
+async def test_user_step_no_clients_available_aborts(hass: HomeAssistant) -> None:
+    """Test that setup aborts with the clearer no-clients reason."""
     controller = _mock_controller(clients_all_items=[])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "no_devices_discovered"
+    assert result["reason"] == "no_clients_available"
+
+
+async def test_user_step_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """Test that failing to fetch sites returns to the user step with an error."""
+    controller = _mock_controller()
+    controller.sites.update = AsyncMock(side_effect=aiounifi.AiounifiException)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=USER_STEP_INPUT,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_user_step_no_sites_available_aborts(hass: HomeAssistant) -> None:
+    """Test that setup aborts when the account has no accessible UniFi sites."""
+    controller = _mock_controller(sites=[])
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=USER_STEP_INPUT,
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_sites_available"
 
 
 async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
@@ -317,7 +437,7 @@ async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -329,19 +449,16 @@ async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
 
 
 async def test_already_configured_abort(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
-    """Test that duplicate host_site unique_id aborts."""
+    """Test that duplicate site setup aborts even with a different host alias."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    alias_config = {**USER_STEP_INPUT, CONF_HOST: "controller.example.com"}
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+            user_input=alias_config,
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -380,9 +497,9 @@ def _make_reconfigure_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Create and add a standard entry for reconfigure flow tests."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        title="UniFi Presence (192.168.1.1)",
+        title="Home",
         data=MOCK_CONFIG_DATA,
-        unique_id="192.168.1.1_default",
+        unique_id=DEFAULT_SITE_ID,
         options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
     )
     entry.add_to_hass(hass)
@@ -396,7 +513,6 @@ async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
     new_data = {
         "host": "10.0.0.1",
         "port": 8443,
-        "site": "office",
         "username": "newadmin",
         "password": "newpass",
         "ssl_verify": True,
@@ -417,28 +533,28 @@ async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["host"] == "10.0.0.1"
     assert entry.data["port"] == 8443
-    assert entry.data["site"] == "office"
+    assert entry.data["site"] == "default"
     assert entry.data["username"] == "newadmin"
     assert entry.data["password"] == "newpass"
     assert entry.data["ssl_verify"] is True
-    assert entry.unique_id == "10.0.0.1_office"
-    assert entry.title == "UniFi Presence (10.0.0.1)"
+    assert entry.unique_id == DEFAULT_SITE_ID
+    assert entry.title == "Home"
 
 
 @pytest.mark.parametrize(
-    ("new_host", "new_site", "expected_unique_id"),
+    ("new_host", "expected_unique_id"),
     [
-        ("10.0.0.1", "office", "10.0.0.1_office"),
-        ("::1", "default", "::1_default"),
-        ("fd12:3456:789a::1", "mysite", "fd12:3456:789a::1_mysite"),
-        ("unifi.local", "default", "unifi.local_default"),
-        ("controller.example.com", "office", "controller.example.com_office"),
+        ("10.0.0.1", DEFAULT_SITE_ID),
+        ("::1", DEFAULT_SITE_ID),
+        ("fd12:3456:789a::1", DEFAULT_SITE_ID),
+        ("unifi.local", DEFAULT_SITE_ID),
+        ("controller.example.com", DEFAULT_SITE_ID),
     ],
 )
 async def test_reconfigure_flow_success_host_variants(
-    hass: HomeAssistant, new_host: str, new_site: str, expected_unique_id: str
+    hass: HomeAssistant, new_host: str, expected_unique_id: str
 ) -> None:
-    """Test that reconfigure works with IPv4, IPv6, and hostname host values."""
+    """Test that reconfigure keeps the same site identity across host changes."""
     entry = _make_reconfigure_entry(hass)
 
     controller = _mock_controller()
@@ -449,7 +565,6 @@ async def test_reconfigure_flow_success_host_variants(
             user_input={
                 "host": new_host,
                 "port": 8443,
-                "site": new_site,
                 "username": "newadmin",
                 "password": "newpass",
             },
@@ -459,7 +574,7 @@ async def test_reconfigure_flow_success_host_variants(
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["host"] == new_host
     assert entry.unique_id == expected_unique_id
-    assert entry.title == f"UniFi Presence ({new_host})"
+    assert entry.title == "Home"
 
 
 async def test_reconfigure_flow_invalid_auth(hass: HomeAssistant) -> None:
@@ -543,39 +658,108 @@ async def test_reconfigure_flow_unknown_error(hass: HomeAssistant) -> None:
 
 
 async def test_reconfigure_flow_already_configured(hass: HomeAssistant) -> None:
-    """Test that reconfigure fails if the new host/site is already configured."""
+    """Test that reconfigure aborts when the selected site differs."""
     entry = _make_reconfigure_entry(hass)
 
-    duplicate_data = {
-        **MOCK_CONFIG_DATA,
-        "host": "10.0.0.1",
-        "site": "office",
-    }
-    duplicate = MockConfigEntry(
-        domain=DOMAIN,
-        title="UniFi Presence (10.0.0.1)",
-        data=duplicate_data,
-        unique_id="10.0.0.1_office",
-        options={CONF_TRACKED_DEVICES: ["11:22:33:44:55:66"]},
+    controller = _mock_controller(
+        sites=[
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+        ]
     )
-    duplicate.add_to_hass(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER) as create_controller:
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await entry.start_reconfigure_flow(hass)
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             user_input={
                 "host": "10.0.0.1",
                 "port": MOCK_CONFIG_DATA["port"],
-                "site": "office",
                 "username": "newadmin",
                 "password": "newpass",
             },
         )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "site"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"site": OFFICE_SITE_ID},
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "different_site_selected"
+
+
+async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """Test that reconfigure returns an error if the site list cannot be loaded."""
+    entry = _make_reconfigure_entry(hass)
+    controller = _mock_controller()
+    controller.sites.update = AsyncMock(side_effect=aiounifi.AiounifiException)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": MOCK_CONFIG_DATA["host"],
+                "port": MOCK_CONFIG_DATA["port"],
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "already_configured"}
-    create_controller.assert_not_called()
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reconfigure_flow_no_sites_available_aborts(hass: HomeAssistant) -> None:
+    """Test that reconfigure aborts when the account has no accessible UniFi sites."""
+    entry = _make_reconfigure_entry(hass)
+    controller = _mock_controller(sites=[])
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": MOCK_CONFIG_DATA["host"],
+                "port": MOCK_CONFIG_DATA["port"],
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_sites_available"
+
+
+async def test_reconfigure_flow_same_site_requires_site_access(hass: HomeAssistant) -> None:
+    """Test that reconfigure validates site-scoped client access before saving."""
+    entry = _make_reconfigure_entry(hass)
+    controller = _mock_controller()
+    site_controller = _mock_controller(clients_all_items=[], clients_items=[])
+    site_controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException)
+    site_controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException)
+
+    with patch(
+        PATCH_CREATE_CONTROLLER,
+        side_effect=[controller, site_controller],
+    ):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": MOCK_CONFIG_DATA["host"],
+                "port": MOCK_CONFIG_DATA["port"],
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+    assert result["errors"] == {"base": "cannot_discover_devices"}
 
 
 async def test_options_flow_without_runtime_data_uses_login(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
@@ -617,7 +801,7 @@ async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, o
 
 
 async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAssistant) -> None:
-    """Test reconfigure with same host/site but different username/password succeeds."""
+    """Test reconfigure with the same site updates credentials successfully."""
     entry = _make_reconfigure_entry(hass)
 
     controller = _mock_controller()
@@ -628,7 +812,6 @@ async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAss
             user_input={
                 "host": "192.168.1.1",
                 "port": 443,
-                "site": "default",
                 "username": "newadmin",
                 "password": "newpass",
             },
@@ -638,7 +821,7 @@ async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAss
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["username"] == "newadmin"
     assert entry.data["password"] == "newpass"
-    assert entry.unique_id == "192.168.1.1_default"
+    assert entry.unique_id == DEFAULT_SITE_ID
 
 
 async def test_reauth_confirm_timeout_shows_cannot_connect(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
@@ -857,7 +1040,7 @@ async def test_fetch_all_clients_active_wins_on_key_collision(hass: HomeAssistan
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -904,7 +1087,7 @@ async def test_user_step_both_updates_fail_but_cached_data_proceeds(hass: HomeAs
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input=MOCK_CONFIG_DATA,
+            user_input=USER_STEP_INPUT,
         )
 
     assert result["type"] is FlowResultType.FORM
