@@ -62,6 +62,22 @@ class UnifiPresenceData:
         self.device_states = device_states
         self.client_info = client_info
 
+    def __eq__(self, other: object) -> bool:
+        """Return whether two coordinator payloads are equivalent."""
+        if not isinstance(other, UnifiPresenceData):
+            return NotImplemented
+
+        return self.device_states == other.device_states and self.client_info == other.client_info
+
+    def __hash__(self) -> int:
+        """Return a stable hash for coordinator payload comparisons."""
+        return hash(
+            (
+                frozenset(self.device_states.items()),
+                tuple(sorted((mac, info["name"], info["mac"]) for mac, info in self.client_info.items())),
+            )
+        )
+
 
 class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     """Coordinator for UniFi client presence via WebSocket + fallback poll."""
@@ -96,6 +112,19 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     def tracked_devices(self) -> tuple[str, ...]:
         """Return the tuple of tracked MAC addresses (pre-lowercased)."""
         return self._tracked_macs
+
+    @property
+    def site_id(self) -> str:
+        """Return the config entry site identifier used for tracker IDs."""
+        unique_id = self.config_entry.unique_id
+        if isinstance(unique_id, str) and unique_id:
+            return unique_id
+
+        entry_id = self.config_entry.entry_id
+        if isinstance(entry_id, str) and entry_id:
+            return entry_id
+
+        return DEFAULT_SITE
 
     @property
     def away_seconds(self) -> int:
@@ -156,18 +185,12 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             hostname=raw.get("hostname", ""),
         )
 
-        # Check if state actually changed
         if self.data is not None:
             old_home = self.data.device_states.get(mac)
-            if old_home == is_home:
-                # No state change — update client_info in-place for freshness.
-                # Safe: the event loop is single-threaded so no concurrent
-                # reader can observe a partial write.  We intentionally skip
-                # async_set_updated_data to avoid unnecessary entity writes.
-                self.data.client_info[mac] = info
+            old_info = self.data.client_info.get(mac)
+            if old_home == is_home and old_info == info:
                 return
 
-        # State changed — rebuild and push
         new_states = dict(self.data.device_states) if self.data else {}
         new_states[mac] = is_home
 
@@ -251,10 +274,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             client_info=client_info,
         )
 
-        # If device states haven't changed, keep the existing data object to
-        # avoid unnecessary entity writes and just refresh client_info in-place.
-        if self.data is not None and new_data.device_states == self.data.device_states:
-            self.data.client_info.update(client_info)
+        # Reuse the existing object only when neither presence nor metadata changed.
+        if self.data is not None and new_data == self.data:
             return self.data
 
         return new_data

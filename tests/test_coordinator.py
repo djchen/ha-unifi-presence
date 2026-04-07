@@ -88,6 +88,20 @@ async def test_coordinator_uses_hostname_when_name_missing(
     assert data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "dan-phone"
 
 
+async def test_coordinator_uses_mac_when_name_and_hostname_missing(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that MAC remains the last-resort tracker name fallback."""
+    now = int(time.time())
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", last_seen=now)
+    mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    data = await coordinator._async_update_data()
+
+    assert data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "aa:bb:cc:dd:ee:ff"
+
+
 async def test_coordinator_marks_unknown_device_not_home(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
@@ -99,6 +113,17 @@ async def test_coordinator_marks_unknown_device_not_home(
 
     assert data.device_states["aa:bb:cc:dd:ee:ff"] is False
     assert data.device_states["11:22:33:44:55:66"] is False
+
+
+async def test_coordinator_site_id_uses_entry_id_when_unique_id_missing(
+    hass: HomeAssistant, config_entry: MagicMock
+) -> None:
+    """Test tracker ID fallback stays stable when unique_id is unavailable."""
+    config_entry.unique_id = None
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    assert coordinator.site_id == "test_entry_id"
 
 
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
@@ -295,21 +320,20 @@ async def test_process_message_ignores_untracked_mac(
     assert coordinator.data is original_data
 
 
-async def test_process_message_no_state_change_updates_info_silently(
+async def test_process_message_metadata_only_update_notifies_listeners(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
-    """Test that process_message updates client_info without triggering state change."""
+    """Test that metadata-only websocket updates refresh entities immediately."""
     now = int(time.time())
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
-    data = await coordinator._async_update_data()
-    # Simulate what DataUpdateCoordinator does after _async_update_data returns
-    coordinator.async_set_updated_data(data)
+    await coordinator.async_refresh()
 
-    assert data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
     original_data = coordinator.data
+    coordinator.async_update_listeners = MagicMock()
 
     # Send WS message with same home state but updated name
     message = MagicMock()
@@ -320,10 +344,9 @@ async def test_process_message_no_state_change_updates_info_silently(
     }
     coordinator.process_message(message)
 
-    # Data object should be the same (no async_set_updated_data called for state change)
-    assert coordinator.data is original_data
-    # But client_info should be updated in-place
+    assert coordinator.data is not original_data
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone Updated"
+    assert coordinator.async_update_listeners.call_count == 1
 
 
 async def test_fallback_poll_diff_returns_existing_data(
@@ -362,6 +385,31 @@ async def test_async_refresh_skips_listener_update_when_state_unchanged(
 
     await coordinator.async_refresh()
     assert coordinator.async_update_listeners.call_count == 1
+
+
+async def test_async_refresh_notifies_listeners_on_metadata_only_change(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that fallback polls notify listeners when only metadata changes."""
+    now = int(time.time())
+    mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = _make_mock_client(
+        "aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now
+    )
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    coordinator.async_update_listeners = MagicMock()
+
+    await coordinator.async_refresh()
+    assert coordinator.async_update_listeners.call_count == 1
+
+    mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = _make_mock_client(
+        "aa:bb:cc:dd:ee:ff", name="Dan Phone Updated", last_seen=now
+    )
+
+    await coordinator.async_refresh()
+
+    assert coordinator.async_update_listeners.call_count == 2
+    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone Updated"
 
 
 async def test_process_message_when_data_is_none(

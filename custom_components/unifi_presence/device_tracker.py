@@ -50,8 +50,8 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         super().__init__(coordinator)
         self._mac = mac
 
-        self._attr_unique_id = mac
-        self._attr_has_entity_name = False
+        self._attr_unique_id = f"{coordinator.site_id}-{mac}"
+        self._attr_has_entity_name = True
 
     @property
     def name(self) -> str:
@@ -61,6 +61,11 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
             if info:
                 return info["name"]
         return self._mac
+
+    @property
+    def unique_id(self) -> str:
+        """Return the site-scoped unique ID for this tracker."""
+        return str(self._attr_unique_id)
 
     @property
     def is_connected(self) -> bool:

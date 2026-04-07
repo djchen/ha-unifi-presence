@@ -20,6 +20,7 @@ def _make_coordinator(data: UnifiPresenceData | None = None) -> MagicMock:
     coordinator.tracked_devices = list(data.device_states.keys()) if data else []
     coordinator.config_entry = MagicMock()
     coordinator.config_entry.entry_id = "test_entry_id"
+    coordinator.site_id = "default"
     return coordinator
 
 
@@ -84,12 +85,26 @@ def test_tracker_source_type() -> None:
 
 
 def test_tracker_unique_id() -> None:
-    """Test the unique ID is set to the MAC address."""
+    """Test the unique ID includes the site ID and MAC address."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker.unique_id == "aa:bb:cc:dd:ee:ff"
+    assert tracker.unique_id == "default-aa:bb:cc:dd:ee:ff"
+
+
+def test_tracker_unique_id_differs_by_site() -> None:
+    """Test that the same MAC on different sites gets distinct unique IDs."""
+    data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
+    default_coordinator = _make_coordinator(data)
+    office_coordinator = _make_coordinator(data)
+    office_coordinator.site_id = "office"
+
+    default_tracker = UnifiPresenceTracker(default_coordinator, "aa:bb:cc:dd:ee:ff")
+    office_tracker = UnifiPresenceTracker(office_coordinator, "aa:bb:cc:dd:ee:ff")
+
+    assert default_tracker.unique_id == "default-aa:bb:cc:dd:ee:ff"
+    assert office_tracker.unique_id == "office-aa:bb:cc:dd:ee:ff"
 
 
 def test_tracker_mac_address() -> None:
@@ -102,13 +117,31 @@ def test_tracker_mac_address() -> None:
 
 
 def test_tracker_has_entity_name() -> None:
-    """Test that has_entity_name is False and name comes from coordinator client_info."""
+    """Test that trackers are entity-only and expose the coordinator name."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-    assert tracker._attr_has_entity_name is False
+    assert tracker._attr_has_entity_name is True
     assert tracker.name == "Device aa:bb:cc"
+
+
+def test_tracker_name_prefers_runtime_name() -> None:
+    """Test that tracker name uses the resolved runtime name."""
+    data = UnifiPresenceData(
+        device_states={"aa:bb:cc:dd:ee:ff": True},
+        client_info={
+            "aa:bb:cc:dd:ee:ff": {
+                "name": "Dan Phone",
+                "mac": "aa:bb:cc:dd:ee:ff",
+            }
+        },
+    )
+    coordinator = _make_coordinator(data)
+
+    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
+
+    assert tracker.name == "Dan Phone"
 
 
 def test_tracker_entity_registry_enabled_default() -> None:
