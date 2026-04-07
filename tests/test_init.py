@@ -8,9 +8,10 @@ from unittest.mock import MagicMock, patch
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.unifi_presence.const import DOMAIN
+from custom_components.unifi_presence.const import CONF_TRACKED_DEVICES, DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
@@ -178,3 +179,67 @@ async def test_entity_states_reflect_coordinator_data(
 
     assert away_state.attributes["mac"] == "11:22:33:44:55:66"
     assert away_state.attributes["source_type"] == "router"
+
+
+async def test_options_update_removes_explicitly_deselected_entity_registry_entries(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test options updates remove entities for deselected tracked clients."""
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    kept_entry = entity_registry.async_get_or_create(
+        "device_tracker",
+        DOMAIN,
+        f"{entry.unique_id}-aa:bb:cc:dd:ee:ff",
+        config_entry=entry,
+        suggested_object_id="dan_phone",
+    )
+    removed_entry = entity_registry.async_get_or_create(
+        "device_tracker",
+        DOMAIN,
+        f"{entry.unique_id}-11:22:33:44:55:66",
+        config_entry=entry,
+        suggested_object_id="jane_phone",
+    )
+
+    hass.config_entries.async_update_entry(
+        entry,
+        options={**entry.options, CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+    )
+    await hass.async_block_till_done()
+
+    assert entity_registry.async_get(kept_entry.entity_id) is not None
+    assert entity_registry.async_get(removed_entry.entity_id) is None
+
+
+async def test_options_update_keeps_still_selected_missing_entity_registry_entries(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test options updates do not remove still-selected missing tracked clients."""
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    missing_entry = entity_registry.async_get_or_create(
+        "device_tracker",
+        DOMAIN,
+        f"{entry.unique_id}-11:22:33:44:55:66",
+        config_entry=entry,
+        suggested_object_id="jane_phone",
+    )
+
+    hass.config_entries.async_update_entry(
+        entry,
+        options={**entry.options, CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"]},
+    )
+    await hass.async_block_till_done()
+
+    assert entity_registry.async_get(missing_entry.entity_id) is not None

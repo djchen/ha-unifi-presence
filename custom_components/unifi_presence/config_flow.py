@@ -45,6 +45,49 @@ def _site_title(site: Any) -> str:
     return str(site.description or site.name)
 
 
+def _normalize_mac(mac: str) -> str:
+    """Return a normalized MAC string for config storage and labels."""
+    return mac.strip().lower()
+
+
+def _strip_mac_suffix(label: str, mac: str) -> str:
+    """Return the base client label without the trailing normalized MAC."""
+    mac_suffix = f" ({mac})"
+    if label.endswith(mac_suffix):
+        return label.removesuffix(mac_suffix)
+    return label
+
+
+def _build_options_client_labels(available_clients: Mapping[str, str], current_tracked: list[str]) -> dict[str, str]:
+    """Build ordered option labels for tracked client selection."""
+    normalized_available = {_normalize_mac(mac): label for mac, label in available_clients.items()}
+    normalized_tracked = [_normalize_mac(mac) for mac in current_tracked]
+
+    current_client_names = {mac: _strip_mac_suffix(label, mac) for mac, label in normalized_available.items()}
+    duplicate_names = {
+        name
+        for name in current_client_names.values()
+        if sum(1 for current_name in current_client_names.values() if current_name == name) > 1
+    }
+
+    preserved_missing = sorted(mac for mac in normalized_tracked if mac not in normalized_available)
+    current_clients = sorted(
+        normalized_available,
+        key=lambda mac: (current_client_names[mac].lower(), mac),
+    )
+
+    client_options: dict[str, str] = {}
+
+    for mac in preserved_missing:
+        client_options[mac] = f"{mac} (No longer in UniFi Client Devices)"
+
+    for mac in current_clients:
+        name = current_client_names[mac]
+        client_options[mac] = f"{name} ({mac})" if name in duplicate_names else name
+
+    return client_options
+
+
 async def _fetch_sites(controller: Controller) -> dict[str, Any]:
     """Fetch sites from the UniFi controller keyed by site_id."""
     await controller.sites.update()
@@ -491,17 +534,9 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         available_clients, discovery_failed = await self._async_fetch_available_clients()
 
         current_options = self.config_entry.options
-        current_tracked = current_options.get(CONF_TRACKED_DEVICES, [])
+        current_tracked = [_normalize_mac(mac) for mac in current_options.get(CONF_TRACKED_DEVICES, [])]
 
-        # Build multi-select with current selections pre-checked
-        client_options: dict[str, str] = {}
-        if available_clients:
-            client_options = dict(sorted(available_clients.items(), key=lambda x: x[1].lower()))
-
-        # Add currently tracked MACs that might not be in the discovered list
-        for mac in current_tracked:
-            if mac not in client_options:
-                client_options[mac] = mac
+        client_options = _build_options_client_labels(available_clients, current_tracked)
 
         schema_fields: dict[Any, Any] = {}
         if client_options:
