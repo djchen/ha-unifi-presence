@@ -46,28 +46,35 @@ class ClientInfo(TypedDict):
 class UnifiPresenceData:
     """Container for coordinator data."""
 
-    __slots__ = ("client_info", "device_states")
+    __slots__ = ("client_info", "device_states", "missing_macs")
 
     def __init__(
         self,
         device_states: dict[str, bool],
         client_info: dict[str, ClientInfo],
+        missing_macs: frozenset[str],
     ) -> None:
         """Initialize.
 
         Args:
             device_states: MAC address -> is_home (True = home, False = not_home).
             client_info: MAC address -> client metadata used by entities.
+            missing_macs: Tracked MAC addresses currently absent from controller data.
         """
         self.device_states = device_states
         self.client_info = client_info
+        self.missing_macs = missing_macs
 
     def __eq__(self, other: object) -> bool:
         """Return whether two coordinator payloads are equivalent."""
         if not isinstance(other, UnifiPresenceData):
             return NotImplemented
 
-        return self.device_states == other.device_states and self.client_info == other.client_info
+        return (
+            self.device_states == other.device_states
+            and self.client_info == other.client_info
+            and self.missing_macs == other.missing_macs
+        )
 
     def __hash__(self) -> int:
         """Return a stable hash for coordinator payload comparisons."""
@@ -75,6 +82,7 @@ class UnifiPresenceData:
             (
                 frozenset(self.device_states.items()),
                 tuple(sorted((mac, info["name"], info["mac"]) for mac, info in self.client_info.items())),
+                self.missing_macs,
             )
         )
 
@@ -179,16 +187,20 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         last_seen = raw.get("last_seen") or 0
         is_home = (now - last_seen) < self._away_seconds
 
-        info = self._build_client_info(
-            mac,
-            name=raw.get("name", ""),
-            hostname=raw.get("hostname", ""),
+        previous_info = self.data.client_info.get(mac) if self.data is not None else None
+        name = raw.get("name", "")
+        hostname = raw.get("hostname", "")
+        info = (
+            self._build_client_info(mac, name=name, hostname=hostname)
+            if name or hostname or previous_info is None
+            else previous_info
         )
+        missing_macs = (self.data.missing_macs - {mac}) if self.data is not None else frozenset()
 
         if self.data is not None:
             old_home = self.data.device_states.get(mac)
             old_info = self.data.client_info.get(mac)
-            if old_home == is_home and old_info == info:
+            if old_home == is_home and old_info == info and missing_macs == self.data.missing_macs:
                 return
 
         new_states = dict(self.data.device_states) if self.data else {}
@@ -205,7 +217,13 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             "home" if is_home else "away",
         )
 
-        self.async_set_updated_data(UnifiPresenceData(device_states=new_states, client_info=new_info))
+        self.async_set_updated_data(
+            UnifiPresenceData(
+                device_states=new_states,
+                client_info=new_info,
+                missing_macs=missing_macs,
+            )
+        )
 
     def _connect_error(self) -> UpdateFailed:
         """Build an UpdateFailed for connection errors."""
@@ -251,6 +269,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         clients = controller.clients
         device_states: dict[str, bool] = {}
         client_info: dict[str, ClientInfo] = {}
+        missing_macs: set[str] = set()
+        previous_info = self.data.client_info if self.data is not None else {}
 
         for mac in tracked_macs:
             client = clients.get(mac)
@@ -265,13 +285,15 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 )
             else:
                 is_home = False
-                client_info[mac] = self._build_client_info(mac)
+                missing_macs.add(mac)
+                client_info[mac] = previous_info.get(mac, self._build_client_info(mac))
 
             device_states[mac] = is_home
 
         new_data = UnifiPresenceData(
             device_states=device_states,
             client_info=client_info,
+            missing_macs=frozenset(missing_macs),
         )
 
         # Reuse the existing object only when neither presence nor metadata changed.

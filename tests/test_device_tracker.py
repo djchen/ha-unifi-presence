@@ -17,6 +17,7 @@ def _make_coordinator(data: UnifiPresenceData | None = None) -> MagicMock:
     """Create a mock coordinator."""
     coordinator = MagicMock()
     coordinator.data = data
+    coordinator.last_update_success = True
     coordinator.tracked_devices = list(data.device_states.keys()) if data else []
     coordinator.config_entry = MagicMock()
     coordinator.config_entry.entry_id = "test_entry_id"
@@ -27,6 +28,7 @@ def _make_coordinator(data: UnifiPresenceData | None = None) -> MagicMock:
 def _make_presence_data(
     home_macs: list[str] | None = None,
     away_macs: list[str] | None = None,
+    missing_macs: list[str] | None = None,
 ) -> UnifiPresenceData:
     """Create test presence data."""
     states: dict[str, bool] = {}
@@ -46,7 +48,11 @@ def _make_presence_data(
             "mac": mac,
         }
 
-    return UnifiPresenceData(device_states=states, client_info=info)
+    return UnifiPresenceData(
+        device_states=states,
+        client_info=info,
+        missing_macs=frozenset(missing_macs or []),
+    )
 
 
 def test_tracker_is_connected_when_home() -> None:
@@ -136,6 +142,7 @@ def test_tracker_name_prefers_runtime_name() -> None:
                 "mac": "aa:bb:cc:dd:ee:ff",
             }
         },
+        missing_macs=frozenset(),
     )
     coordinator = _make_coordinator(data)
 
@@ -174,3 +181,39 @@ def test_tracker_is_connected_missing_mac() -> None:
 
     tracker = UnifiPresenceTracker(coordinator, "ff:ff:ff:ff:ff:ff")
     assert tracker.is_connected is False
+
+
+def test_tracker_available_false_when_missing() -> None:
+    """Test that missing tracked clients become unavailable."""
+    data = _make_presence_data(
+        away_macs=["aa:bb:cc:dd:ee:ff"],
+        missing_macs=["aa:bb:cc:dd:ee:ff"],
+    )
+    data.client_info["aa:bb:cc:dd:ee:ff"]["name"] = "Dan Phone"
+    coordinator = _make_coordinator(data)
+
+    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
+
+    assert tracker.available is False
+    assert tracker.name == "Dan Phone"
+
+
+def test_tracker_available_true_when_away_but_present() -> None:
+    """Test that away tracked clients stay available when still present."""
+    data = _make_presence_data(away_macs=["aa:bb:cc:dd:ee:ff"])
+    coordinator = _make_coordinator(data)
+
+    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
+
+    assert tracker.available is True
+
+
+def test_tracker_available_false_when_coordinator_update_failed() -> None:
+    """Test that coordinator update failures still make trackers unavailable."""
+    data = _make_presence_data(away_macs=["aa:bb:cc:dd:ee:ff"])
+    coordinator = _make_coordinator(data)
+    coordinator.last_update_success = False
+
+    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
+
+    assert tracker.available is False

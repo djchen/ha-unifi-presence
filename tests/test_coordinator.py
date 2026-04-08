@@ -113,6 +113,51 @@ async def test_coordinator_marks_unknown_device_not_home(
 
     assert data.device_states["aa:bb:cc:dd:ee:ff"] is False
     assert data.device_states["11:22:33:44:55:66"] is False
+    assert data.missing_macs == frozenset({"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"})
+
+
+async def test_coordinator_preserves_metadata_for_missing_tracked_client(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that fallback polling keeps last-known metadata for missing clients."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    first_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(first_data)
+
+    mock_coordinator_controller.clients.clear()
+
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is False
+    assert data.missing_macs == frozenset({"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"})
+    assert data.client_info[mac]["name"] == "Dan Phone"
+
+
+async def test_async_refresh_notifies_listeners_when_client_becomes_missing(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that missing-state changes notify listeners even when is_home stays false."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now - 120)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    coordinator.async_update_listeners = MagicMock()
+
+    await coordinator.async_refresh()
+    assert coordinator.async_update_listeners.call_count == 1
+    assert coordinator.data.missing_macs == frozenset({"11:22:33:44:55:66"})
+
+    mock_coordinator_controller.clients.clear()
+
+    await coordinator.async_refresh()
+
+    assert coordinator.async_update_listeners.call_count == 2
+    assert coordinator.data.missing_macs == frozenset({"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"})
 
 
 async def test_coordinator_site_id_uses_entry_id_when_unique_id_missing(
@@ -279,6 +324,55 @@ async def test_process_message_updates_state(
     # State should now be home
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+
+
+async def test_process_message_clears_missing_state_immediately(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that websocket updates immediately clear missing state for tracked clients."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    initial_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(initial_data)
+
+    assert "aa:bb:cc:dd:ee:ff" in coordinator.data.missing_macs
+
+    message = MagicMock()
+    message.data = {
+        "mac": "aa:bb:cc:dd:ee:ff",
+        "name": "Dan Phone",
+        "last_seen": int(time.time()),
+    }
+    coordinator.process_message(message)
+
+    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert "aa:bb:cc:dd:ee:ff" not in coordinator.data.missing_macs
+
+
+async def test_process_message_preserves_metadata_when_missing_client_reappears(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that websocket recovery keeps last-known metadata when payload omits names."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    first_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(first_data)
+
+    mock_coordinator_controller.clients.clear()
+    missing_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(missing_data)
+
+    message = MagicMock()
+    message.data = {
+        "mac": mac,
+        "last_seen": now,
+    }
+    coordinator.process_message(message)
+
+    assert coordinator.data.client_info[mac]["name"] == "Dan Phone"
+    assert mac not in coordinator.data.missing_macs
 
 
 async def test_process_message_uses_hostname_when_name_missing(

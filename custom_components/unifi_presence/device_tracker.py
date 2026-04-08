@@ -75,6 +75,13 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         return self.coordinator.data.device_states.get(self._mac, False)
 
     @property
+    def available(self) -> bool:
+        """Return whether the tracked client is currently available."""
+        if not super().available:
+            return False
+        return self._mac not in self.coordinator.data.missing_macs
+
+    @property
     def mac_address(self) -> str:
         """Return the MAC address of the device."""
         return self._mac

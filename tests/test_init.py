@@ -181,6 +181,41 @@ async def test_entity_states_reflect_coordinator_data(
     assert away_state.attributes["source_type"] == "router"
 
 
+async def test_missing_tracked_client_entity_becomes_unavailable(
+    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+) -> None:
+    """Test that still-selected missing tracked clients stay as unavailable entities."""
+    now = int(time.time())
+    home_client = _make_mock_client(
+        "aa:bb:cc:dd:ee:ff", name="Dan Phone", hostname="dan-phone", ip="192.168.1.100", last_seen=now
+    )
+
+    def _get_client(mac: str) -> MagicMock | None:
+        clients = {"aa:bb:cc:dd:ee:ff": home_client}
+        return clients.get(mac)
+
+    mock_controller.clients.get = MagicMock(side_effect=_get_client)
+
+    entry = _make_config_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    missing_entry = entity_registry.async_get_entity_id(
+        "device_tracker",
+        DOMAIN,
+        f"{entry.unique_id}-11:22:33:44:55:66",
+    )
+
+    assert missing_entry is not None
+    missing_state = hass.states.get(missing_entry)
+    assert missing_state is not None
+    assert missing_state.state == "unavailable"
+    assert missing_state.attributes["friendly_name"] == "11:22:33:44:55:66"
+
+
 async def test_options_update_removes_explicitly_deselected_entity_registry_entries(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
