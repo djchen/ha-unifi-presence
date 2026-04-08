@@ -309,7 +309,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     reconfigure_entry,
                     unique_id=self._site_id,
                     title=self._site_title,
-                    data={
+                    data_updates={
                         CONF_HOST: self._host,
                         CONF_PORT: self._port,
                         CONF_USERNAME: self._username,

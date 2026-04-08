@@ -61,6 +61,8 @@ def test_manifest_quality_scale_matches_quality_scale_yaml() -> None:
     manifest = json.loads((ROOT / "custom_components" / "unifi_presence" / "manifest.json").read_text())
     quality_scale = _parse_quality_scale_statuses()
 
+    assert quality_scale["bronze"]
+    assert quality_scale["silver"]
     assert all(status in {"done", "exempt"} for status in quality_scale["bronze"].values())
     assert all(status in {"done", "exempt"} for status in quality_scale["silver"].values())
     assert quality_scale["gold"]["discovery"] == "not-done"

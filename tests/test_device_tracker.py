@@ -123,7 +123,7 @@ def test_tracker_mac_address() -> None:
 
 
 def test_tracker_has_entity_name() -> None:
-    """Test that trackers are entity-only and expose the coordinator name."""
+    """Test that trackers follow entity-name based naming."""
     data = _make_presence_data(home_macs=["aa:bb:cc:dd:ee:ff"])
     coordinator = _make_coordinator(data)
 

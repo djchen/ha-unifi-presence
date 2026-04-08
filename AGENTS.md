@@ -33,7 +33,7 @@ ha-unifi-presence/
 - **Config flow**: 2-step (credentials → device selection). Options via `OptionsFlowWithReload`. Reconfigure and reauth flows. Aborts on no clients discovered.
 - **Coordinator**: WS primary (`process_message` for `sta:sync`), REST poll fallback. Re-auths on session expiry. `frozenset` for O(1) MAC lookups. Skips entity writes when state unchanged.
 - **WebSocket**: Auto-reconnect with backoff, health checks, `_stopped` guard. Modeled after official HA UniFi integration.
-- **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. No per-client device entries (follows official HA UniFi pattern). `has_entity_name = False`, entity name derived from coordinator `client_info`.
+- **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. No per-client device entries. `has_entity_name = True` to match the official HA UniFi integration, with the displayed name derived from coordinator `client_info`.
 - **Init**: Coordinator → WS start → platform forward.
 
 ## Development

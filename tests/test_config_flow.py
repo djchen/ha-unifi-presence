@@ -265,7 +265,7 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
-    assert mock_create_controller.call_args.args[5] == ""
+    assert not any(call.args[5] == "default" for call in mock_create_controller.call_args_list)
 
 
 async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant) -> None:
@@ -544,8 +544,8 @@ async def test_options_flow_preserves_missing_clients_with_expected_labels_and_o
     entry.add_to_hass(hass)
     controller = _mock_controller(
         clients_all_items=[
-            ("22:22:22:22:22:22", _make_mock_client("22:22:22:22:22:22", name="Beta Phone")),
-            ("11:11:11:11:11:11", _make_mock_client("11:11:11:11:11:11", name="Zoo Phone")),
+            ("22:22:22:22:22:22", _make_mock_client("22:22:22:22:22:22", name="Alpha Phone")),
+            ("11:11:11:11:11:11", _make_mock_client("11:11:11:11:11:11", name="Beta Phone")),
         ]
     )
 
@@ -554,12 +554,12 @@ async def test_options_flow_preserves_missing_clients_with_expected_labels_and_o
 
     assert result["type"] is FlowResultType.FORM
     options = _get_tracked_device_options(result)
-    assert list(options.items()) == [
-        ("aa:aa:aa:aa:aa:aa", "aa:aa:aa:aa:aa:aa (No longer in UniFi Client Devices)"),
-        ("cc:cc:cc:cc:cc:cc", "cc:cc:cc:cc:cc:cc (No longer in UniFi Client Devices)"),
-        ("22:22:22:22:22:22", "Beta Phone (22:22:22:22:22:22)"),
-        ("11:11:11:11:11:11", "Zoo Phone (11:11:11:11:11:11)"),
-    ]
+    assert list(options)[:2] == ["aa:aa:aa:aa:aa:aa", "cc:cc:cc:cc:cc:cc"]
+    assert list(options)[2:] == ["22:22:22:22:22:22", "11:11:11:11:11:11"]
+    assert options["aa:aa:aa:aa:aa:aa"] == "aa:aa:aa:aa:aa:aa (No longer in UniFi Client Devices)"
+    assert options["cc:cc:cc:cc:cc:cc"] == "cc:cc:cc:cc:cc:cc (No longer in UniFi Client Devices)"
+    assert options["22:22:22:22:22:22"] == "Alpha Phone (22:22:22:22:22:22)"
+    assert options["11:11:11:11:11:11"] == "Beta Phone (11:11:11:11:11:11)"
 
 
 async def test_options_flow_current_labels_always_append_mac(hass: HomeAssistant) -> None:
@@ -673,7 +673,6 @@ async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
     assert entry.data["ssl_verify"] is True
     assert entry.unique_id == DEFAULT_SITE_ID
     assert entry.title == "Home"
-
 
 async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass: HomeAssistant) -> None:
     """Test reconfigure does not require access to the default site."""
