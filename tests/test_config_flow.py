@@ -674,6 +674,7 @@ async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
     assert entry.unique_id == DEFAULT_SITE_ID
     assert entry.title == "Home"
 
+
 async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass: HomeAssistant) -> None:
     """Test reconfigure does not require access to the default site."""
     entry = MockConfigEntry(
