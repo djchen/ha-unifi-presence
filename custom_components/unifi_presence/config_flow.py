@@ -517,7 +517,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             tracked = list(user_input.get(CONF_TRACKED_DEVICES, []))
 
             if not tracked:
-                errors["base"] = "no_devices"
+                errors["base"] = "no_tracked_devices"
             else:
                 return self.async_create_entry(
                     title="",

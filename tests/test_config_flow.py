@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,6 +27,7 @@ from custom_components.unifi_presence.const import (
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.config_flow.create_controller"
+TRANSLATIONS_ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "unifi_presence"
 DEFAULT_SITE_ID = "site-default-id"
 OFFICE_SITE_ID = "site-office-id"
 USER_STEP_INPUT = {k: v for k, v in MOCK_CONFIG_DATA.items() if k != "site"}
@@ -966,7 +969,16 @@ async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, o
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "no_devices"}
+    assert result["errors"] == {"base": "no_tracked_devices"}
+
+
+def test_options_flow_no_tracked_devices_translation_keys_exist() -> None:
+    """Test the dedicated options validation key exists in both translation files."""
+    strings = json.loads((TRANSLATIONS_ROOT / "strings.json").read_text())
+    english = json.loads((TRANSLATIONS_ROOT / "translations" / "en.json").read_text())
+
+    assert "no_tracked_devices" in strings["options"]["error"]
+    assert "no_tracked_devices" in english["options"]["error"]
 
 
 async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAssistant) -> None:
@@ -1095,7 +1107,7 @@ async def test_options_flow_discovery_failure_preserves_validation_error(
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
-    assert result["errors"] == {"base": "no_devices"}
+    assert result["errors"] == {"base": "no_tracked_devices"}
 
 
 async def test_options_flow_discovery_failure_without_tracked_devices_aborts(
