@@ -50,12 +50,9 @@ def _normalize_mac(mac: str) -> str:
     return mac.strip().lower()
 
 
-def _strip_mac_suffix(label: str, mac: str) -> str:
-    """Return the base client label without the trailing normalized MAC."""
-    mac_suffix = f" ({mac})"
-    if label.endswith(mac_suffix):
-        return label.removesuffix(mac_suffix)
-    return label
+def _format_current_client_label(name: str, mac: str) -> str:
+    """Return the user-facing label for a current UniFi client."""
+    return f"{name} ({mac})"
 
 
 def _build_options_client_labels(available_clients: Mapping[str, str], current_tracked: list[str]) -> dict[str, str]:
@@ -63,27 +60,16 @@ def _build_options_client_labels(available_clients: Mapping[str, str], current_t
     normalized_available = {_normalize_mac(mac): label for mac, label in available_clients.items()}
     normalized_tracked = [_normalize_mac(mac) for mac in current_tracked]
 
-    current_client_names = {mac: _strip_mac_suffix(label, mac) for mac, label in normalized_available.items()}
-    duplicate_names = {
-        name
-        for name in current_client_names.values()
-        if sum(1 for current_name in current_client_names.values() if current_name == name) > 1
-    }
-
     preserved_missing = sorted(mac for mac in normalized_tracked if mac not in normalized_available)
-    current_clients = sorted(
-        normalized_available,
-        key=lambda mac: (current_client_names[mac].lower(), mac),
-    )
+    current_clients = sorted(normalized_available.items(), key=lambda item: item[1].lower())
 
     client_options: dict[str, str] = {}
 
     for mac in preserved_missing:
         client_options[mac] = f"{mac} (No longer in UniFi Client Devices)"
 
-    for mac in current_clients:
-        name = current_client_names[mac]
-        client_options[mac] = f"{name} ({mac})" if name in duplicate_names else name
+    for mac, label in current_clients:
+        client_options[mac] = label
 
     return client_options
 
@@ -134,7 +120,7 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
         for mac, client in store.items():
             mac_lower = mac.lower()
             name = client.name or client.hostname or mac_lower
-            clients[mac_lower] = f"{name} ({mac_lower})"
+            clients[mac_lower] = _format_current_client_label(name, mac_lower)
     return clients
 
 

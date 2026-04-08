@@ -219,6 +219,7 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
+    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
 
 
 async def test_user_step_multiple_sites_shows_friendly_selector(hass: HomeAssistant) -> None:
@@ -556,13 +557,13 @@ async def test_options_flow_preserves_missing_clients_with_expected_labels_and_o
     assert list(options.items()) == [
         ("aa:aa:aa:aa:aa:aa", "aa:aa:aa:aa:aa:aa (No longer in UniFi Client Devices)"),
         ("cc:cc:cc:cc:cc:cc", "cc:cc:cc:cc:cc:cc (No longer in UniFi Client Devices)"),
-        ("22:22:22:22:22:22", "Beta Phone"),
-        ("11:11:11:11:11:11", "Zoo Phone"),
+        ("22:22:22:22:22:22", "Beta Phone (22:22:22:22:22:22)"),
+        ("11:11:11:11:11:11", "Zoo Phone (11:11:11:11:11:11)"),
     ]
 
 
-async def test_options_flow_duplicate_current_labels_are_disambiguated_only_when_needed(hass: HomeAssistant) -> None:
-    """Test duplicate current client labels append MACs only for collisions."""
+async def test_options_flow_current_labels_always_append_mac(hass: HomeAssistant) -> None:
+    """Test current client labels always append MACs in the options flow."""
     controller = _mock_controller(
         clients_all_items=[
             ("aa:aa:aa:aa:aa:aa", _make_mock_client("aa:aa:aa:aa:aa:aa", name="Dan Phone")),
@@ -588,7 +589,7 @@ async def test_options_flow_duplicate_current_labels_are_disambiguated_only_when
     assert options == {
         "aa:aa:aa:aa:aa:aa": "Dan Phone (aa:aa:aa:aa:aa:aa)",
         "bb:bb:bb:bb:bb:bb": "Dan Phone (bb:bb:bb:bb:bb:bb)",
-        "cc:cc:cc:cc:cc:cc": "Zoe Phone",
+        "cc:cc:cc:cc:cc:cc": "Zoe Phone (cc:cc:cc:cc:cc:cc)",
     }
 
 
