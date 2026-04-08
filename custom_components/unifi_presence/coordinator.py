@@ -187,7 +187,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         last_seen = raw.get("last_seen") or 0
         is_home = (now - last_seen) < self._away_seconds
 
-        previous_info = self.data.client_info.get(mac) if self.data is not None else None
+        current_data = self.data
+        previous_info = current_data.client_info.get(mac) if current_data is not None else None
         name = raw.get("name", "")
         hostname = raw.get("hostname", "")
         info = (
@@ -195,25 +196,24 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             if name or hostname or previous_info is None
             else previous_info
         )
-        missing_macs = (self.data.missing_macs - {mac}) if self.data is not None else frozenset()
+        missing_macs = (current_data.missing_macs - {mac}) if current_data is not None else frozenset()
 
-        if self.data is not None:
-            old_home = self.data.device_states.get(mac)
-            old_info = self.data.client_info.get(mac)
-            if old_home == is_home and old_info == info and missing_macs == self.data.missing_macs:
+        if current_data is not None:
+            old_home = current_data.device_states.get(mac)
+            if old_home == is_home and previous_info == info and missing_macs == current_data.missing_macs:
                 return
 
-        new_states = dict(self.data.device_states) if self.data else {}
+        new_states = dict(current_data.device_states) if current_data is not None else {}
         new_states[mac] = is_home
 
-        new_info = dict(self.data.client_info) if self.data else {}
+        new_info = dict(current_data.client_info) if current_data is not None else {}
         new_info[mac] = info
 
         _LOGGER.debug(
             "Device %s (%s) %s: %s",
             info["name"],
             mac,
-            "initial state" if self.data is None else "state changed",
+            "initial state" if current_data is None else "state changed",
             "home" if is_home else "away",
         )
 

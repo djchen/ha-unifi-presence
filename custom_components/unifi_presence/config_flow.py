@@ -446,21 +446,18 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     },
                 )
 
-        # Build multi-select options from discovered clients
-        client_options: dict[str, str] = {}
-        if self._available_clients:
-            client_options = dict(sorted(self._available_clients.items(), key=lambda x: x[1].lower()))
-
-        if not client_options:
+        if not self._available_clients:
             return self.async_abort(reason="no_clients_available")
 
-        schema_fields: dict[Any, Any] = {
-            vol.Optional(CONF_TRACKED_DEVICES, default=[]): cv.multi_select(client_options),
-        }
+        client_options = dict(sorted(self._available_clients.items(), key=lambda item: item[1].lower()))
 
         return self.async_show_form(
             step_id="devices",
-            data_schema=vol.Schema(schema_fields),
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_TRACKED_DEVICES, default=[]): cv.multi_select(client_options),
+                }
+            ),
             errors=errors,
             description_placeholders={
                 "client_count": str(len(client_options)),
