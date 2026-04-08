@@ -195,6 +195,38 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def _async_validate_and_fetch_sites(
+        self,
+        *,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        site: str,
+        ssl_verify: bool,
+        log_context: str,
+    ) -> str | None:
+        """Validate credentials and populate available sites."""
+        controller, error = await self._async_validate_login(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            site=site,
+            ssl_verify=ssl_verify,
+            log_context=log_context,
+        )
+        if error is not None:
+            return error
+
+        try:
+            self._available_sites = await _fetch_sites(controller)  # type: ignore[arg-type]
+        except Exception:
+            _LOGGER.exception("Failed to fetch site list")
+            return "cannot_connect"
+
+        return None
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step: UniFi controller credentials."""
         errors: dict[str, str] = {}
@@ -207,7 +239,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             self._ssl_verify = user_input.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)
             self._site_step_target = "user"
 
-            controller, error = await self._async_validate_login(
+            error = await self._async_validate_and_fetch_sites(
                 host=self._host,
                 port=self._port,
                 username=self._username,
@@ -219,15 +251,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if error is not None:
                 errors["base"] = error
             else:
-                try:
-                    self._available_sites = await _fetch_sites(controller)  # type: ignore[arg-type]
-                except Exception:
-                    _LOGGER.exception("Failed to fetch site list")
-                    errors["base"] = "cannot_connect"
-                else:
-                    if not self._available_sites:
-                        return self.async_abort(reason="no_sites_available")
-                    return await self.async_step_site()
+                if not self._available_sites:
+                    return self.async_abort(reason="no_sites_available")
+                return await self.async_step_site()
 
         return self.async_show_form(
             step_id="user",
@@ -383,7 +409,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             self._ssl_verify = user_input.get(CONF_SSL_VERIFY, current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
             self._site_step_target = "reconfigure"
 
-            controller, error = await self._async_validate_login(
+            error = await self._async_validate_and_fetch_sites(
                 host=self._host,
                 port=self._port,
                 username=self._username,
@@ -395,15 +421,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if error is not None:
                 errors["base"] = error
             else:
-                try:
-                    self._available_sites = await _fetch_sites(controller)  # type: ignore[arg-type]
-                except Exception:
-                    _LOGGER.exception("Failed to fetch site list")
-                    errors["base"] = "cannot_connect"
-                else:
-                    if not self._available_sites:
-                        return self.async_abort(reason="no_sites_available")
-                    return await self.async_step_site()
+                if not self._available_sites:
+                    return self.async_abort(reason="no_sites_available")
+                return await self.async_step_site()
 
         return self.async_show_form(
             step_id="reconfigure",

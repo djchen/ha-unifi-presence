@@ -52,8 +52,8 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     coordinator = getattr(entry, "runtime_data", None)
+    coordinator_data = coordinator.data if coordinator is not None else None
 
-    device_states: dict[str, bool] = {}
     tracked_devices = entry.options.get(CONF_TRACKED_DEVICES, [])
     tracked_count = len(tracked_devices)
     away_seconds = entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
@@ -69,8 +69,8 @@ async def async_get_config_entry_diagnostics(
             coordinator.update_interval.total_seconds() if coordinator.update_interval else None
         )
         websocket_connected = coordinator.websocket is not None and coordinator.websocket.available
-    if coordinator is not None and coordinator.data is not None:
-        device_states = coordinator.data.device_states
+
+    device_states = coordinator_data.device_states if coordinator_data is not None else {}
 
     # Redact options containing MAC addresses
     redacted_options = dict(entry.options)

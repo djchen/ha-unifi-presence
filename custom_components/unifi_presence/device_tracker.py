@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from homeassistant.components.device_tracker import ScannerEntity, SourceType  # type: ignore[attr-defined]
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
-from .coordinator import UnifiPresenceCoordinator
+from .coordinator import UnifiPresenceCoordinator, UnifiPresenceData
 
 PARALLEL_UPDATES = 0
 
@@ -56,7 +58,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     @property
     def name(self) -> str:
         """Return the display name from coordinator client_info, falling back to MAC."""
-        data = self.coordinator.data
+        data = cast(UnifiPresenceData | None, getattr(self.coordinator, "data", None))
         if data is None:
             return self._mac
 
@@ -71,7 +73,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     @property
     def is_connected(self) -> bool:
         """Return true if the device is connected (home)."""
-        data = self.coordinator.data
+        data = cast(UnifiPresenceData | None, getattr(self.coordinator, "data", None))
         if data is None:
             return False
 
@@ -82,7 +84,9 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         """Return whether the tracked client is currently available."""
         if not super().available:
             return False
-        return self._mac not in self.coordinator.data.missing_macs
+
+        data = cast(UnifiPresenceData | None, getattr(self.coordinator, "data", None))
+        return data is not None and self._mac not in data.missing_macs
 
     @property
     def mac_address(self) -> str:
