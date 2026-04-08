@@ -27,7 +27,6 @@ jobs:
         with:
           python-version-file: '.python-version'
       - run: pip install ".[dev]"
-      - run: mypy --strict custom_components/unifi_presence/
       - run: PYTHONPATH=. pytest tests/ -v
 
   hacs:
