@@ -284,7 +284,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if self._site_step_target == "reconfigure":
                 reconfigure_entry = self._get_reconfigure_entry()
-                if self._site_id != reconfigure_entry.unique_id:
+                stored_site = reconfigure_entry.data.get(CONF_SITE)
+                same_site = self._site_id == reconfigure_entry.unique_id or (
+                    isinstance(stored_site, str) and stored_site in {self._site_id, self._site}
+                )
+                if not same_site:
                     return self.async_abort(reason="different_site_selected")
 
                 controller, error = await self._async_validate_login(

@@ -148,6 +148,27 @@ async def test_clients_all_failure_uses_cached_data(
     assert data.client_info[mac]["name"] == "Dan Phone"
 
 
+async def test_clients_all_stub_falls_back_to_previous_metadata(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that empty historical stubs do not overwrite richer prior metadata."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    first_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(first_data)
+
+    mock_coordinator_controller.clients.clear()
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac)
+
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is False
+    assert data.client_info[mac]["name"] == "Dan Phone"
+
+
 async def test_coordinator_site_id_uses_entry_id_when_unique_id_missing(
     hass: HomeAssistant, config_entry: MagicMock
 ) -> None:
