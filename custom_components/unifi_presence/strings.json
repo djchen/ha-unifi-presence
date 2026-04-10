@@ -9,7 +9,6 @@
           "port": "Port",
           "username": "Username",
           "password": "Password",
-          "site": "Site",
           "ssl_verify": "Verify SSL certificate"
         },
         "data_description": {
@@ -17,8 +16,14 @@
           "port": "Usually 443 or 8443.",
           "username": "A local user account on the UniFi controller.",
           "password": "Password for the UniFi user account.",
-          "site": "UniFi site name. Use 'default' for single-site controllers.",
           "ssl_verify": "Enable to verify the SSL certificate. Disable for self-signed certificates."
+        }
+      },
+      "site": {
+        "title": "Select UniFi Site",
+        "description": "Choose the UniFi site to use for presence detection.",
+        "data": {
+          "site": "Site"
         }
       },
       "reauth_confirm": {
@@ -41,7 +46,6 @@
           "port": "Port",
           "username": "Username",
           "password": "Password",
-          "site": "Site",
           "ssl_verify": "Verify SSL certificate"
         },
         "data_description": {
@@ -49,7 +53,6 @@
           "port": "Usually 443 or 8443.",
           "username": "A local user account on the UniFi controller.",
           "password": "Password for the UniFi user account.",
-          "site": "UniFi site name. Use 'default' for single-site controllers.",
           "ssl_verify": "Enable to verify the SSL certificate. Disable for self-signed certificates."
         }
       },
@@ -74,7 +77,9 @@
     },
     "abort": {
       "already_configured": "This UniFi controller and site are already configured",
-      "no_devices_discovered": "No devices were discovered on this UniFi site",
+      "no_clients_available": "No UniFi clients are available for this site. Ensure the client appears in UniFi Client Devices, then try again.",
+      "no_sites_available": "No UniFi sites are available for this controller. Ensure the account can access a site, then try again.",
+      "different_site_selected": "Reconfiguration can only update connection details for the already configured UniFi site",
       "reauth_successful": "Re-authentication successful",
       "reconfigure_successful": "Configuration updated successfully"
     }
@@ -98,7 +103,8 @@
     },
     "error": {
       "cannot_discover_devices": "Could not refresh the client list; showing previously tracked devices",
-      "no_devices": "You must select at least one device to track"
+      "no_devices": "You must select at least one device to track",
+      "no_tracked_devices": "You must keep at least one tracked device selected"
     },
     "abort": {
       "cannot_discover_devices": "Connected to the UniFi controller, but could not fetch clients from this site",

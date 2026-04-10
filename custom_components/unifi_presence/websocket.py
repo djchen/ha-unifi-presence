@@ -48,6 +48,7 @@ class UnifiPresenceWebsocket:
         self._cancel_websocket_check: CALLBACK_TYPE | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
         self._unsub_messages: Callable[[], None] | None = None
+        self._ws_started_at: datetime | None = None
 
         self.available = False
         self._stopped = False
@@ -98,6 +99,8 @@ class UnifiPresenceWebsocket:
             self._unsub_messages()
             self._unsub_messages = None
 
+        self._ws_started_at = None
+
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None
@@ -136,6 +139,7 @@ class UnifiPresenceWebsocket:
                 return
 
             websocket_task = asyncio.create_task(api.start_websocket())
+            self._ws_started_at = datetime.now(UTC)
 
             try:
                 done, _ = await asyncio.wait({websocket_task}, timeout=WEBSOCKET_READY_TIMEOUT)
@@ -157,8 +161,13 @@ class UnifiPresenceWebsocket:
             except Exception:
                 _LOGGER.exception("Unexpected WebSocket error")
             finally:
-                if self.ws_task is asyncio.current_task():
+                is_active_runner = self.ws_task is asyncio.current_task()
+                if is_active_runner:
                     self.ws_task = None
+
+            if not is_active_runner:
+                # A new runner has already started — don't clear its timestamp
+                return
 
             if self._stopped:
                 return
@@ -222,6 +231,7 @@ class UnifiPresenceWebsocket:
             self.ws_task.cancel()
             self.ws_task = None
 
+        self._ws_started_at = None
         self._subscribe_messages()
         self._start_websocket()
 
@@ -291,4 +301,13 @@ class UnifiPresenceWebsocket:
             and datetime.now(UTC) - ws_message_received > STALE_WEBSOCKET_INTERVAL
         ):
             _LOGGER.warning("WebSocket stale, reconnecting")
+            self._reconnect()
+            return
+
+        if (
+            ws_message_received is None
+            and self._ws_started_at is not None
+            and datetime.now(UTC) - self._ws_started_at > STALE_WEBSOCKET_INTERVAL
+        ):
+            _LOGGER.warning("WebSocket never received a message since startup, reconnecting")
             self._reconnect()

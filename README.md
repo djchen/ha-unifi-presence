@@ -6,6 +6,8 @@ A Home Assistant custom integration for presence detection using UniFi network c
 
 The official [UniFi Network integration](https://www.home-assistant.io/integrations/unifi/) is broader and imports both UniFi infrastructure devices and network clients into Home Assistant. This integration is focused only on presence detection and includes an explicit per-device selection step, so you can track just the clients you care about.
 
+This integration intentionally does not implement discovery. UniFi hardware discovery would overlap with the official UniFi integration and can create duplicate discovery prompts for the same controller, so setup stays manual by design.
+
 ## Features
 
 - **Real-time updates**: WebSocket connection for instant presence detection
@@ -55,10 +57,10 @@ The official [UniFi Network integration](https://www.home-assistant.io/integrati
    - **Port**: Default is 443 (use 8443 for legacy controllers)
    - **Username**: Local UniFi username
    - **Password**: Password for the account
-   - **Site**: Site name (default: `default`)
    - **Verify SSL certificate**: Enable SSL verification (default: disabled)
-4. Select devices to track from the discovered client list
-5. Click **Submit**
+4. If multiple UniFi sites are accessible, select the site in the second step. If only one site is available, the integration skips directly to device selection.
+5. Select devices to track from the discovered client list
+6. Click **Submit**
 
 ### Options
 
@@ -75,8 +77,9 @@ Change controller connection settings without removing the integration:
 1. Go to **Settings** → **Devices & Services**
 2. Click **⋮** on the UniFi Presence integration card
 3. Select **Reconfigure**
-4. Update host, port, username, password, site, or SSL verification settings
-5. Click **Submit** to save and reload
+4. Update host, port, username, password, or SSL verification settings for the existing site
+5. If multiple UniFi sites are accessible, confirm the existing site in the second step
+6. Click **Submit** to save and reload
 
 ## Removal
 <details>
@@ -109,7 +112,7 @@ Any client device (wireless or wired) that has connected to your UniFi network a
 | **Device selection** | Choose specific devices to track during setup or in options |
 | **Away threshold** | Configure how long before a device is marked away |
 | **Reauthentication** | Update credentials when they expire without removing the integration |
-| **Reconfiguration** | Change controller host/port/site/SSL without re-adding |
+| **Reconfiguration** | Change controller host/port/credentials/SSL for the existing site without re-adding; if multiple sites are accessible, confirm the existing site in a second step |
 | **Diagnostics** | Download redacted diagnostics data for troubleshooting |
 | **System health** | View controller, coordinator, and WebSocket summary information |
 
@@ -119,9 +122,14 @@ This integration uses a **push-primary, poll-fallback** strategy:
 
 1. **WebSocket (primary)**: A persistent WebSocket connection to the UniFi controller receives real-time `sta:sync` events whenever a client's state changes. This provides near-instant presence updates.
 2. **REST polling (fallback)**: A configurable REST poll (default: every 300 seconds) fetches all tracked clients to catch any events that may have been missed during WebSocket disconnections.
-3. **Away detection**: A device is marked `not_home` when `current_time - last_seen > away_seconds` (default: 60 seconds).
+3. **Away detection**: A device is marked `not_home` when `current_time - last_seen >= away_seconds` (default: 60 seconds). Away evaluation happens when a WebSocket event arrives for that client or during a fallback poll — it is not continuous.
 
 If the WebSocket disconnects, the integration automatically reconnects with backoff. During disconnection, the fallback poll ensures presence state remains current.
+
+### Offline vs. Unavailable
+
+- **Offline (not_home)**: A tracked client that is not in the controller's active client list is marked `not_home`. The integration resolves metadata (display name) from the controller's historical client store (`clients_all`) when it has a usable name/hostname, falling back to the last-known name or the raw MAC address.
+- **Unavailable**: Indicates a coordinator or controller health problem (e.g., the controller is unreachable, or authentication failed). All tracked entities become `unavailable` during these conditions and recover automatically once connectivity is restored.
 
 ## Entities
 
@@ -129,7 +137,7 @@ Each tracked device creates a `device_tracker` entity:
 
 - **Entity ID**: `device_tracker.<device_name_slug>` (derived from the UniFi client name)
 - **Friendly name**: The device name as reported by the UniFi controller (e.g., `Dan's iPhone`)
-- **Unique ID**: The device's MAC address
+- **Unique ID**: The UniFi site ID and device MAC address
 - **State**: `home` or `not_home`
 - **Attributes**:
   - `source_type`: Always `router`
@@ -215,7 +223,7 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 | **"Could not fetch clients"** during setup or options | Connected to the controller, but client discovery failed for this site. Verify the user account has read access and the site name is correct. |
 | **Device stuck as "home" or "away"** | Lower the away threshold in options and confirm the controller is still reporting the device in the UniFi client list. |
 | **WebSocket disconnecting frequently** | Check network stability between HA and the controller. Download diagnostics to confirm WebSocket status. |
-| **Entities become unavailable** | The controller is unreachable. Check network connectivity and controller status. The integration will automatically reconnect. |
+| **Entities become unavailable** | The coordinator cannot reach the controller. Check network connectivity and controller status. The integration will automatically reconnect. Individual offline clients show `not_home`, not `unavailable`. |
 
 For persistent issues, [download diagnostics](#diagnostics) and open an issue on [GitHub](https://github.com/djchen/ha-unifi-presence/issues).
 
@@ -275,7 +283,7 @@ ruff format .         # Format code
 
 ```bash
 source .venv/bin/activate
-mypy custom_components/
+mypy --strict custom_components/unifi_presence/
 ```
 
 ## License

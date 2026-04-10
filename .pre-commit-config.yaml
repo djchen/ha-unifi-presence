@@ -22,7 +22,7 @@ repos:
       - id: mypy
         name: mypy
         entry: mypy
-        args: [custom_components/]
+        args: [--strict, custom_components/unifi_presence/]
         language: system
         types: [python]
         files: ^custom_components/

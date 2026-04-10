@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from homeassistant.components.device_tracker import ScannerEntity, SourceType  # type: ignore[attr-defined]
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
-from .coordinator import UnifiPresenceCoordinator
+from .coordinator import UnifiPresenceCoordinator, UnifiPresenceData
 
 PARALLEL_UPDATES = 0
 
@@ -50,24 +52,38 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         super().__init__(coordinator)
         self._mac = mac
 
-        self._attr_unique_id = mac
-        self._attr_has_entity_name = False
+        self._attr_unique_id = f"{coordinator.site_id}-{mac}"
+        self._attr_has_entity_name = True
 
     @property
     def name(self) -> str:
         """Return the display name from coordinator client_info, falling back to MAC."""
-        if self.coordinator.data is not None:
-            info = self.coordinator.data.client_info.get(self._mac)
-            if info:
-                return info["name"]
-        return self._mac
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
+        if data is None:
+            return self._mac
+
+        info = data.client_info.get(self._mac)
+        return info["name"] if info else self._mac
+
+    @property
+    def unique_id(self) -> str | None:
+        """Return the site-scoped unique ID for this tracker."""
+        return self._attr_unique_id
 
     @property
     def is_connected(self) -> bool:
         """Return true if the device is connected (home)."""
-        if self.coordinator.data is None:
-            return False  # type: ignore[unreachable]
-        return self.coordinator.data.device_states.get(self._mac, False)
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
+        if data is None:
+            return False
+
+        return data.device_states.get(self._mac, False)
+
+    @property
+    def available(self) -> bool:
+        """Return whether the tracked client is currently available."""
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
+        return super().available and data is not None
 
     @property
     def mac_address(self) -> str:

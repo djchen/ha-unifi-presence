@@ -544,3 +544,33 @@ async def test_reconnect_public_cancels_inflight_reconnect_task(hass: HomeAssist
     assert ws._reconnect_task is None
 
     ws.stop()
+
+
+async def test_async_watch_websocket_reconnects_stale_startup(hass: HomeAssistant) -> None:
+    """Test that the health check reconnects when no message received since a stale startup."""
+    ws, controller, _ = _make_websocket(hass)
+    ws.available = True
+    ws.ws_task = MagicMock()
+    ws.ws_task.done.return_value = False
+    controller.connectivity.ws_message_received = None
+    ws._ws_started_at = datetime.now(UTC) - STALE_WEBSOCKET_INTERVAL - timedelta(seconds=1)
+
+    with patch.object(ws, "_reconnect") as mock_reconnect:
+        ws._async_watch_websocket(None)
+
+    mock_reconnect.assert_called_once()
+
+
+async def test_async_watch_websocket_no_reconnect_recent_startup(hass: HomeAssistant) -> None:
+    """Test that the health check does NOT reconnect when startup is recent."""
+    ws, controller, _ = _make_websocket(hass)
+    ws.available = True
+    ws.ws_task = MagicMock()
+    ws.ws_task.done.return_value = False
+    controller.connectivity.ws_message_received = None
+    ws._ws_started_at = datetime.now(UTC) - timedelta(seconds=30)
+
+    with patch.object(ws, "_reconnect") as mock_reconnect:
+        ws._async_watch_websocket(None)
+
+    mock_reconnect.assert_not_called()

@@ -17,12 +17,7 @@ rules:
   docs-removal-instructions: done
   entity-event-setup: done
   entity-unique-id: done
-  has-entity-name:
-    status: exempt
-    comment: |
-      Entity names are derived from the UniFi client name at runtime
-      via a name property (has_entity_name = False) because this
-      integration does not create per-client device-registry entries.
+  has-entity-name: done
   runtime-data: done
   test-before-configure: done
   test-before-setup: done
@@ -50,15 +45,7 @@ rules:
       does not create per-client device-registry entries. Entities appear
       in the entity registry only.
   diagnostics: done
-  discovery:
-    status: exempt
-    comment: |
-      SSDP discovery for UDM hardware is technically feasible but would
-      conflict with the official UniFi Network integration, which already
-      registers for the same SSDP matchers. Triggering competing config
-      flows for the same device would be a poor user experience.
-      Software-only controllers do not advertise via SSDP at all.
-      Manual setup is intentional.
+  discovery: not-done
   discovery-update-info:
     status: exempt
     comment: |
@@ -93,8 +80,8 @@ rules:
   entity-translations:
     status: exempt
     comment: |
-      Entity names are derived from the UniFi client name at runtime
-      (has_entity_name = False), so translation keys are not used.
+      Entity names are derived from UniFi client metadata at runtime,
+      so translation keys are not used.
   exception-translations: done
   icon-translations:
     status: exempt

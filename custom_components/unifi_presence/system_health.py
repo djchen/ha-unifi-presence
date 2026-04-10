@@ -32,7 +32,8 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
     websocket_connected = 0
 
     for entry in config_entries:
-        controller_targets.append(f"{entry.data[CONF_HOST]} ({entry.data.get(CONF_SITE, DEFAULT_SITE)})")
+        site = entry.data.get(CONF_SITE, DEFAULT_SITE)
+        controller_targets.append(f"{entry.data[CONF_HOST]} ({site})")
         tracked_devices += len(entry.options.get(CONF_TRACKED_DEVICES, []))
 
         if entry.state is not ConfigEntryState.LOADED:
