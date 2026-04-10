@@ -58,7 +58,7 @@ This integration intentionally does not implement discovery. UniFi hardware disc
    - **Username**: Local UniFi username
    - **Password**: Password for the account
    - **Verify SSL certificate**: Enable SSL verification (default: disabled)
-4. Select the UniFi site in the second step
+4. If multiple UniFi sites are accessible, select the site in the second step. If only one site is available, the integration skips directly to device selection.
 5. Select devices to track from the discovered client list
 6. Click **Submit**
 
@@ -128,7 +128,7 @@ If the WebSocket disconnects, the integration automatically reconnects with back
 
 ### Offline vs. Unavailable
 
-- **Offline (not_home)**: A tracked client that is not in the controller's active client list is marked `not_home`. The integration resolves metadata (display name) from the controller's historical client store (`clients_all`), falling back to the last-known name or the raw MAC address.
+- **Offline (not_home)**: A tracked client that is not in the controller's active client list is marked `not_home`. The integration resolves metadata (display name) from the controller's historical client store (`clients_all`) when it has a usable name/hostname, falling back to the last-known name or the raw MAC address.
 - **Unavailable**: Indicates a coordinator or controller health problem (e.g., the controller is unreachable, or authentication failed). All tracked entities become `unavailable` during these conditions and recover automatically once connectivity is restored.
 
 ## Entities

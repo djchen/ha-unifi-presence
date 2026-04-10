@@ -10,12 +10,13 @@
 ha-unifi-presence/
 ├── custom_components/unifi_presence/
 │   ├── __init__.py        # Setup/unload, WS lifecycle
-│   ├── config_flow.py     # Credentials → device selection + options/reconfigure/reauth
+│   ├── config_flow.py     # Credentials → optional site → device selection + options/reconfigure/reauth
 │   ├── const.py           # Constants and defaults
 │   ├── coordinator.py     # DataUpdateCoordinator — WS push + REST poll fallback
 │   ├── device_tracker.py  # ScannerEntity per tracked MAC
 │   ├── diagnostics.py     # Redacted config + runtime state
 │   ├── helpers.py         # create_controller() factory
+│   ├── system_health.py   # HA system health summary
 │   ├── websocket.py       # WS connect, reconnect, health check
 │   ├── icons.json         # MDI icons
 │   ├── manifest.json      # HA/HACS manifest
@@ -30,9 +31,9 @@ ha-unifi-presence/
 
 ## Architecture
 
-- **Config flow**: 2-step (credentials → device selection). Options via `OptionsFlowWithReload`. Reconfigure and reauth flows. Aborts on no clients discovered.
+- **Config flow**: 2-3 step (credentials → optional site selection → device selection). Options via `OptionsFlowWithReload`. Reconfigure and reauth flows. Reconfigure matches the existing site by unique ID, falling back to the stored site value for legacy/unset entries. Aborts on no clients discovered.
 - **Coordinator**: WS primary (`process_message` for `sta:sync`), REST poll fallback. Re-auths on session expiry. `frozenset` for O(1) MAC lookups. Skips entity writes when state unchanged.
-  - **Active + historical merge**: Each poll does a best-effort `clients_all.update()` (historical store, failure non-fatal) followed by a required `clients.update()` (active store). For each tracked MAC: active clients use live `last_seen`; offline clients pull metadata from `clients_all`, then from prior coordinator data, then fall back to the bare MAC address.
+  - **Active + historical merge**: Each poll does a best-effort `clients_all.update()` (historical store, failure non-fatal) followed by a required `clients.update()` (active store). For each tracked MAC: active clients use live `last_seen`; offline clients use `clients_all` metadata only when it provides a name/hostname, then fall back to prior coordinator data, then to the bare MAC address.
   - **Availability**: Reflects coordinator/controller health only. An individual offline client is `not_home` + `available=True`. Entities become `unavailable` only when the coordinator itself cannot fetch data (e.g., controller unreachable, auth failure).
 - **WebSocket**: Auto-reconnect with backoff, health checks, `_stopped` guard. Stale startup detection reconnects if no message has been received since startup and the connection age exceeds `STALE_WEBSOCKET_INTERVAL`. Modeled after official HA UniFi integration.
 - **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. No per-client device entries. `has_entity_name = True` to match the official HA UniFi integration, with the displayed name derived from coordinator `client_info`.
