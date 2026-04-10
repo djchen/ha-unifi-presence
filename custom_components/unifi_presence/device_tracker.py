@@ -58,7 +58,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     @property
     def name(self) -> str:
         """Return the display name from coordinator client_info, falling back to MAC."""
-        data = cast(UnifiPresenceData | None, getattr(self.coordinator, "data", None))
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
         if data is None:
             return self._mac
 
@@ -66,14 +66,14 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         return info["name"] if info else self._mac
 
     @property
-    def unique_id(self) -> str:
+    def unique_id(self) -> str | None:
         """Return the site-scoped unique ID for this tracker."""
-        return str(self._attr_unique_id)
+        return self._attr_unique_id
 
     @property
     def is_connected(self) -> bool:
         """Return true if the device is connected (home)."""
-        data = cast(UnifiPresenceData | None, getattr(self.coordinator, "data", None))
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
         if data is None:
             return False
 
@@ -85,7 +85,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         if not super().available:
             return False
 
-        data = cast(UnifiPresenceData | None, getattr(self.coordinator, "data", None))
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
         return data is not None and self._mac not in data.missing_macs
 
     @property

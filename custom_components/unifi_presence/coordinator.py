@@ -47,6 +47,7 @@ class UnifiPresenceData:
     """Container for coordinator data."""
 
     __slots__ = ("client_info", "device_states", "missing_macs")
+    __hash__ = None  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -74,16 +75,6 @@ class UnifiPresenceData:
             self.device_states == other.device_states
             and self.client_info == other.client_info
             and self.missing_macs == other.missing_macs
-        )
-
-    def __hash__(self) -> int:
-        """Return a stable hash for coordinator payload comparisons."""
-        return hash(
-            (
-                frozenset(self.device_states.items()),
-                tuple(sorted((mac, info["name"], info["mac"]) for mac, info in self.client_info.items())),
-                self.missing_macs,
-            )
         )
 
 
