@@ -122,9 +122,14 @@ This integration uses a **push-primary, poll-fallback** strategy:
 
 1. **WebSocket (primary)**: A persistent WebSocket connection to the UniFi controller receives real-time `sta:sync` events whenever a client's state changes. This provides near-instant presence updates.
 2. **REST polling (fallback)**: A configurable REST poll (default: every 300 seconds) fetches all tracked clients to catch any events that may have been missed during WebSocket disconnections.
-3. **Away detection**: A device is marked `not_home` when `current_time - last_seen > away_seconds` (default: 60 seconds).
+3. **Away detection**: A device is marked `not_home` when `current_time - last_seen >= away_seconds` (default: 60 seconds). Away evaluation happens when a WebSocket event arrives for that client or during a fallback poll — it is not continuous.
 
 If the WebSocket disconnects, the integration automatically reconnects with backoff. During disconnection, the fallback poll ensures presence state remains current.
+
+### Offline vs. Unavailable
+
+- **Offline (not_home)**: A tracked client that is not in the controller's active client list is marked `not_home`. The integration resolves metadata (display name) from the controller's historical client store (`clients_all`), falling back to the last-known name or the raw MAC address.
+- **Unavailable**: Indicates a coordinator or controller health problem (e.g., the controller is unreachable, or authentication failed). All tracked entities become `unavailable` during these conditions and recover automatically once connectivity is restored.
 
 ## Entities
 
@@ -218,7 +223,7 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 | **"Could not fetch clients"** during setup or options | Connected to the controller, but client discovery failed for this site. Verify the user account has read access and the site name is correct. |
 | **Device stuck as "home" or "away"** | Lower the away threshold in options and confirm the controller is still reporting the device in the UniFi client list. |
 | **WebSocket disconnecting frequently** | Check network stability between HA and the controller. Download diagnostics to confirm WebSocket status. |
-| **Entities become unavailable** | The controller is unreachable. Check network connectivity and controller status. The integration will automatically reconnect. |
+| **Entities become unavailable** | The coordinator cannot reach the controller. Check network connectivity and controller status. The integration will automatically reconnect. Individual offline clients show `not_home`, not `unavailable`. |
 
 For persistent issues, [download diagnostics](#diagnostics) and open an issue on [GitHub](https://github.com/djchen/ha-unifi-presence/issues).
 
