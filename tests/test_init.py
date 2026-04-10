@@ -181,10 +181,10 @@ async def test_entity_states_reflect_coordinator_data(
     assert away_state.attributes["source_type"] == "router"
 
 
-async def test_missing_tracked_client_entity_becomes_unavailable(
+async def test_offline_tracked_client_entity_is_not_home(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test that still-selected missing tracked clients stay as unavailable entities."""
+    """Test that offline selected tracked clients show as not_home, not unavailable."""
     now = int(time.time())
     home_client = _make_mock_client(
         "aa:bb:cc:dd:ee:ff", name="Dan Phone", hostname="dan-phone", ip="192.168.1.100", last_seen=now
@@ -212,7 +212,7 @@ async def test_missing_tracked_client_entity_becomes_unavailable(
     assert missing_entry is not None
     missing_state = hass.states.get(missing_entry)
     assert missing_state is not None
-    assert missing_state.state == "unavailable"
+    assert missing_state.state == "not_home"
     assert missing_state.attributes["friendly_name"] == "11:22:33:44:55:66"
 
 

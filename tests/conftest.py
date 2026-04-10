@@ -65,7 +65,10 @@ class _MockClientStore(dict):
 @pytest.fixture
 def mock_coordinator_controller() -> Generator[MagicMock]:
     """Fixture to mock the aiounifi Controller for coordinator tests."""
-    controller = _build_controller(clients=_MockClientStore())
+    controller = _build_controller(
+        clients=_MockClientStore(),
+        clients_all=_MockClientStore(),
+    )
 
     with patch(
         "custom_components.unifi_presence.coordinator.create_controller",
@@ -83,12 +86,20 @@ def mock_controller() -> MagicMock:
     return _build_controller(clients=clients)
 
 
-def _build_controller(*, clients: MagicMock | _MockClientStore) -> MagicMock:
+def _build_controller(
+    *,
+    clients: MagicMock | _MockClientStore,
+    clients_all: MagicMock | _MockClientStore | None = None,
+) -> MagicMock:
     """Create a fully wired controller mock with shared defaults."""
     controller = MagicMock()
     controller.clients = clients
-    controller.clients_all = MagicMock()
-    controller.clients_all.update = AsyncMock()
+    if clients_all is not None:
+        controller.clients_all = clients_all
+    else:
+        controller.clients_all = MagicMock()
+        controller.clients_all.update = AsyncMock()
+        controller.clients_all.get = MagicMock(return_value=None)
     controller.login = AsyncMock()
     controller.messages = MagicMock()
     controller.messages.subscribe = MagicMock(return_value=MagicMock())

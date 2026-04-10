@@ -82,11 +82,8 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     @property
     def available(self) -> bool:
         """Return whether the tracked client is currently available."""
-        if not super().available:
-            return False
-
         data = cast(UnifiPresenceData | None, self.coordinator.data)
-        return data is not None and self._mac not in data.missing_macs
+        return super().available and data is not None
 
     @property
     def mac_address(self) -> str:

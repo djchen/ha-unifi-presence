@@ -113,51 +113,39 @@ async def test_coordinator_marks_unknown_device_not_home(
 
     assert data.device_states["aa:bb:cc:dd:ee:ff"] is False
     assert data.device_states["11:22:33:44:55:66"] is False
-    assert data.missing_macs == frozenset({"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"})
 
 
-async def test_coordinator_preserves_metadata_for_missing_tracked_client(
+async def test_coordinator_preserves_metadata_for_offline_tracked_client_via_clients_all(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
-    """Test that fallback polling keeps last-known metadata for missing clients."""
-    now = int(time.time())
+    """Test that offline clients get metadata from the historical clients_all store."""
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+    mock_coordinator_controller.clients.clear()
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
-    first_data = await coordinator._async_update_data()
-    coordinator.async_set_updated_data(first_data)
-
-    mock_coordinator_controller.clients.clear()
-
     data = await coordinator._async_update_data()
 
     assert data.device_states[mac] is False
-    assert data.missing_macs == frozenset({"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"})
     assert data.client_info[mac]["name"] == "Dan Phone"
 
 
-async def test_async_refresh_notifies_listeners_when_client_becomes_missing(
+async def test_clients_all_failure_uses_cached_data(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
-    """Test that missing-state changes notify listeners even when is_home stays false."""
-    now = int(time.time())
+    """Test that clients_all.update() failure still uses cached historical data."""
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now - 120)
+    mock_coordinator_controller.clients.clear()
+    # Pre-populate clients_all cache, then make update fail on next call
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
+    mock_coordinator_controller.clients_all.update_async.side_effect = Exception("network")
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
-    coordinator.async_update_listeners = MagicMock()
+    data = await coordinator._async_update_data()
 
-    await coordinator.async_refresh()
-    assert coordinator.async_update_listeners.call_count == 1
-    assert coordinator.data.missing_macs == frozenset({"11:22:33:44:55:66"})
-
-    mock_coordinator_controller.clients.clear()
-
-    await coordinator.async_refresh()
-
-    assert coordinator.async_update_listeners.call_count == 2
-    assert coordinator.data.missing_macs == frozenset({"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"})
+    assert data.device_states[mac] is False
+    # Metadata should still come from the cached clients_all dict
+    assert data.client_info[mac]["name"] == "Dan Phone"
 
 
 async def test_coordinator_site_id_uses_entry_id_when_unique_id_missing(
@@ -326,15 +314,15 @@ async def test_process_message_updates_state(
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
 
 
-async def test_process_message_clears_missing_state_immediately(
+async def test_process_message_updates_offline_client(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
-    """Test that websocket updates immediately clear missing state for tracked clients."""
+    """Test that websocket updates transition offline clients to home."""
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     initial_data = await coordinator._async_update_data()
     coordinator.async_set_updated_data(initial_data)
 
-    assert "aa:bb:cc:dd:ee:ff" in coordinator.data.missing_macs
+    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is False
 
     message = MagicMock()
     message.data = {
@@ -345,10 +333,10 @@ async def test_process_message_clears_missing_state_immediately(
     coordinator.process_message(message)
 
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
-    assert "aa:bb:cc:dd:ee:ff" not in coordinator.data.missing_macs
+    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
 
 
-async def test_process_message_preserves_metadata_when_missing_client_reappears(
+async def test_process_message_preserves_metadata_when_offline_client_reappears(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
     """Test that websocket recovery keeps last-known metadata when payload omits names."""
@@ -361,8 +349,8 @@ async def test_process_message_preserves_metadata_when_missing_client_reappears(
     coordinator.async_set_updated_data(first_data)
 
     mock_coordinator_controller.clients.clear()
-    missing_data = await coordinator._async_update_data()
-    coordinator.async_set_updated_data(missing_data)
+    offline_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(offline_data)
 
     message = MagicMock()
     message.data = {
@@ -372,7 +360,6 @@ async def test_process_message_preserves_metadata_when_missing_client_reappears(
     coordinator.process_message(message)
 
     assert coordinator.data.client_info[mac]["name"] == "Dan Phone"
-    assert mac not in coordinator.data.missing_macs
 
 
 async def test_process_message_uses_hostname_when_name_missing(
@@ -685,3 +672,32 @@ async def test_process_message_non_dict_data(
     coordinator.process_message(message)
 
     assert coordinator.data is original_data
+
+
+@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
+async def test_reauth_retry_calls_clients_all_and_preserves_prior_metadata(
+    hass: HomeAssistant, config_entry: MagicMock, exception: type[Exception]
+) -> None:
+    """Test reauth retry refreshes clients_all and offline metadata comes from prior data."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    client1 = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    controller = AsyncMock()
+    controller.clients = MagicMock()
+    controller.clients.get = MagicMock(return_value=client1)
+    controller.clients_all = MagicMock()
+    controller.clients_all.update = AsyncMock()
+    controller.clients_all.get = MagicMock(return_value=None)
+    controller.login = AsyncMock()
+    controller.clients.update = AsyncMock(side_effect=_make_reauth_side_effect(exception, recover=True))
+
+    with patch(
+        "custom_components.unifi_presence.coordinator.create_controller",
+        return_value=controller,
+    ):
+        coordinator = UnifiPresenceCoordinator(hass, config_entry)
+        await coordinator._async_update_data()
+
+    # clients_all.update should have been called on both the initial and retry paths
+    assert controller.clients_all.update.await_count == 2

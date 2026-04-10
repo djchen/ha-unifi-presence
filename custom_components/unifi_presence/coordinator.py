@@ -46,36 +46,29 @@ class ClientInfo(TypedDict):
 class UnifiPresenceData:
     """Container for coordinator data."""
 
-    __slots__ = ("client_info", "device_states", "missing_macs")
+    __slots__ = ("client_info", "device_states")
     __hash__ = None  # type: ignore[assignment]
 
     def __init__(
         self,
         device_states: dict[str, bool],
         client_info: dict[str, ClientInfo],
-        missing_macs: frozenset[str],
     ) -> None:
         """Initialize.
 
         Args:
             device_states: MAC address -> is_home (True = home, False = not_home).
             client_info: MAC address -> client metadata used by entities.
-            missing_macs: Tracked MAC addresses currently absent from controller data.
         """
         self.device_states = device_states
         self.client_info = client_info
-        self.missing_macs = missing_macs
 
     def __eq__(self, other: object) -> bool:
         """Return whether two coordinator payloads are equivalent."""
         if not isinstance(other, UnifiPresenceData):
             return NotImplemented
 
-        return (
-            self.device_states == other.device_states
-            and self.client_info == other.client_info
-            and self.missing_macs == other.missing_macs
-        )
+        return self.device_states == other.device_states and self.client_info == other.client_info
 
 
 class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
@@ -187,11 +180,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             if name or hostname or previous_info is None
             else previous_info
         )
-        missing_macs = (current_data.missing_macs - {mac}) if current_data is not None else frozenset()
 
         if current_data is not None:
             old_home = current_data.device_states.get(mac)
-            if old_home == is_home and previous_info == info and missing_macs == current_data.missing_macs:
+            if old_home == is_home and previous_info == info:
                 return
 
         new_states = dict(current_data.device_states) if current_data is not None else {}
@@ -212,7 +204,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             UnifiPresenceData(
                 device_states=new_states,
                 client_info=new_info,
-                missing_macs=missing_macs,
             )
         )
 
@@ -224,6 +215,20 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             translation_placeholders={"host": self.config_entry.data[CONF_HOST]},
         )
 
+    async def _refresh_clients(self, controller: Controller) -> None:
+        """Best-effort refresh of historical clients, then required refresh of active clients.
+
+        The historical store (clients_all) retains cached data from prior
+        successful refreshes, so its failure is non-fatal.  The active store
+        (clients) is required — its failure propagates.
+        """
+        try:
+            await controller.clients_all.update()
+        except Exception:
+            _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
+
+        await controller.clients.update()
+
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
         now = int(time.time())
@@ -232,14 +237,14 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         try:
             controller = await self._ensure_controller()
-            await controller.clients.update()
+            await self._refresh_clients(controller)
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             # Session expired or credentials rejected — force re-auth
             _LOGGER.info("UniFi session expired, re-authenticating")
             self._controller = None
             try:
                 controller = await self._ensure_controller()
-                await controller.clients.update()
+                await self._refresh_clients(controller)
             except (aiounifi.LoginRequired, aiounifi.Unauthorized) as err:
                 raise ConfigEntryAuthFailed(
                     translation_domain=DOMAIN,
@@ -258,9 +263,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         # Look up only tracked MACs directly — avoids copying the full client dict
         clients = controller.clients
+        clients_all = controller.clients_all
         device_states: dict[str, bool] = {}
         client_info: dict[str, ClientInfo] = {}
-        missing_macs: set[str] = set()
         previous_info = self.data.client_info if self.data is not None else {}
 
         for mac in tracked_macs:
@@ -276,15 +281,23 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 )
             else:
                 is_home = False
-                missing_macs.add(mac)
-                client_info[mac] = previous_info.get(mac, self._build_client_info(mac))
+                # Prefer historical metadata from clients_all, then prior
+                # coordinator data, then bare MAC as last resort.
+                historical = clients_all.get(mac)
+                if historical is not None:
+                    client_info[mac] = self._build_client_info(
+                        mac,
+                        name=historical.name or "",
+                        hostname=historical.hostname or "",
+                    )
+                else:
+                    client_info[mac] = previous_info.get(mac, self._build_client_info(mac))
 
             device_states[mac] = is_home
 
         new_data = UnifiPresenceData(
             device_states=device_states,
             client_info=client_info,
-            missing_macs=frozenset(missing_macs),
         )
 
         # Reuse the existing object only when neither presence nor metadata changed.
