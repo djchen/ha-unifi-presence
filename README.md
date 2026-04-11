@@ -256,7 +256,7 @@ The integration also adds a system health summary to Home Assistant. It reports:
 ### Setup
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install ".[dev]"
 pre-commit install
