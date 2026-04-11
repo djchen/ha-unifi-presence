@@ -32,7 +32,7 @@ from .const import (
     DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import create_controller
+from .helpers import create_controller, format_config_entry_title
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
@@ -43,6 +43,11 @@ _LOGGER = logging.getLogger(__name__)
 def _site_title(site: Any) -> str:
     """Return the user-facing title for a UniFi site."""
     return str(site.description or site.name)
+
+
+def _config_entry_title(site: Any, host: str) -> str:
+    """Return the config entry title shown in Home Assistant."""
+    return format_config_entry_title(_site_title(site), host)
 
 
 def _normalize_mac(mac: str) -> str:
@@ -312,7 +317,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(
                     reconfigure_entry,
                     unique_id=self._site_id,
-                    title=self._site_title,
+                    title=_config_entry_title(site, self._host),
                     data_updates={
                         CONF_HOST: self._host,
                         CONF_PORT: self._port,
@@ -454,7 +459,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "no_devices"
             else:
                 return self.async_create_entry(
-                    title=self._site_title,
+                    title=format_config_entry_title(self._site_title, self._host),
                     data={
                         CONF_HOST: self._host,
                         CONF_PORT: self._port,

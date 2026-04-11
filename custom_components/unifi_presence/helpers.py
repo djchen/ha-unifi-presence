@@ -19,6 +19,11 @@ if TYPE_CHECKING:
     from aiounifi.controller import Controller
 
 
+def format_config_entry_title(site_title: str, host: str) -> str:
+    """Return the Home Assistant config entry title for a site."""
+    return f"{site_title} ({host})"
+
+
 async def create_controller(
     hass: HomeAssistant,
     host: str,

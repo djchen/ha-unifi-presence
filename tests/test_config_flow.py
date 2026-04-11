@@ -288,7 +288,7 @@ async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant)
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Office"
+    assert result["title"] == "Office (192.168.1.1)"
     assert result["data"]["site"] == "office"
     assert result["result"].unique_id == OFFICE_SITE_ID
 
@@ -309,7 +309,7 @@ async def test_devices_step_uses_site_name_when_description_missing(hass: HomeAs
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "office"
+    assert result["title"] == "office (192.168.1.1)"
     assert result["data"]["site"] == "office"
     assert result["result"].unique_id == OFFICE_SITE_ID
 
@@ -371,7 +371,7 @@ async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Home"
+    assert result["title"] == "Home (192.168.1.1)"
     assert result["data"][CONF_HOST] == "192.168.1.1"
     assert result["data"]["site"] == "default"
     assert result["result"].unique_id == DEFAULT_SITE_ID
@@ -411,7 +411,7 @@ async def test_devices_step_creates_entry_host_variants(
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Home"
+    assert result["title"] == f"Home ({host})"
     assert result["data"][CONF_HOST] == host
     assert result["result"].unique_id == expected_unique_id
 
@@ -672,7 +672,7 @@ async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
     assert entry.data["password"] == "newpass"
     assert entry.data["ssl_verify"] is True
     assert entry.unique_id == DEFAULT_SITE_ID
-    assert entry.title == "Home"
+    assert entry.title == "Home (10.0.0.1)"
 
 
 async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass: HomeAssistant) -> None:
@@ -747,7 +747,7 @@ async def test_reconfigure_flow_success_host_variants(
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["host"] == new_host
     assert entry.unique_id == expected_unique_id
-    assert entry.title == "Home"
+    assert entry.title == f"Home ({new_host})"
 
 
 async def test_reconfigure_flow_invalid_auth(hass: HomeAssistant) -> None:

@@ -88,7 +88,7 @@
     "step": {
       "init": {
         "title": "UniFi Presence Options",
-        "description": "Adjust presence detection settings. Real-time updates are delivered via WebSocket; the fallback poll catches any missed events.",
+        "description": "Select which devices to track, set how long a device can be inactive before it is marked away, and choose how often UniFi is polled as a backup to real-time WebSocket updates.",
         "data": {
           "tracked_devices": "Tracked devices",
           "away_seconds": "Seconds before marking as away",
