@@ -5,9 +5,10 @@ from __future__ import annotations
 import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.unifi_presence.helpers import create_controller
+from custom_components.unifi_presence.helpers import async_close_controller, create_controller
 
 
 async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) -> None:
@@ -76,3 +77,63 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     jar = call_kwargs["cookie_jar"]
     assert getattr(jar, "_unsafe", False) is True
     assert configuration.call_args.kwargs["ssl_context"] is False
+
+
+async def test_create_controller_closes_transient_ssl_false_session(hass: HomeAssistant) -> None:
+    """Test transient SSL-disabled controllers own and close their session."""
+    session = MagicMock()
+    session.closed = False
+    session.close = AsyncMock()
+    controller = MagicMock()
+    controller.login = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session
+        ) as create_session,
+        patch("custom_components.unifi_presence.helpers.Configuration"),
+        patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
+    ):
+        result = await create_controller(
+            hass,
+            host="192.168.1.1",
+            port=8443,
+            username="admin",
+            password="password",
+            site="office",
+            ssl_verify=False,
+            transient=True,
+        )
+        await async_close_controller(result)
+
+    assert result is controller
+    assert create_session.call_args.kwargs["auto_cleanup"] is False
+    session.close.assert_awaited_once()
+
+
+async def test_create_controller_closes_transient_session_on_login_failure(hass: HomeAssistant) -> None:
+    """Test transient SSL-disabled sessions are cleaned up if login fails."""
+    session = MagicMock()
+    session.closed = False
+    session.close = AsyncMock()
+    controller = MagicMock()
+    controller.login = AsyncMock(side_effect=TimeoutError)
+
+    with (
+        patch("custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session),
+        patch("custom_components.unifi_presence.helpers.Configuration"),
+        patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
+        pytest.raises(TimeoutError),
+    ):
+        await create_controller(
+            hass,
+            host="192.168.1.1",
+            port=8443,
+            username="admin",
+            password="password",
+            site="office",
+            ssl_verify=False,
+            transient=True,
+        )
+
+    session.close.assert_awaited_once()

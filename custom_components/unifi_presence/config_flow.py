@@ -33,7 +33,7 @@ from .const import (
     DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import create_controller, format_config_entry_title, resolve_controller_site
+from .helpers import async_close_controller, create_controller, format_config_entry_title, resolve_controller_site
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
@@ -59,6 +59,14 @@ def _normalize_mac(mac: str) -> str:
 def _format_current_client_label(name: str, mac: str) -> str:
     """Return the user-facing label for a current UniFi client."""
     return f"{name} ({mac})"
+
+
+def _get_selected_site(available_sites: Mapping[str, Any], selected_site: object) -> Any | None:
+    """Return the selected site object when the flow input is valid."""
+    if not isinstance(selected_site, str):
+        return None
+
+    return available_sites.get(selected_site)
 
 
 @callback
@@ -194,6 +202,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 password,
                 site,
                 ssl_verify,
+                transient=True,
             )
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
@@ -223,6 +232,59 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+    async def _async_finish_reconfigure_site_selection(self, site: Any) -> ConfigFlowResult:
+        """Validate and save a selected site during reconfigure."""
+        reconfigure_entry = self._get_reconfigure_entry()
+        stored_site = reconfigure_entry.data.get(CONF_SITE)
+        same_site = self._site_id == reconfigure_entry.unique_id or (
+            isinstance(stored_site, str) and stored_site in {self._site_id, self._site}
+        )
+        if not same_site:
+            return self.async_abort(reason="different_site_selected")
+
+        controller, error = await self._async_validate_login(
+            host=self._host,
+            port=self._port,
+            username=self._username,
+            password=self._password,
+            site=self._site,
+            ssl_verify=self._ssl_verify,
+            log_context="UniFi reconfigure site validation",
+        )
+        if error is not None:
+            return self._show_site_form(errors={"base": error})
+
+        assert controller is not None
+
+        try:
+            await _fetch_all_clients(controller)
+        except Exception:
+            _LOGGER.exception("Failed to validate access to the configured UniFi site")
+            return self._show_site_form(errors={"base": "cannot_discover_devices"})
+        finally:
+            await async_close_controller(controller)
+
+        _async_migrate_tracker_unique_ids(
+            self.hass,
+            reconfigure_entry,
+            old_site_id=reconfigure_entry.unique_id or reconfigure_entry.entry_id,
+            new_site_id=self._site_id,
+        )
+
+        return self.async_update_reload_and_abort(
+            reconfigure_entry,
+            unique_id=self._site_id,
+            title=_config_entry_title(site, self._host),
+            data_updates={
+                CONF_HOST: self._host,
+                CONF_PORT: self._port,
+                CONF_USERNAME: self._username,
+                CONF_PASSWORD: self._password,
+                CONF_SITE: self._site,
+                CONF_SSL_VERIFY: self._ssl_verify,
+            },
         )
 
     async def _async_validate_and_fetch_sites(
@@ -256,6 +318,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         except Exception:
             _LOGGER.exception("Failed to fetch site list")
             return "cannot_connect"
+        finally:
+            await async_close_controller(controller)
 
         return None
 
@@ -309,60 +373,16 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_sites_available")
 
         if user_input is not None:
-            site = self._available_sites[user_input[CONF_SITE]]
+            site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
+            if site is None:
+                return self._show_site_form(errors={"base": "invalid_site"})
+
             self._site_id = site.site_id
             self._site = site.name
             self._site_title = _site_title(site)
 
             if self._site_step_target == "reconfigure":
-                reconfigure_entry = self._get_reconfigure_entry()
-                stored_site = reconfigure_entry.data.get(CONF_SITE)
-                same_site = self._site_id == reconfigure_entry.unique_id or (
-                    isinstance(stored_site, str) and stored_site in {self._site_id, self._site}
-                )
-                if not same_site:
-                    return self.async_abort(reason="different_site_selected")
-
-                controller, error = await self._async_validate_login(
-                    host=self._host,
-                    port=self._port,
-                    username=self._username,
-                    password=self._password,
-                    site=self._site,
-                    ssl_verify=self._ssl_verify,
-                    log_context="UniFi reconfigure site validation",
-                )
-                if error is not None:
-                    return self._show_site_form(errors={"base": error})
-
-                assert controller is not None
-
-                try:
-                    await _fetch_all_clients(controller)
-                except Exception:
-                    _LOGGER.exception("Failed to validate access to the configured UniFi site")
-                    return self._show_site_form(errors={"base": "cannot_discover_devices"})
-
-                _async_migrate_tracker_unique_ids(
-                    self.hass,
-                    reconfigure_entry,
-                    old_site_id=reconfigure_entry.unique_id or reconfigure_entry.entry_id,
-                    new_site_id=self._site_id,
-                )
-
-                return self.async_update_reload_and_abort(
-                    reconfigure_entry,
-                    unique_id=self._site_id,
-                    title=_config_entry_title(site, self._host),
-                    data_updates={
-                        CONF_HOST: self._host,
-                        CONF_PORT: self._port,
-                        CONF_USERNAME: self._username,
-                        CONF_PASSWORD: self._password,
-                        CONF_SITE: self._site,
-                        CONF_SSL_VERIFY: self._ssl_verify,
-                    },
-                )
+                return await self._async_finish_reconfigure_site_selection(site)
 
             await self.async_set_unique_id(self._site_id)
             self._abort_if_unique_id_configured()
@@ -386,6 +406,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             except Exception:
                 _LOGGER.exception("Failed to fetch client list")
                 return self._show_site_form(errors={"base": "cannot_discover_devices"})
+            finally:
+                await async_close_controller(controller)
 
             if not self._available_clients:
                 return self.async_abort(reason="no_clients_available")
@@ -410,7 +432,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            _, error = await self._async_validate_login(
+            controller, error = await self._async_validate_login(
                 host=self._host,
                 port=self._port,
                 username=user_input[CONF_USERNAME],
@@ -422,6 +444,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if error is not None:
                 errors["base"] = error
             else:
+                assert controller is not None
+                await async_close_controller(controller)
                 return self.async_update_reload_and_abort(
                     self._get_reauth_entry(),
                     data_updates={
@@ -539,6 +563,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         """Fetch available clients for the options flow."""
         try:
             controller = None
+            close_controller = False
             if self.config_entry.state is ConfigEntryState.LOADED:
                 coordinator = self.config_entry.runtime_data
                 if coordinator is not None and coordinator.controller is not None:
@@ -563,11 +588,16 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                     data[CONF_PASSWORD],
                     site,
                     data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+                    transient=True,
                 )
+                close_controller = True
             return await _fetch_all_clients(controller), False
         except Exception:
             _LOGGER.warning("Could not fetch UniFi clients for options flow")
             return {}, True
+        finally:
+            if close_controller and controller is not None:
+                await async_close_controller(controller)
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""

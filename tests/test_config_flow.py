@@ -18,6 +18,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence.config_flow import UnifiPresenceConfigFlow
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
@@ -268,6 +269,38 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
     assert not any(call.args[5] == "default" for call in mock_create_controller.call_args_list)
+
+
+async def test_site_selection_stale_site_id_shows_user_error(hass: HomeAssistant) -> None:
+    """Test stale site selections return to the site step with an explicit error."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_sites = {
+        DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+        OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+    }
+
+    result = await flow.async_step_site({CONF_SITE: "missing-site"})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+    assert result["errors"] == {"base": "invalid_site"}
+
+
+async def test_site_selection_malformed_site_value_shows_user_error(hass: HomeAssistant) -> None:
+    """Test malformed site selections return a user-facing validation error."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_sites = {
+        DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+        OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+    }
+
+    result = await flow.async_step_site({CONF_SITE: 123})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+    assert result["errors"] == {"base": "invalid_site"}
 
 
 async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant) -> None:
@@ -1012,6 +1045,19 @@ def test_options_flow_no_tracked_devices_translation_keys_exist() -> None:
 
     assert "no_tracked_devices" in strings["options"]["error"]
     assert "no_tracked_devices" in english["options"]["error"]
+
+
+def test_removed_translation_keys_stay_absent_and_aligned() -> None:
+    """Test stale translation keys were removed from both translation files."""
+    strings = json.loads((TRANSLATIONS_ROOT / "strings.json").read_text())
+    english = json.loads((TRANSLATIONS_ROOT / "translations" / "en.json").read_text())
+
+    assert "already_configured" not in strings["config"]["error"]
+    assert "already_configured" not in english["config"]["error"]
+    assert "no_devices" not in strings["options"]["error"]
+    assert "no_devices" not in english["options"]["error"]
+    assert "entity" not in strings
+    assert "entity" not in english
 
 
 async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAssistant) -> None:
