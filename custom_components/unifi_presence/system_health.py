@@ -34,13 +34,14 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
     for entry in config_entries:
         site = entry.data.get(CONF_SITE, DEFAULT_SITE)
         controller_targets.append(f"{entry.data[CONF_HOST]} ({site})")
-        tracked_devices += len(entry.options.get(CONF_TRACKED_DEVICES, []))
 
         if entry.state is not ConfigEntryState.LOADED:
+            tracked_devices += len(entry.options.get(CONF_TRACKED_DEVICES, []))
             continue
 
         loaded_entries += 1
         coordinator = entry.runtime_data
+        tracked_devices += len(coordinator.tracked_devices)
 
         if coordinator.last_update_success:
             coordinator_available += 1
