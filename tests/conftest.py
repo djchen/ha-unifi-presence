@@ -56,10 +56,10 @@ class _MockClientStore(dict):
 
     def __init__(self) -> None:
         super().__init__()
-        self.update_async = AsyncMock()
+        self.update_mock = AsyncMock()
 
     async def update(self) -> None:
-        await self.update_async()
+        await self.update_mock()
 
 
 @pytest.fixture
@@ -84,6 +84,37 @@ def mock_controller() -> MagicMock:
     clients.update = AsyncMock()
     clients.get = MagicMock(return_value=None)
     return _build_controller(clients=clients)
+
+
+def _build_client_store(items: list[tuple[str, MagicMock]] | None = None) -> MagicMock:
+    """Create a dict-like mock client store with async update support."""
+    store = MagicMock()
+    store.update = AsyncMock()
+    store.update_mock = store.update
+    item_list = items or []
+    store.items.return_value = item_list
+    store.__iter__.side_effect = lambda: iter(k for k, _v in item_list)
+    store.get = MagicMock(side_effect=dict(item_list).get)
+    return store
+
+
+def make_mock_controller(
+    *,
+    login_side_effect: Exception | None = None,
+    clients_all_items: list[tuple[str, MagicMock]] | None = None,
+    clients_items: list[tuple[str, MagicMock]] | None = None,
+    sites: list[MagicMock] | None = None,
+) -> MagicMock:
+    """Create a fully-wired controller mock for flow and integration tests."""
+    controller = _build_controller(
+        clients=_build_client_store(clients_items),
+        clients_all=_build_client_store(clients_all_items),
+    )
+    controller.login = AsyncMock(side_effect=login_side_effect)
+    controller.sites = MagicMock()
+    controller.sites.update = AsyncMock()
+    controller.sites.values.return_value = sites or []
+    return controller
 
 
 def _build_controller(

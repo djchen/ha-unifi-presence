@@ -68,8 +68,8 @@
       }
     },
     "error": {
-      "already_configured": "This UniFi controller and site are already configured",
       "invalid_auth": "Invalid username or password",
+      "invalid_site": "The selected UniFi site is no longer available. Please choose again.",
       "cannot_connect": "Unable to connect to the UniFi controller",
       "cannot_discover_devices": "Connected to the UniFi controller, but could not fetch clients from this site",
       "unknown": "An unexpected error occurred",
@@ -103,19 +103,11 @@
     },
     "error": {
       "cannot_discover_devices": "Could not refresh the client list; showing previously tracked devices",
-      "no_devices": "You must select at least one device to track",
       "no_tracked_devices": "You must keep at least one tracked device selected"
     },
     "abort": {
       "cannot_discover_devices": "Connected to the UniFi controller, but could not fetch clients from this site",
       "no_devices_discovered": "No devices were discovered on this UniFi site"
-    }
-  },
-  "entity": {
-    "device_tracker": {
-      "presence": {
-        "name": "Presence"
-      }
     }
   },
   "system_health": {

@@ -13,13 +13,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL
+from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL, CONF_SITE, CONF_TRACKED_DEVICES
 from custom_components.unifi_presence.coordinator import (
     UnifiPresenceCoordinator,
     UnifiPresenceData,
 )
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client
+from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client, make_mock_controller
 
 
 def _make_reauth_side_effect(
@@ -138,7 +138,7 @@ async def test_clients_all_failure_uses_cached_data(
     mock_coordinator_controller.clients.clear()
     # Pre-populate clients_all cache, then make update fail on next call
     mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
-    mock_coordinator_controller.clients_all.update_async.side_effect = Exception("network")
+    mock_coordinator_controller.clients_all.update_mock.side_effect = Exception("network")
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     data = await coordinator._async_update_data()
@@ -187,7 +187,7 @@ async def test_coordinator_reauth_on_session_error(
     """Test that the coordinator re-authenticates on LoginRequired or Unauthorized."""
     now = int(time.time())
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
-    mock_coordinator_controller.clients.update_async.side_effect = _make_reauth_side_effect(exception, recover=True)
+    mock_coordinator_controller.clients.update_mock.side_effect = _make_reauth_side_effect(exception, recover=True)
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
@@ -202,7 +202,7 @@ async def test_coordinator_update_failed(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
     """Test that UpdateFailed is raised on persistent AiounifiException."""
-    mock_coordinator_controller.clients.update_async.side_effect = aiounifi.AiounifiException("connection lost")
+    mock_coordinator_controller.clients.update_mock.side_effect = aiounifi.AiounifiException("connection lost")
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(UpdateFailed):
@@ -251,12 +251,93 @@ async def test_ensure_controller_reuses_existing_controller(hass: HomeAssistant,
     create_controller.assert_not_called()
 
 
+async def test_ensure_controller_normalizes_legacy_stored_site_id(hass: HomeAssistant, config_entry: MagicMock) -> None:
+    """Test runtime controller setup resolves legacy stored site IDs to site names."""
+    config_entry.data = {**MOCK_CONFIG_DATA, CONF_SITE: "site-office-id"}
+    config_entry.unique_id = "192.168.1.1_office"
+
+    site_lookup_controller = MagicMock()
+    site_lookup_controller.sites = MagicMock()
+    site_lookup_controller.sites.update = AsyncMock()
+    site = MagicMock()
+    site.site_id = "site-office-id"
+    site.name = "office"
+    site_lookup_controller.sites.values.return_value = [site]
+
+    runtime_controller = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.unifi_presence.helpers.create_controller",
+            return_value=site_lookup_controller,
+        ) as lookup_create_controller,
+        patch(
+            "custom_components.unifi_presence.coordinator.create_controller",
+            return_value=runtime_controller,
+        ) as create_controller,
+    ):
+        coordinator = UnifiPresenceCoordinator(hass, config_entry)
+        controller = await coordinator._ensure_controller()
+
+    assert controller is runtime_controller
+    assert lookup_create_controller.await_args.args[5] == ""
+    assert create_controller.await_args.kwargs["site"] == "office"
+
+
+async def test_coordinator_reauth_detaches_replaced_runtime_controller(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test poll-triggered reauth detaches the replaced runtime controller session."""
+    now = int(time.time())
+    owned_session = MagicMock()
+    owned_session.closed = False
+    owned_session.detach = MagicMock()
+    mock_coordinator_controller._unifi_presence_owned_session = owned_session
+    mock_coordinator_controller.clients.update_mock.side_effect = aiounifi.LoginRequired
+
+    replacement_controller = make_mock_controller(
+        clients_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now))]
+    )
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    coordinator._controller = mock_coordinator_controller
+
+    with patch(
+        "custom_components.unifi_presence.coordinator.create_controller",
+        return_value=replacement_controller,
+    ):
+        data = await coordinator._async_update_data()
+
+    assert data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert coordinator.controller is replacement_controller
+    owned_session.detach.assert_called_once_with()
+
+
+async def test_coordinator_async_shutdown_detaches_owned_runtime_session(
+    hass: HomeAssistant, config_entry: MagicMock
+) -> None:
+    """Test coordinator shutdown detaches an owned runtime session."""
+    owned_session = MagicMock()
+    owned_session.closed = False
+    owned_session.detach = MagicMock()
+    controller = MagicMock()
+    controller._unifi_presence_owned_session = owned_session
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    coordinator._controller = controller
+
+    await coordinator.async_shutdown()
+
+    assert coordinator.controller is None
+    owned_session.detach.assert_called_once_with()
+
+
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
 async def test_coordinator_reauth_failure_raises_config_entry_auth_failed(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock, exception: type[Exception]
 ) -> None:
     """Test that persistent credential failure after re-auth raises ConfigEntryAuthFailed."""
-    mock_coordinator_controller.clients.update_async.side_effect = _make_reauth_side_effect(exception, recover=False)
+    mock_coordinator_controller.clients.update_mock.side_effect = _make_reauth_side_effect(exception, recover=False)
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(ConfigEntryAuthFailed):
@@ -278,7 +359,7 @@ async def test_coordinator_reauth_network_failure_raises_update_failed(
 
     call_count = 0
 
-    mock_coordinator_controller.clients.update_async.side_effect = _network_fails_after_reauth
+    mock_coordinator_controller.clients.update_mock.side_effect = _network_fails_after_reauth
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(UpdateFailed):
@@ -300,11 +381,32 @@ async def test_coordinator_reauth_timeout_raises_update_failed(
 
     call_count = 0
 
-    mock_coordinator_controller.clients.update_async.side_effect = _timeout_after_reauth
+    mock_coordinator_controller.clients.update_mock.side_effect = _timeout_after_reauth
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
+
+
+async def test_coordinator_normalizes_tracked_macs(hass: HomeAssistant, config_entry: MagicMock) -> None:
+    """Test tracked MAC options are trimmed, deduplicated, and lowercased."""
+    config_entry.options = {
+        **MOCK_OPTIONS,
+        CONF_TRACKED_DEVICES: [
+            " AA:BB:CC:DD:EE:FF ",
+            "",
+            "aa:bb:cc:dd:ee:ff",
+            "11:22:33:44:55:66",
+            "  ",
+        ],
+    }
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    assert coordinator.tracked_devices == (
+        "aa:bb:cc:dd:ee:ff",
+        "11:22:33:44:55:66",
+    )
 
 
 async def test_process_message_updates_state(
@@ -355,6 +457,32 @@ async def test_process_message_updates_offline_client(
 
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+
+
+async def test_process_message_noop_for_equivalent_update(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test repeated equivalent websocket updates do not publish redundant data."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    initial_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(initial_data)
+    coordinator.async_update_listeners = MagicMock()
+
+    message = MagicMock()
+    message.data = {
+        "mac": mac,
+        "name": "Dan Phone",
+        "last_seen": now,
+    }
+
+    coordinator.process_message(message)
+
+    assert coordinator.data is initial_data
+    coordinator.async_update_listeners.assert_not_called()
 
 
 async def test_process_message_preserves_metadata_when_offline_client_reappears(
@@ -690,6 +818,51 @@ async def test_process_message_non_dict_data(
 
     message = MagicMock()
     message.data = "not a dict"
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_non_string_mac(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores payloads with non-string MACs."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = {"mac": 123, "last_seen": int(time.time())}
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_non_numeric_last_seen(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores payloads with non-numeric timestamps."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": "now"}
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_bool_last_seen(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores bool last_seen values."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": True}
     coordinator.process_message(message)
 
     assert coordinator.data is original_data

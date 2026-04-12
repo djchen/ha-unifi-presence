@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence import _async_remove_deselected_entities, async_setup_entry, async_unload_entry
 from custom_components.unifi_presence.const import CONF_TRACKED_DEVICES, DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
@@ -81,10 +83,77 @@ async def test_async_unload_entry(hass: HomeAssistant, enable_custom_integration
     assert entry.state is ConfigEntryState.NOT_LOADED
 
 
+async def test_async_unload_entry_releases_resources_even_when_platform_unload_fails(hass: HomeAssistant) -> None:
+    """Test unload still tears down websocket and coordinator even if platform unload fails."""
+    entry = _make_config_entry(hass)
+    websocket = MagicMock()
+    websocket.stop_and_wait = AsyncMock()
+    runtime_data = MagicMock(websocket=websocket)
+    runtime_data.async_shutdown = AsyncMock()
+    entry.runtime_data = runtime_data
+
+    with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=False)):
+        unloaded = await async_unload_entry(hass, entry)
+
+    assert unloaded is False
+    websocket.stop_and_wait.assert_awaited_once()
+    runtime_data.async_shutdown.assert_awaited_once()
+
+
+async def test_async_unload_entry_releases_controller_after_successful_platform_unload(hass: HomeAssistant) -> None:
+    """Test unload releases the runtime controller after platform unload succeeds."""
+    entry = _make_config_entry(hass)
+    websocket = MagicMock()
+    websocket.stop_and_wait = AsyncMock()
+    runtime_data = MagicMock(websocket=websocket)
+    runtime_data.async_shutdown = AsyncMock()
+    entry.runtime_data = runtime_data
+
+    with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)):
+        unloaded = await async_unload_entry(hass, entry)
+
+    assert unloaded is True
+    websocket.stop_and_wait.assert_awaited_once()
+    runtime_data.async_shutdown.assert_awaited_once()
+
+
+async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
+    hass: HomeAssistant,
+) -> None:
+    """Test setup releases the controller if platform setup fails after refresh."""
+    entry = _make_config_entry(hass)
+    owned_session = MagicMock()
+    owned_session.closed = False
+    owned_session.detach = MagicMock()
+    controller = MagicMock()
+    controller._unifi_presence_owned_session = owned_session
+    controller.clients.get = MagicMock(return_value=None)
+    controller.clients.update = AsyncMock()
+    controller.clients_all.get = MagicMock(return_value=None)
+    controller.clients_all.update = AsyncMock()
+
+    async def _first_refresh(coordinator: UnifiPresenceCoordinator) -> None:
+        coordinator._controller = controller
+
+    with (
+        patch.object(
+            UnifiPresenceCoordinator,
+            "async_config_entry_first_refresh",
+            autospec=True,
+            side_effect=_first_refresh,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(side_effect=RuntimeError("boom"))),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        await async_setup_entry(hass, entry)
+
+    owned_session.detach.assert_called_once_with()
+
+
 async def test_shutdown_event_stops_websocket(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test that firing EVENT_HOMEASSISTANT_STOP calls websocket.stop()."""
+    """Test that shutdown stops the websocket and releases the controller."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
@@ -94,11 +163,13 @@ async def test_shutdown_event_stops_websocket(
     ws = entry.runtime_data.websocket
     assert ws is not None
     ws.stop = MagicMock(wraps=ws.stop)
+    entry.runtime_data.async_shutdown = AsyncMock()
 
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
 
     ws.stop.assert_called_once()
+    entry.runtime_data.async_shutdown.assert_awaited_once()
 
 
 async def test_websocket_starts_after_shutdown_registration(
@@ -278,3 +349,13 @@ async def test_options_update_keeps_still_selected_missing_entity_registry_entri
     await hass.async_block_till_done()
 
     assert entity_registry.async_get(missing_entry.entity_id) is not None
+
+
+async def test_remove_deselected_entities_noop_when_removed_macs_empty(hass: HomeAssistant) -> None:
+    """Test empty deselection sets skip entity-registry cleanup work."""
+    entry = _make_config_entry(hass)
+
+    with patch("custom_components.unifi_presence.er.async_get") as async_get:
+        _async_remove_deselected_entities(hass, entry, set())
+
+    async_get.assert_not_called()

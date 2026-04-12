@@ -23,6 +23,7 @@ This integration intentionally does not implement discovery. UniFi hardware disc
 ## Requirements
 
 - Home Assistant 2026.3.0 or later
+- Python 3.14.3 or later
 - UniFi Network Controller (UniFi OS or legacy)
 - Local UniFi user account with read access to clients
 

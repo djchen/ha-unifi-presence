@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import aiounifi
+from aiounifi.models.message import Message
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -26,7 +27,7 @@ from .const import (
     DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import create_controller
+from .helpers import async_close_controller, create_controller, resolve_controller_site
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
@@ -34,6 +35,27 @@ if TYPE_CHECKING:
     from .websocket import UnifiPresenceWebsocket
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _current_epoch_seconds() -> int:
+    """Return the current Unix timestamp in seconds."""
+    return int(time.time())
+
+
+def _normalize_tracked_macs(raw_tracked: list[str]) -> tuple[str, ...]:
+    """Normalize tracked MACs by trimming blanks, lowercasing, and deduplicating."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+
+    for mac in raw_tracked:
+        normalized_mac = mac.strip().lower()
+        if not normalized_mac or normalized_mac in seen:
+            continue
+
+        seen.add(normalized_mac)
+        normalized.append(normalized_mac)
+
+    return tuple(normalized)
 
 
 class ClientInfo(TypedDict):
@@ -83,7 +105,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         # Cache options that only change on reload
         raw_tracked: list[str] = config_entry.options.get(CONF_TRACKED_DEVICES, [])
-        self._tracked_macs: tuple[str, ...] = tuple(m.strip().lower() for m in raw_tracked)
+        self._tracked_macs = _normalize_tracked_macs(raw_tracked)
         self._tracked_set: frozenset[str] = frozenset(self._tracked_macs)
         self._away_seconds: int = config_entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
 
@@ -128,19 +150,36 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         """Return the cached controller, if available."""
         return self._controller
 
+    async def async_shutdown(self) -> None:
+        """Release the current controller session, if owned by this integration."""
+        controller = self._controller
+        self._controller = None
+        if controller is not None:
+            await async_close_controller(controller)
+
     async def _ensure_controller(self) -> Controller:
         """Create or re-authenticate the controller connection."""
         if self._controller is not None:
             return self._controller
 
         data = self.config_entry.data
-        self._controller = await create_controller(
+        site = await resolve_controller_site(
             self.hass,
             host=data[CONF_HOST],
             port=data[CONF_PORT],
             username=data[CONF_USERNAME],
             password=data[CONF_PASSWORD],
             site=data.get(CONF_SITE, DEFAULT_SITE),
+            ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+            unique_id=self.config_entry.unique_id,
+        )
+        self._controller = await create_controller(
+            self.hass,
+            host=data[CONF_HOST],
+            port=data[CONF_PORT],
+            username=data[CONF_USERNAME],
+            password=data[CONF_PASSWORD],
+            site=site,
             ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
         )
         return self._controller
@@ -158,23 +197,37 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             "mac": mac,
         }
 
-    def process_message(self, message: Any) -> None:
+    def process_message(self, message: Message) -> None:
         """Handle a sta:sync WebSocket message for a tracked client."""
-        raw = message.data
+        raw: object = message.data
         if not isinstance(raw, dict):
             return
-        mac = raw.get("mac", "").lower()
+
+        mac_raw = raw.get("mac")
+        if not isinstance(mac_raw, str):
+            return
+
+        mac = mac_raw.lower()
         if mac not in self._tracked_set:
             return
 
-        now = int(time.time())
-        last_seen = raw.get("last_seen") or 0
+        now = _current_epoch_seconds()
+        last_seen_raw = raw.get("last_seen")
+        if last_seen_raw is None:
+            last_seen: int | float = 0
+        elif isinstance(last_seen_raw, bool) or not isinstance(last_seen_raw, (int, float)):
+            return
+        else:
+            last_seen = last_seen_raw
+
         is_home = (now - last_seen) < self._away_seconds
 
         current_data = self.data
         previous_info = current_data.client_info.get(mac) if current_data is not None else None
-        name = raw.get("name", "")
-        hostname = raw.get("hostname", "")
+        name_raw = raw.get("name")
+        name = name_raw if isinstance(name_raw, str) else ""
+        hostname_raw = raw.get("hostname")
+        hostname = hostname_raw if isinstance(hostname_raw, str) else ""
         info = (
             self._build_client_info(mac, name=name, hostname=hostname)
             if name or hostname or previous_info is None
@@ -231,7 +284,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
-        now = int(time.time())
+        now = _current_epoch_seconds()
         tracked_macs = self._tracked_macs
         away_threshold = self._away_seconds
 
@@ -241,7 +294,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             # Session expired or credentials rejected — force re-auth
             _LOGGER.info("UniFi session expired, re-authenticating")
-            self._controller = None
+            await self.async_shutdown()
             try:
                 controller = await self._ensure_controller()
                 await self._refresh_clients(controller)

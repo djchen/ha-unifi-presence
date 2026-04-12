@@ -149,8 +149,10 @@ class UnifiPresenceWebsocket:
                     self._clear_retry()
 
                 await websocket_task
-            except aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError:
-                _LOGGER.error("WebSocket setup failed")
+            except aiohttp.ClientConnectorError as err:
+                _LOGGER.error("WebSocket connector failed: %s", err)
+            except aiohttp.WSServerHandshakeError as err:
+                _LOGGER.error("WebSocket handshake failed with status %s: %s", err.status, err)
             except aiounifi.WebsocketError:
                 _LOGGER.error("WebSocket disconnected")
             except asyncio.CancelledError:
@@ -209,6 +211,22 @@ class UnifiPresenceWebsocket:
 
         self.available = available
 
+    async def _async_replace_websocket(self) -> None:
+        """Cancel the current runner and start a replacement after it settles."""
+        previous_task = self.ws_task
+        if previous_task is not None:
+            previous_task.cancel()
+            if previous_task is not asyncio.current_task():
+                with suppress(asyncio.CancelledError):
+                    await previous_task
+
+        if self._stopped:
+            return
+
+        self._ws_started_at = None
+        self._subscribe_messages()
+        self._start_websocket()
+
     @callback
     def reconnect(self) -> None:
         """Restart the WebSocket against the (possibly replaced) controller.
@@ -225,15 +243,17 @@ class UnifiPresenceWebsocket:
 
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
-            self._reconnect_task = None
 
-        if self.ws_task is not None:
-            self.ws_task.cancel()
-            self.ws_task = None
+        async def _do_restart() -> None:
+            """Restart the runner after the previous task finishes cancelling."""
+            current_task = asyncio.current_task()
+            try:
+                await self._async_replace_websocket()
+            finally:
+                if self._reconnect_task is current_task:
+                    self._reconnect_task = None
 
-        self._ws_started_at = None
-        self._subscribe_messages()
-        self._start_websocket()
+        self._reconnect_task = self.hass.async_create_background_task(_do_restart(), name="unifi_presence_reconnect")
 
     @callback
     def _reconnect(self) -> None:
@@ -244,12 +264,9 @@ class UnifiPresenceWebsocket:
         self._cancel_retry = None
         self._set_available(False, force_signal=True)
 
-        if self.ws_task is not None:
-            self.ws_task.cancel()
-            self.ws_task = None
-
         async def _do_reconnect() -> None:
             """Attempt re-authentication and restart WebSocket."""
+            current_task = asyncio.current_task()
             api = self._get_api()
             if api is None:
                 _LOGGER.debug("No controller available, scheduling retry")
@@ -269,11 +286,10 @@ class UnifiPresenceWebsocket:
                 _LOGGER.debug("Schedule reconnect to UniFi controller: %s", exc)
                 self._schedule_retry()
             else:
-                # Re-subscribe in case the controller was replaced during re-auth
-                self._subscribe_messages()
-                self._start_websocket()
+                await self._async_replace_websocket()
             finally:
-                self._reconnect_task = None
+                if self._reconnect_task is current_task:
+                    self._reconnect_task = None
 
         self._reconnect_task = self.hass.async_create_background_task(_do_reconnect(), name="unifi_presence_reconnect")
 
