@@ -90,9 +90,10 @@ def _build_client_store(items: list[tuple[str, MagicMock]] | None = None) -> Mag
     """Create a dict-like mock client store with async update support."""
     store = MagicMock()
     store.update = AsyncMock()
+    store.update_mock = store.update
     item_list = items or []
     store.items.return_value = item_list
-    store.__iter__ = lambda self: iter(k for k, _v in item_list)
+    store.__iter__.side_effect = lambda: iter(k for k, _v in item_list)
     store.get = MagicMock(side_effect=dict(item_list).get)
     return store
 

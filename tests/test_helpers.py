@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -124,6 +125,33 @@ async def test_create_controller_closes_owned_session_on_login_failure(hass: Hom
         patch("custom_components.unifi_presence.helpers.Configuration"),
         patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
         pytest.raises(TimeoutError),
+    ):
+        await create_controller(
+            hass,
+            host="192.168.1.1",
+            port=8443,
+            username="admin",
+            password="password",
+            site="office",
+            ssl_verify=False,
+        )
+
+    session.detach.assert_called_once_with()
+
+
+async def test_create_controller_closes_owned_session_on_login_cancellation(hass: HomeAssistant) -> None:
+    """Test SSL-disabled sessions are detached if login is cancelled."""
+    session = MagicMock()
+    session.closed = False
+    session.detach = MagicMock()
+    controller = MagicMock()
+    controller.login = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with (
+        patch("custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session),
+        patch("custom_components.unifi_presence.helpers.Configuration"),
+        patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
+        pytest.raises(asyncio.CancelledError),
     ):
         await create_controller(
             hass,

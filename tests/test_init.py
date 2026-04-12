@@ -5,13 +5,14 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.unifi_presence import _async_remove_deselected_entities, async_unload_entry
+from custom_components.unifi_presence import _async_remove_deselected_entities, async_setup_entry, async_unload_entry
 from custom_components.unifi_presence.const import CONF_TRACKED_DEVICES, DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
@@ -114,6 +115,39 @@ async def test_async_unload_entry_releases_controller_after_successful_platform_
     assert unloaded is True
     websocket.stop_and_wait.assert_awaited_once()
     runtime_data.async_shutdown.assert_awaited_once()
+
+
+async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
+    hass: HomeAssistant,
+) -> None:
+    """Test setup releases the controller if platform setup fails after refresh."""
+    entry = _make_config_entry(hass)
+    owned_session = MagicMock()
+    owned_session.closed = False
+    owned_session.detach = MagicMock()
+    controller = MagicMock()
+    controller._unifi_presence_owned_session = owned_session
+    controller.clients.get = MagicMock(return_value=None)
+    controller.clients.update = AsyncMock()
+    controller.clients_all.get = MagicMock(return_value=None)
+    controller.clients_all.update = AsyncMock()
+
+    async def _first_refresh(coordinator: UnifiPresenceCoordinator) -> None:
+        coordinator._controller = controller
+
+    with (
+        patch.object(
+            UnifiPresenceCoordinator,
+            "async_config_entry_first_refresh",
+            autospec=True,
+            side_effect=_first_refresh,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock(side_effect=RuntimeError("boom"))),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        await async_setup_entry(hass, entry)
+
+    owned_session.detach.assert_called_once_with()
 
 
 async def test_shutdown_event_stops_websocket(

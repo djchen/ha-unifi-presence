@@ -427,6 +427,36 @@ async def test_user_step_single_site_reuses_site_fetch_for_client_discovery(hass
     create_controller.assert_called_once()
 
 
+async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: HomeAssistant) -> None:
+    """Test single-site client discovery errors are retried on the next submit."""
+    controller = _mock_controller(clients_all_items=[])
+    controller.clients_all.update = AsyncMock(side_effect=Exception("historical clients unavailable"))
+    controller.clients.update = AsyncMock(side_effect=Exception("active clients unavailable"))
+
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
+    retry_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[controller, retry_controller]) as create_controller:
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=USER_STEP_INPUT,
+        )
+
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "site"
+        assert result["errors"] == {"base": "cannot_discover_devices"}
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_SITE: DEFAULT_SITE_ID},
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"
+    assert create_controller.await_count == 2
+
+
 @pytest.mark.parametrize(
     ("host", "expected_unique_id"),
     [

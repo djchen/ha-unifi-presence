@@ -246,10 +246,12 @@ class UnifiPresenceWebsocket:
 
         async def _do_restart() -> None:
             """Restart the runner after the previous task finishes cancelling."""
+            current_task = asyncio.current_task()
             try:
                 await self._async_replace_websocket()
             finally:
-                self._reconnect_task = None
+                if self._reconnect_task is current_task:
+                    self._reconnect_task = None
 
         self._reconnect_task = self.hass.async_create_background_task(_do_restart(), name="unifi_presence_reconnect")
 
@@ -264,6 +266,7 @@ class UnifiPresenceWebsocket:
 
         async def _do_reconnect() -> None:
             """Attempt re-authentication and restart WebSocket."""
+            current_task = asyncio.current_task()
             api = self._get_api()
             if api is None:
                 _LOGGER.debug("No controller available, scheduling retry")
@@ -285,7 +288,8 @@ class UnifiPresenceWebsocket:
             else:
                 await self._async_replace_websocket()
             finally:
-                self._reconnect_task = None
+                if self._reconnect_task is current_task:
+                    self._reconnect_task = None
 
         self._reconnect_task = self.hass.async_create_background_task(_do_reconnect(), name="unifi_presence_reconnect")
 

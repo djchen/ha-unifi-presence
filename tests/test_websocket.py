@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -691,6 +692,80 @@ async def test_reconnect_public_cancels_inflight_reconnect_task(hass: HomeAssist
     assert ws._reconnect_task is None
 
     ws.stop()
+
+
+async def test_reconnect_public_old_task_does_not_clear_new_reconnect_task(hass: HomeAssistant) -> None:
+    """Test an older reconnect task cannot clear a newer reconnect task reference."""
+    ws, controller, _ = _make_websocket(hass)
+    release_restart = asyncio.Event()
+    restart_started = asyncio.Event()
+
+    async def _block_restart() -> None:
+        restart_started.set()
+        await release_restart.wait()
+
+    controller.start_websocket = AsyncMock(side_effect=_block_restart)
+
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
+        ws.start()
+        await asyncio.sleep(0)
+
+    ws.reconnect()
+    first_task = ws._reconnect_task
+    assert first_task is not None
+    await restart_started.wait()
+
+    replacement_task = hass.async_create_background_task(asyncio.sleep(3600), name="replacement_reconnect")
+    ws._reconnect_task = replacement_task
+
+    release_restart.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert ws._reconnect_task is replacement_task
+
+    replacement_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await replacement_task
+
+    await ws.stop_and_wait()
+
+
+async def test_reconnect_after_login_old_task_does_not_clear_new_reconnect_task(hass: HomeAssistant) -> None:
+    """Test an older _reconnect task cannot clear a newer reconnect task reference."""
+    ws, controller, _ = _make_websocket(hass)
+    release_restart = asyncio.Event()
+    restart_started = asyncio.Event()
+
+    async def _block_restart() -> None:
+        restart_started.set()
+        await release_restart.wait()
+
+    controller.start_websocket = AsyncMock(side_effect=_block_restart)
+
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
+        ws.start()
+        await asyncio.sleep(0)
+
+    ws._reconnect()
+    first_task = ws._reconnect_task
+    assert first_task is not None
+    await restart_started.wait()
+
+    replacement_task = hass.async_create_background_task(asyncio.sleep(3600), name="replacement_reconnect")
+    ws._reconnect_task = replacement_task
+
+    release_restart.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert ws._reconnect_task is replacement_task
+
+    replacement_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await replacement_task
+
+    await ws.stop_and_wait()
 
 
 async def test_async_watch_websocket_reconnects_stale_startup(hass: HomeAssistant) -> None:

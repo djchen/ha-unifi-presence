@@ -133,21 +133,23 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
         Exception: Only if *both* client sources fail to update and
             neither store contains cached data.
     """
-    sources_ok = 0
+    historical_refreshed = False
     try:
         await controller.clients_all.update()
-        sources_ok += 1
+        historical_refreshed = True
     except Exception:
         _LOGGER.debug("Failed to refresh historical UniFi clients")
+
+    active_refreshed = False
     try:
         await controller.clients.update()
-        sources_ok += 1
+        active_refreshed = True
     except Exception:
         _LOGGER.debug("Failed to refresh active UniFi clients")
 
-    if sources_ok == 0:
+    if not historical_refreshed and not active_refreshed:
         # Neither update() succeeded — check if the stores have any cached data
-        has_cached = any(True for _ in controller.clients_all) or any(True for _ in controller.clients)
+        has_cached = any(controller.clients_all) or any(controller.clients)
         if not has_cached:
             msg = "Both active and historical client sources failed"
             raise RuntimeError(msg)
@@ -354,6 +356,34 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return None
 
+    async def _async_fetch_selected_site_clients(self, *, log_context: str) -> str | None:
+        """Validate the selected site and refresh its client list."""
+        self._available_clients = {}
+
+        controller, error = await self._async_validate_login(
+            host=self._host,
+            port=self._port,
+            username=self._username,
+            password=self._password,
+            site=self._site,
+            ssl_verify=self._ssl_verify,
+            log_context=log_context,
+        )
+        if error is not None:
+            return error
+
+        assert controller is not None
+
+        try:
+            self._available_clients = await _fetch_all_clients(controller)
+        except Exception:
+            _LOGGER.exception("Failed to fetch client list")
+            return "cannot_discover_devices"
+        finally:
+            await async_close_controller(controller)
+
+        return None
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step: UniFi controller credentials."""
         errors: dict[str, str] = {}
@@ -418,32 +448,22 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if len(self._available_sites) == 1:
                 if self._single_site_client_error is not None:
-                    return self._show_site_form(errors={"base": self._single_site_client_error})
+                    self._single_site_client_error = None
+                    error = await self._async_fetch_selected_site_clients(
+                        log_context="UniFi site client discovery",
+                    )
+                    if error is not None:
+                        self._single_site_client_error = error
+                        return self._show_site_form(errors={"base": error})
                 if not self._available_clients:
                     return self.async_abort(reason="no_clients_available")
                 return await self.async_step_devices()
 
-            controller, error = await self._async_validate_login(
-                host=self._host,
-                port=self._port,
-                username=self._username,
-                password=self._password,
-                site=self._site,
-                ssl_verify=self._ssl_verify,
+            error = await self._async_fetch_selected_site_clients(
                 log_context="UniFi site client discovery",
             )
             if error is not None:
                 return self._show_site_form(errors={"base": error})
-
-            assert controller is not None
-
-            try:
-                self._available_clients = await _fetch_all_clients(controller)
-            except Exception:
-                _LOGGER.exception("Failed to fetch client list")
-                return self._show_site_form(errors={"base": "cannot_discover_devices"})
-            finally:
-                await async_close_controller(controller)
 
             if not self._available_clients:
                 return self.async_abort(reason="no_clients_available")
@@ -451,6 +471,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_devices()
 
         if len(self._available_sites) == 1:
+            if self._single_site_client_error is not None:
+                return self._show_site_form(errors={"base": self._single_site_client_error})
             return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
 
         return self._show_site_form()

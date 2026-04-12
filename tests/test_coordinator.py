@@ -383,6 +383,10 @@ async def test_coordinator_reauth_timeout_raises_update_failed(
 
     mock_coordinator_controller.clients.update_mock.side_effect = _timeout_after_reauth
 
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
 
 async def test_coordinator_normalizes_tracked_macs(hass: HomeAssistant, config_entry: MagicMock) -> None:
     """Test tracked MAC options are trimmed, deduplicated, and lowercased."""
@@ -814,6 +818,51 @@ async def test_process_message_non_dict_data(
 
     message = MagicMock()
     message.data = "not a dict"
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_non_string_mac(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores payloads with non-string MACs."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = {"mac": 123, "last_seen": int(time.time())}
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_non_numeric_last_seen(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores payloads with non-numeric timestamps."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": "now"}
+    coordinator.process_message(message)
+
+    assert coordinator.data is original_data
+
+
+async def test_process_message_bool_last_seen(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that process_message ignores bool last_seen values."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    await coordinator._async_update_data()
+    original_data = coordinator.data
+
+    message = MagicMock()
+    message.data = {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": True}
     coordinator.process_message(message)
 
     assert coordinator.data is original_data

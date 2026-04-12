@@ -71,7 +71,12 @@ async def resolve_controller_site(
 
 
 async def async_close_controller(controller: Controller) -> None:
-    """Detach an aiohttp session owned by this integration."""
+    """Detach an aiohttp session owned by this integration.
+
+    Home Assistant client sessions share a connector, so detach() is the
+    correct cleanup here: it closes the session wrapper without tearing down
+    the shared connector used elsewhere in Home Assistant.
+    """
     owned_session = getattr(controller, _OWNED_SESSION_ATTR, None)
     if owned_session is None or getattr(owned_session, "closed", False):
         return
@@ -116,6 +121,9 @@ async def create_controller(
     try:
         async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
             await controller.login()
+    except asyncio.CancelledError:
+        await async_close_controller(controller)
+        raise
     except Exception:
         await async_close_controller(controller)
         raise

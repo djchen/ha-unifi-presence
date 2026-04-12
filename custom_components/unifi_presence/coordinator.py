@@ -202,18 +202,32 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         raw: object = message.data
         if not isinstance(raw, dict):
             return
-        mac = raw.get("mac", "").lower()
+
+        mac_raw = raw.get("mac")
+        if not isinstance(mac_raw, str):
+            return
+
+        mac = mac_raw.lower()
         if mac not in self._tracked_set:
             return
 
         now = _current_epoch_seconds()
-        last_seen = raw.get("last_seen") or 0
+        last_seen_raw = raw.get("last_seen")
+        if last_seen_raw is None:
+            last_seen: int | float = 0
+        elif isinstance(last_seen_raw, bool) or not isinstance(last_seen_raw, (int, float)):
+            return
+        else:
+            last_seen = last_seen_raw
+
         is_home = (now - last_seen) < self._away_seconds
 
         current_data = self.data
         previous_info = current_data.client_info.get(mac) if current_data is not None else None
-        name = raw.get("name", "")
-        hostname = raw.get("hostname", "")
+        name_raw = raw.get("name")
+        name = name_raw if isinstance(name_raw, str) else ""
+        hostname_raw = raw.get("hostname")
+        hostname = hostname_raw if isinstance(hostname_raw, str) else ""
         info = (
             self._build_client_info(mac, name=name, hostname=hostname)
             if name or hostname or previous_info is None
