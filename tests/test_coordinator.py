@@ -169,6 +169,33 @@ async def test_clients_all_stub_falls_back_to_previous_metadata(
     assert data.client_info[mac]["name"] == "Dan Phone"
 
 
+async def test_clients_all_name_takes_priority_over_previous_info(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that a rename in UniFi propagates to an offline device on the next fallback poll.
+
+    When clients_all supplies a usable name it must win over stale previous_info
+    so that renaming a device in UniFi while it is offline is not silently ignored.
+    """
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    first_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(first_data)
+
+    # Device goes offline; user renames it in UniFi to "Dan's iPhone"
+    mock_coordinator_controller.clients.clear()
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan's iPhone")
+
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is False
+    # clients_all has the updated name and must win over the stale previous_info
+    assert data.client_info[mac]["name"] == "Dan's iPhone"
+
+
 async def test_coordinator_site_id_uses_entry_id_when_unique_id_missing(
     hass: HomeAssistant, config_entry: MagicMock
 ) -> None:
