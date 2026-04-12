@@ -46,6 +46,13 @@ async def resolve_controller_site(
     if site == DEFAULT_SITE:
         return site
 
+    # Fast path: skip the extra login when we can determine the stored site
+    # value is already the short name.  UniFi site_ids contain underscores
+    # (e.g. "5f1a2b3c_default"), so a unique_id *without* underscores is not
+    # a site_id and the stored site value can be trusted as-is.  When the
+    # unique_id *does* contain underscores (legacy entries that stored
+    # site_id instead of short name), we fall through to the site lookup
+    # below which requires an additional login.
     if unique_id is not None and site != unique_id and "_" not in unique_id:
         return site
 
