@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import timedelta
+from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import aiounifi
@@ -331,13 +332,13 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                     translation_domain=DOMAIN,
                     translation_key="credentials_rejected",
                 ) from err
-            except (TimeoutError, aiounifi.AiounifiException) as err:
+            except (TimeoutError, aiounifi.AiounifiException, JSONDecodeError) as err:
                 raise self._connect_error() from err
 
             # Controller was replaced — restart websocket so it binds to the new one
             if self.websocket is not None:
                 self.websocket.reconnect()
-        except (TimeoutError, aiounifi.AiounifiException) as err:
+        except (TimeoutError, aiounifi.AiounifiException, JSONDecodeError) as err:
             raise self._connect_error() from err
 
         _LOGGER.debug("Fallback poll for tracked device(s)")
