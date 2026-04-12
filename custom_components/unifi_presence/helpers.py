@@ -57,7 +57,6 @@ async def resolve_controller_site(
         password,
         "",
         ssl_verify,
-        transient=True,
     )
     try:
         await controller.sites.update()
@@ -88,7 +87,6 @@ async def create_controller(
     password: str,
     site: str,
     ssl_verify: bool,
-    transient: bool = False,
 ) -> Controller:
     """Create, authenticate, and return an aiounifi Controller."""
     if ssl_verify:

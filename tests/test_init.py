@@ -119,7 +119,7 @@ async def test_async_unload_entry_releases_controller_after_successful_platform_
 async def test_shutdown_event_stops_websocket(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test that firing EVENT_HOMEASSISTANT_STOP calls websocket.stop()."""
+    """Test that shutdown stops the websocket and releases the controller."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
@@ -129,11 +129,13 @@ async def test_shutdown_event_stops_websocket(
     ws = entry.runtime_data.websocket
     assert ws is not None
     ws.stop = MagicMock(wraps=ws.stop)
+    entry.runtime_data.async_shutdown = AsyncMock()
 
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
 
     ws.stop.assert_called_once()
+    entry.runtime_data.async_shutdown.assert_awaited_once()
 
 
 async def test_websocket_starts_after_shutdown_registration(

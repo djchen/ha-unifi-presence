@@ -202,8 +202,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> tuple[Controller | None, str | None]:
         """Attempt controller login and return (controller, error_key)."""
         try:
+            resolved_site = site
             if unique_id is not None:
-                site = await resolve_controller_site(
+                resolved_site = await resolve_controller_site(
                     self.hass,
                     host=host,
                     port=port,
@@ -220,9 +221,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 port,
                 username,
                 password,
-                site,
+                resolved_site,
                 ssl_verify,
-                transient=True,
             )
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
@@ -625,7 +625,6 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                     data[CONF_PASSWORD],
                     site,
                     data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
-                    transient=True,
                 )
                 close_controller = True
             return await _fetch_all_clients(controller), False

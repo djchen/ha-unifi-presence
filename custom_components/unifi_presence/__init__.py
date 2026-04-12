@@ -71,9 +71,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
 
     @callback
     def _async_shutdown(_event: object) -> None:
-        """Stop WebSocket on Home Assistant shutdown."""
+        """Stop runtime listeners and release owned sessions on shutdown."""
         if coordinator.websocket is not None:
             coordinator.websocket.stop()
+        hass.async_create_task(coordinator.async_shutdown())
 
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown))
 

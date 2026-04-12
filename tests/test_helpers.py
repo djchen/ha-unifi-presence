@@ -80,7 +80,7 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     assert configuration.call_args.kwargs["ssl_context"] is False
 
 
-async def test_create_controller_closes_transient_ssl_false_session(hass: HomeAssistant) -> None:
+async def test_create_controller_closes_ssl_false_owned_session(hass: HomeAssistant) -> None:
     """Test SSL-disabled controllers detach their owned session on cleanup."""
     session = MagicMock()
     session.closed = False
@@ -103,7 +103,6 @@ async def test_create_controller_closes_transient_ssl_false_session(hass: HomeAs
             password="password",
             site="office",
             ssl_verify=False,
-            transient=True,
         )
         await async_close_controller(result)
 
@@ -112,7 +111,7 @@ async def test_create_controller_closes_transient_ssl_false_session(hass: HomeAs
     session.detach.assert_called_once_with()
 
 
-async def test_create_controller_closes_transient_session_on_login_failure(hass: HomeAssistant) -> None:
+async def test_create_controller_closes_owned_session_on_login_failure(hass: HomeAssistant) -> None:
     """Test SSL-disabled sessions are detached if login fails."""
     session = MagicMock()
     session.closed = False
@@ -134,7 +133,6 @@ async def test_create_controller_closes_transient_session_on_login_failure(hass:
             password="password",
             site="office",
             ssl_verify=False,
-            transient=True,
         )
 
     session.detach.assert_called_once_with()
