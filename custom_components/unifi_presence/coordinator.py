@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import aiounifi
 from aiounifi.models.message import Message
@@ -197,6 +197,34 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             "mac": mac,
         }
 
+    def _resolve_offline_client_info(
+        self,
+        mac: str,
+        previous_info: dict[str, ClientInfo],
+        clients_all: Any,
+    ) -> ClientInfo:
+        """Resolve display metadata for an offline client.
+
+        Priority order: historical metadata from ``clients_all`` (so that
+        renames made in UniFi while a device is offline propagate on the next
+        fallback poll), then prior coordinator data (avoids a bare-MAC
+        regression when clients_all has no record for the device), then the
+        bare MAC address as a last resort.
+        """
+        historical = clients_all.get(mac)
+        if historical is not None and (historical.name or historical.hostname):
+            return self._build_client_info(
+                mac,
+                name=historical.name or "",
+                hostname=historical.hostname or "",
+            )
+
+        prior = previous_info.get(mac)
+        if prior is not None:
+            return prior
+
+        return self._build_client_info(mac)
+
     def process_message(self, message: Message) -> None:
         """Handle a sta:sync WebSocket message for a tracked client."""
         raw: object = message.data
@@ -334,17 +362,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 )
             else:
                 is_home = False
-                # Prefer historical metadata from clients_all, then prior
-                # coordinator data, then bare MAC as last resort.
-                historical = clients_all.get(mac)
-                if historical is not None and (historical.name or historical.hostname):
-                    client_info[mac] = self._build_client_info(
-                        mac,
-                        name=historical.name or "",
-                        hostname=historical.hostname or "",
-                    )
-                else:
-                    client_info[mac] = previous_info.get(mac, self._build_client_info(mac))
+                client_info[mac] = self._resolve_offline_client_info(mac, previous_info, clients_all)
 
             device_states[mac] = is_home
 

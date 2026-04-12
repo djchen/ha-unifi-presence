@@ -16,7 +16,7 @@
           "port": "Usually 443 or 8443.",
           "username": "A local user account on the UniFi controller.",
           "password": "Password for the UniFi user account.",
-          "ssl_verify": "Enable to verify the SSL certificate. Disable for self-signed certificates."
+          "ssl_verify": "Enable to verify the SSL certificate. Disable if your controller has a self-signed certificate."
         }
       },
       "site": {
@@ -53,7 +53,7 @@
           "port": "Usually 443 or 8443.",
           "username": "A local user account on the UniFi controller.",
           "password": "Password for the UniFi user account.",
-          "ssl_verify": "Enable to verify the SSL certificate. Disable for self-signed certificates."
+          "ssl_verify": "Enable to verify the SSL certificate. Disable if your controller has a self-signed certificate."
         }
       },
       "devices": {
