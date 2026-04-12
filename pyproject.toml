@@ -28,7 +28,7 @@ norecursedirs = [".git", ".venv"]
 addopts = [
     "--cov=custom_components.unifi_presence",
     "--cov-report=term-missing",
-    "--cov-fail-under=95",
+    "--cov-fail-under=98",
 ]
 
 [tool.ruff]
