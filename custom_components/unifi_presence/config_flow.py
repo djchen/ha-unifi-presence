@@ -198,9 +198,22 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         site: str,
         ssl_verify: bool,
         log_context: str,
+        unique_id: str | None = None,
     ) -> tuple[Controller | None, str | None]:
         """Attempt controller login and return (controller, error_key)."""
         try:
+            if unique_id is not None:
+                site = await resolve_controller_site(
+                    self.hass,
+                    host=host,
+                    port=port,
+                    username=username,
+                    password=password,
+                    site=site,
+                    ssl_verify=ssl_verify,
+                    unique_id=unique_id,
+                )
+
             controller = await create_controller(
                 self.hass,
                 host,
@@ -463,6 +476,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 site=self._site,
                 ssl_verify=self._ssl_verify,
                 log_context="UniFi re-authentication",
+                unique_id=self._get_reauth_entry().unique_id,
             )
             if error is not None:
                 errors["base"] = error

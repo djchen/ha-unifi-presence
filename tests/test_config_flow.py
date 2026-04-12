@@ -1376,6 +1376,42 @@ async def test_reauth_success(hass: HomeAssistant, config_entry: MockConfigEntry
     assert config_entry.data["password"] == "new_pass"
 
 
+async def test_reauth_normalizes_legacy_stored_site_id_before_login(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Test reauth resolves legacy stored site IDs to the short site name."""
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={**config_entry.data, CONF_SITE: OFFICE_SITE_ID},
+        unique_id="192.168.1.1_office",
+    )
+
+    site_lookup_controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
+    reauth_controller = _mock_controller()
+
+    result = await config_entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+
+    with (
+        patch(
+            "custom_components.unifi_presence.helpers.create_controller",
+            return_value=site_lookup_controller,
+        ) as lookup_create_controller,
+        patch(PATCH_CREATE_CONTROLLER, return_value=reauth_controller) as create_controller,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"username": "new_admin", "password": "new_pass"},
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert (
+        _site_arg_from_call(lookup_create_controller.await_args.args, lookup_create_controller.await_args.kwargs) == ""
+    )
+    assert _site_arg_from_call(create_controller.await_args.args, create_controller.await_args.kwargs) == "office"
+
+
 async def test_reauth_invalid_auth(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     """Test that invalid credentials show an error in the reauth form."""
     result = await config_entry.start_reauth_flow(hass)

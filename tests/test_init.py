@@ -87,13 +87,33 @@ async def test_async_unload_entry_keeps_websocket_running_when_platform_unload_f
     entry = _make_config_entry(hass)
     websocket = MagicMock()
     websocket.stop_and_wait = AsyncMock()
-    entry.runtime_data = MagicMock(websocket=websocket)
+    runtime_data = MagicMock(websocket=websocket)
+    runtime_data.async_shutdown = AsyncMock()
+    entry.runtime_data = runtime_data
 
     with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=False)):
         unloaded = await async_unload_entry(hass, entry)
 
     assert unloaded is False
     websocket.stop_and_wait.assert_not_awaited()
+    runtime_data.async_shutdown.assert_not_awaited()
+
+
+async def test_async_unload_entry_releases_controller_after_successful_platform_unload(hass: HomeAssistant) -> None:
+    """Test unload releases the runtime controller after platform unload succeeds."""
+    entry = _make_config_entry(hass)
+    websocket = MagicMock()
+    websocket.stop_and_wait = AsyncMock()
+    runtime_data = MagicMock(websocket=websocket)
+    runtime_data.async_shutdown = AsyncMock()
+    entry.runtime_data = runtime_data
+
+    with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)):
+        unloaded = await async_unload_entry(hass, entry)
+
+    assert unloaded is True
+    websocket.stop_and_wait.assert_awaited_once()
+    runtime_data.async_shutdown.assert_awaited_once()
 
 
 async def test_shutdown_event_stops_websocket(

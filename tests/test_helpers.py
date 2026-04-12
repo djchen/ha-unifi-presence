@@ -73,6 +73,7 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     assert call_args.args[0] is hass
     call_kwargs = call_args.kwargs
     assert call_kwargs["verify_ssl"] is False
+    assert call_kwargs["auto_cleanup"] is False
     assert "cookie_jar" in call_kwargs
     jar = call_kwargs["cookie_jar"]
     assert getattr(jar, "_unsafe", False) is True
@@ -80,10 +81,10 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
 
 
 async def test_create_controller_closes_transient_ssl_false_session(hass: HomeAssistant) -> None:
-    """Test transient SSL-disabled controllers own and close their session."""
+    """Test SSL-disabled controllers detach their owned session on cleanup."""
     session = MagicMock()
     session.closed = False
-    session.close = AsyncMock()
+    session.detach = MagicMock()
     controller = MagicMock()
     controller.login = AsyncMock()
 
@@ -108,14 +109,14 @@ async def test_create_controller_closes_transient_ssl_false_session(hass: HomeAs
 
     assert result is controller
     assert create_session.call_args.kwargs["auto_cleanup"] is False
-    session.close.assert_awaited_once()
+    session.detach.assert_called_once_with()
 
 
 async def test_create_controller_closes_transient_session_on_login_failure(hass: HomeAssistant) -> None:
-    """Test transient SSL-disabled sessions are cleaned up if login fails."""
+    """Test SSL-disabled sessions are detached if login fails."""
     session = MagicMock()
     session.closed = False
-    session.close = AsyncMock()
+    session.detach = MagicMock()
     controller = MagicMock()
     controller.login = AsyncMock(side_effect=TimeoutError)
 
@@ -136,4 +137,4 @@ async def test_create_controller_closes_transient_session_on_login_failure(hass:
             transient=True,
         )
 
-    session.close.assert_awaited_once()
+    session.detach.assert_called_once_with()

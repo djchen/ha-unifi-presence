@@ -27,7 +27,7 @@ from .const import (
     DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import create_controller, resolve_controller_site
+from .helpers import async_close_controller, create_controller, resolve_controller_site
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
@@ -149,6 +149,13 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     def controller(self) -> Controller | None:
         """Return the cached controller, if available."""
         return self._controller
+
+    async def async_shutdown(self) -> None:
+        """Release the current controller session, if owned by this integration."""
+        controller = self._controller
+        self._controller = None
+        if controller is not None:
+            await async_close_controller(controller)
 
     async def _ensure_controller(self) -> Controller:
         """Create or re-authenticate the controller connection."""
@@ -273,7 +280,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             # Session expired or credentials rejected — force re-auth
             _LOGGER.info("UniFi session expired, re-authenticating")
-            self._controller = None
+            await self.async_shutdown()
             try:
                 controller = await self._ensure_controller()
                 await self._refresh_clients(controller)

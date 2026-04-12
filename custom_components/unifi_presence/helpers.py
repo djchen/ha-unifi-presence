@@ -72,12 +72,12 @@ async def resolve_controller_site(
 
 
 async def async_close_controller(controller: Controller) -> None:
-    """Close a transient controller session owned by this integration."""
+    """Detach an aiohttp session owned by this integration."""
     owned_session = getattr(controller, _OWNED_SESSION_ATTR, None)
     if owned_session is None or getattr(owned_session, "closed", False):
         return
 
-    await owned_session.close()
+    owned_session.detach()
 
 
 async def create_controller(
@@ -98,7 +98,7 @@ async def create_controller(
         session = async_create_clientsession(
             hass,
             verify_ssl=False,
-            auto_cleanup=not transient,
+            auto_cleanup=False,
             cookie_jar=CookieJar(unsafe=True),
         )
         ssl_context = None
@@ -112,7 +112,7 @@ async def create_controller(
         ssl_context=ssl_context if ssl_context is not None else False,
     )
     controller = Controller(config)
-    if transient and not ssl_verify:
+    if not ssl_verify:
         setattr(controller, _OWNED_SESSION_ATTR, session)
 
     try:
