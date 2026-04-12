@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Coroutine
+from json import JSONDecodeError
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -236,6 +237,21 @@ async def test_coordinator_update_failed(
         await coordinator._async_update_data()
 
 
+async def test_coordinator_invalid_json_raises_update_failed(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that truncated JSON responses are treated as transient failures."""
+    mock_coordinator_controller.clients.update_mock.side_effect = JSONDecodeError(
+        "unexpected end of data",
+        '{"meta":{"rc":"ok"},"data":[',
+        27,
+    )
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+
 async def test_coordinator_initial_timeout_raises_update_failed(
     hass: HomeAssistant,
     config_entry: MagicMock,
@@ -387,6 +403,32 @@ async def test_coordinator_reauth_network_failure_raises_update_failed(
     call_count = 0
 
     mock_coordinator_controller.clients.update_mock.side_effect = _network_fails_after_reauth
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+
+@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
+async def test_coordinator_reauth_invalid_json_raises_update_failed(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock, exception: type[Exception]
+) -> None:
+    """Test that truncated JSON after re-auth remains a transient failure."""
+
+    async def _invalid_json_after_reauth() -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise exception
+        raise JSONDecodeError(
+            "unexpected end of data",
+            '{"meta":{"rc":"ok"},"data":[',
+            27,
+        )
+
+    call_count = 0
+
+    mock_coordinator_controller.clients.update_mock.side_effect = _invalid_json_after_reauth
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(UpdateFailed):
