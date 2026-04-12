@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.unifi_presence import async_unload_entry
+from custom_components.unifi_presence import _async_remove_deselected_entities, async_unload_entry
 from custom_components.unifi_presence.const import CONF_TRACKED_DEVICES, DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
@@ -293,3 +293,13 @@ async def test_options_update_keeps_still_selected_missing_entity_registry_entri
     await hass.async_block_till_done()
 
     assert entity_registry.async_get(missing_entry.entity_id) is not None
+
+
+async def test_remove_deselected_entities_noop_when_removed_macs_empty(hass: HomeAssistant) -> None:
+    """Test empty deselection sets skip entity-registry cleanup work."""
+    entry = _make_config_entry(hass)
+
+    with patch("custom_components.unifi_presence.er.async_get") as async_get:
+        _async_remove_deselected_entities(hass, entry, set())
+
+    async_get.assert_not_called()

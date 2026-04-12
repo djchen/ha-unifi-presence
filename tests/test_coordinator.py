@@ -407,6 +407,32 @@ async def test_process_message_updates_offline_client(
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
 
 
+async def test_process_message_noop_for_equivalent_update(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test repeated equivalent websocket updates do not publish redundant data."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    initial_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(initial_data)
+    coordinator.async_update_listeners = MagicMock()
+
+    message = MagicMock()
+    message.data = {
+        "mac": mac,
+        "name": "Dan Phone",
+        "last_seen": now,
+    }
+
+    coordinator.process_message(message)
+
+    assert coordinator.data is initial_data
+    coordinator.async_update_listeners.assert_not_called()
+
+
 async def test_process_message_preserves_metadata_when_offline_client_reappears(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:

@@ -56,6 +56,24 @@ async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
     await ws.stop_and_wait()
 
 
+async def test_start_websocket_is_idempotent_while_runner_active(hass: HomeAssistant) -> None:
+    """Test _start_websocket() does not create a second runner while active."""
+    ws, controller, _ = _make_websocket(hass)
+    hang = asyncio.Event()
+    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+
+    ws._start_websocket()
+    first_task = ws.ws_task
+
+    ws._start_websocket()
+    await asyncio.sleep(0)
+
+    assert ws.ws_task is first_task
+    controller.start_websocket.assert_awaited_once()
+
+    await ws.stop_and_wait()
+
+
 async def test_stop_cancels_task_and_unsubscribes(hass: HomeAssistant) -> None:
     """Test that stop() cancels the WS task and unsubscribes."""
     ws, controller, _ = _make_websocket(hass)
@@ -303,6 +321,18 @@ async def test_stop_cancels_pending_retry(hass: HomeAssistant) -> None:
     assert ws._cancel_retry is None
 
 
+async def test_clear_retry_cancels_active_handle(hass: HomeAssistant) -> None:
+    """Test _clear_retry() cancels and clears an active retry handle."""
+    ws, _, _ = _make_websocket(hass)
+    cancel_retry = MagicMock()
+    ws._cancel_retry = cancel_retry
+
+    ws._clear_retry()
+
+    cancel_retry.assert_called_once()
+    assert ws._cancel_retry is None
+
+
 async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None:
     """Test that the subscribe callback forwards messages to on_message."""
     ws, controller, on_message = _make_websocket(hass)
@@ -384,6 +414,31 @@ async def test_async_watch_websocket_logs_health(hass: HomeAssistant) -> None:
     ws._async_watch_websocket(None)
 
     # No assertion needed — just verify it doesn't raise
+
+
+async def test_set_available_noop_when_value_unchanged(hass: HomeAssistant) -> None:
+    """Test _set_available() leaves state untouched on no-op updates."""
+    ws, _, _ = _make_websocket(hass)
+    ws.available = True
+
+    ws._set_available(True)
+
+    assert ws.available is True
+
+
+async def test_async_watch_websocket_reconnects_done_task_while_available(hass: HomeAssistant) -> None:
+    """Test health checks reconnect when the runner is done but still marked available."""
+    ws, controller, _ = _make_websocket(hass)
+    ws.available = True
+    finished_task = hass.async_create_task(asyncio.sleep(0))
+    await finished_task
+    ws.ws_task = finished_task
+    controller.connectivity.ws_message_received = datetime.now(UTC)
+
+    with patch.object(ws, "_reconnect") as mock_reconnect:
+        ws._async_watch_websocket(None)
+
+    mock_reconnect.assert_called_once()
 
 
 async def test_websocket_becomes_available_after_runner_confirms_session(hass: HomeAssistant) -> None:

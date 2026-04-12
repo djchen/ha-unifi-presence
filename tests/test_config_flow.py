@@ -98,6 +98,14 @@ def _make_mock_site(site_id: str, name: str, description: str = "") -> MagicMock
     return site
 
 
+def _site_arg_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    """Return the `site` argument from a mocked create_controller() call."""
+    if "site" in kwargs:
+        return str(kwargs["site"])
+
+    return str(args[5])
+
+
 def _get_tracked_device_options(result: dict[str, Any]) -> dict[str, str]:
     """Return the tracked device selector options from a flow result."""
     schema = result["data_schema"].schema
@@ -244,7 +252,7 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
     )
 
     def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        site = args[5] if len(args) > 5 else kwargs["site"]
+        site = _site_arg_from_call(args, kwargs)
         if site == "default":
             raise aiounifi.Unauthorized
         return controller
@@ -255,7 +263,9 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
-    assert not any(call.args[5] == "default" for call in mock_create_controller.call_args_list)
+    assert not any(
+        _site_arg_from_call(call.args, call.kwargs) == "default" for call in mock_create_controller.call_args_list
+    )
 
 
 async def test_site_selection_stale_site_id_shows_user_error(hass: HomeAssistant) -> None:
@@ -729,7 +739,7 @@ async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass:
     controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
 
     def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        site = args[5] if len(args) > 5 else kwargs["site"]
+        site = _site_arg_from_call(args, kwargs)
         if site == "default":
             raise aiounifi.Unauthorized
         return controller
@@ -750,7 +760,8 @@ async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass:
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["site"] == "office"
     assert entry.unique_id == OFFICE_SITE_ID
-    assert mock_create_controller.call_args_list[0].args[5] == "office"
+    first_call = mock_create_controller.call_args_list[0]
+    assert _site_arg_from_call(first_call.args, first_call.kwargs) == "office"
 
 
 @pytest.mark.parametrize(
@@ -1013,8 +1024,47 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
-    assert lookup_create_controller.await_args.args[5] == ""
-    assert create_controller.await_args.args[5] == "office"
+    assert (
+        _site_arg_from_call(lookup_create_controller.await_args.args, lookup_create_controller.await_args.kwargs) == ""
+    )
+    assert _site_arg_from_call(create_controller.await_args.args, create_controller.await_args.kwargs) == "office"
+
+
+async def test_reconfigure_flow_second_login_failure_after_site_selection(hass: HomeAssistant) -> None:
+    """Test reconfigure shows a site-step error when selected-site login fails."""
+    entry = _make_reconfigure_entry(hass)
+    site_list_controller = _mock_controller(
+        sites=[
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+        ]
+    )
+
+    with patch(
+        PATCH_CREATE_CONTROLLER,
+        side_effect=[site_list_controller, aiounifi.LoginRequired],
+    ):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": MOCK_CONFIG_DATA["host"],
+                "port": MOCK_CONFIG_DATA["port"],
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "site"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_SITE: DEFAULT_SITE_ID},
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+    assert result["errors"] == {"base": "invalid_auth"}
 
 
 async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, options_entry: MockConfigEntry) -> None:
