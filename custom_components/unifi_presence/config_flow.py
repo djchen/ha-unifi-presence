@@ -651,7 +651,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                 close_controller = True
             return await _fetch_all_clients(controller), False
         except Exception:
-            _LOGGER.warning("Could not fetch UniFi clients for options flow")
+            _LOGGER.exception("Could not fetch UniFi clients for options flow")
             return {}, True
         finally:
             if close_controller and controller is not None:
