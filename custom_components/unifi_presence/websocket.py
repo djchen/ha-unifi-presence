@@ -149,8 +149,10 @@ class UnifiPresenceWebsocket:
                     self._clear_retry()
 
                 await websocket_task
-            except aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError:
-                _LOGGER.error("WebSocket setup failed")
+            except aiohttp.ClientConnectorError as err:
+                _LOGGER.error("WebSocket connector failed: %s", err)
+            except aiohttp.WSServerHandshakeError as err:
+                _LOGGER.error("WebSocket handshake failed with status %s: %s", err.status, err)
             except aiounifi.WebsocketError:
                 _LOGGER.error("WebSocket disconnected")
             except asyncio.CancelledError:

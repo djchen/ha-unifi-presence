@@ -27,7 +27,7 @@ from custom_components.unifi_presence.const import (
     DOMAIN,
 )
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client
+from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client, make_mock_controller
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.config_flow.create_controller"
 TRANSLATIONS_ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "unifi_presence"
@@ -81,25 +81,12 @@ def _mock_controller(
     sites: list[Any] | None = None,
 ) -> MagicMock:
     """Create a mock aiounifi Controller."""
-    controller = MagicMock()
-    controller.login = AsyncMock(side_effect=login_side_effect)
-    controller.start_websocket = AsyncMock()
-    controller.clients_all = MagicMock()
-    controller.clients_all.update = AsyncMock()
-    controller.clients_all.items.return_value = clients_all_items or []
-    controller.clients_all.__iter__ = lambda self: iter(k for k, _v in (clients_all_items or []))
-    controller.clients = MagicMock()
-    controller.clients.update = AsyncMock()
-    controller.clients.items.return_value = clients_items or []
-    controller.clients.__iter__ = lambda self: iter(k for k, _v in (clients_items or []))
-    controller.sites = MagicMock()
-    controller.sites.update = AsyncMock()
-    controller.sites.values.return_value = (
-        sites if sites is not None else [_make_mock_site(DEFAULT_SITE_ID, "default", "Home")]
+    return make_mock_controller(
+        login_side_effect=login_side_effect,
+        clients_all_items=clients_all_items,
+        clients_items=clients_items,
+        sites=sites if sites is not None else [_make_mock_site(DEFAULT_SITE_ID, "default", "Home")],
     )
-    controller.messages.subscribe = MagicMock(return_value=MagicMock())
-    controller.connectivity = MagicMock()
-    return controller
 
 
 def _make_mock_site(site_id: str, name: str, description: str = "") -> MagicMock:
@@ -411,6 +398,23 @@ async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
     assert result["data"]["site"] == "default"
     assert result["result"].unique_id == DEFAULT_SITE_ID
     assert "aa:bb:cc:dd:ee:ff" in result["options"][CONF_TRACKED_DEVICES]
+
+
+async def test_user_step_single_site_reuses_site_fetch_for_client_discovery(hass: HomeAssistant) -> None:
+    """Test single-site setup does not perform a second controller login."""
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
+    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller:
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=USER_STEP_INPUT,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"
+    create_controller.assert_called_once()
 
 
 @pytest.mark.parametrize(

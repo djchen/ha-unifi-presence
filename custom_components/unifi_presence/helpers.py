@@ -17,6 +17,7 @@ from homeassistant.util.ssl import client_context as ha_client_context
 from .const import DEFAULT_SITE
 
 _OWNED_SESSION_ATTR = "_unifi_presence_owned_session"
+CONTROLLER_LOGIN_TIMEOUT = 10
 
 
 def format_config_entry_title(site_title: str, host: str) -> str:
@@ -115,7 +116,7 @@ async def create_controller(
         setattr(controller, _OWNED_SESSION_ATTR, session)
 
     try:
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
             await controller.login()
     except Exception:
         await async_close_controller(controller)

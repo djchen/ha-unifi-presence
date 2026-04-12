@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL, CONF_SITE
+from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL, CONF_SITE, CONF_TRACKED_DEVICES
 from custom_components.unifi_presence.coordinator import (
     UnifiPresenceCoordinator,
     UnifiPresenceData,
@@ -138,7 +138,7 @@ async def test_clients_all_failure_uses_cached_data(
     mock_coordinator_controller.clients.clear()
     # Pre-populate clients_all cache, then make update fail on next call
     mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
-    mock_coordinator_controller.clients_all.update_async.side_effect = Exception("network")
+    mock_coordinator_controller.clients_all.update_mock.side_effect = Exception("network")
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     data = await coordinator._async_update_data()
@@ -187,7 +187,7 @@ async def test_coordinator_reauth_on_session_error(
     """Test that the coordinator re-authenticates on LoginRequired or Unauthorized."""
     now = int(time.time())
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
-    mock_coordinator_controller.clients.update_async.side_effect = _make_reauth_side_effect(exception, recover=True)
+    mock_coordinator_controller.clients.update_mock.side_effect = _make_reauth_side_effect(exception, recover=True)
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
@@ -202,7 +202,7 @@ async def test_coordinator_update_failed(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
     """Test that UpdateFailed is raised on persistent AiounifiException."""
-    mock_coordinator_controller.clients.update_async.side_effect = aiounifi.AiounifiException("connection lost")
+    mock_coordinator_controller.clients.update_mock.side_effect = aiounifi.AiounifiException("connection lost")
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(UpdateFailed):
@@ -289,7 +289,7 @@ async def test_coordinator_reauth_failure_raises_config_entry_auth_failed(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock, exception: type[Exception]
 ) -> None:
     """Test that persistent credential failure after re-auth raises ConfigEntryAuthFailed."""
-    mock_coordinator_controller.clients.update_async.side_effect = _make_reauth_side_effect(exception, recover=False)
+    mock_coordinator_controller.clients.update_mock.side_effect = _make_reauth_side_effect(exception, recover=False)
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(ConfigEntryAuthFailed):
@@ -311,7 +311,7 @@ async def test_coordinator_reauth_network_failure_raises_update_failed(
 
     call_count = 0
 
-    mock_coordinator_controller.clients.update_async.side_effect = _network_fails_after_reauth
+    mock_coordinator_controller.clients.update_mock.side_effect = _network_fails_after_reauth
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     with pytest.raises(UpdateFailed):
@@ -333,11 +333,28 @@ async def test_coordinator_reauth_timeout_raises_update_failed(
 
     call_count = 0
 
-    mock_coordinator_controller.clients.update_async.side_effect = _timeout_after_reauth
+    mock_coordinator_controller.clients.update_mock.side_effect = _timeout_after_reauth
+
+
+async def test_coordinator_normalizes_tracked_macs(hass: HomeAssistant, config_entry: MagicMock) -> None:
+    """Test tracked MAC options are trimmed, deduplicated, and lowercased."""
+    config_entry.options = {
+        **MOCK_OPTIONS,
+        CONF_TRACKED_DEVICES: [
+            " AA:BB:CC:DD:EE:FF ",
+            "",
+            "aa:bb:cc:dd:ee:ff",
+            "11:22:33:44:55:66",
+            "  ",
+        ],
+    }
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
+
+    assert coordinator.tracked_devices == (
+        "aa:bb:cc:dd:ee:ff",
+        "11:22:33:44:55:66",
+    )
 
 
 async def test_process_message_updates_state(

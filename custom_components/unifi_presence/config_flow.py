@@ -180,6 +180,13 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._available_sites: dict[str, Any] = {}
         self._available_clients: dict[str, str] = {}
         self._site_step_target: str = "user"
+        self._single_site_client_error: str | None = None
+
+    def _set_selected_site(self, site: Any) -> None:
+        """Persist the currently selected site metadata on the flow."""
+        self._site_id = site.site_id
+        self._site = site.name
+        self._site_title = _site_title(site)
 
     async def _async_validate_login(
         self,
@@ -315,6 +322,17 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         try:
             self._available_sites = await _fetch_sites(controller)
+            self._available_clients = {}
+            self._single_site_client_error = None
+
+            if self._site_step_target == "user" and len(self._available_sites) == 1:
+                site_obj = next(iter(self._available_sites.values()))
+                self._set_selected_site(site_obj)
+                try:
+                    self._available_clients = await _fetch_all_clients(controller)
+                except Exception:
+                    _LOGGER.exception("Failed to fetch client list")
+                    self._single_site_client_error = "cannot_discover_devices"
         except Exception:
             _LOGGER.exception("Failed to fetch site list")
             return "cannot_connect"
@@ -377,15 +395,20 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if site is None:
                 return self._show_site_form(errors={"base": "invalid_site"})
 
-            self._site_id = site.site_id
-            self._site = site.name
-            self._site_title = _site_title(site)
+            self._set_selected_site(site)
 
             if self._site_step_target == "reconfigure":
                 return await self._async_finish_reconfigure_site_selection(site)
 
             await self.async_set_unique_id(self._site_id)
             self._abort_if_unique_id_configured()
+
+            if len(self._available_sites) == 1:
+                if self._single_site_client_error is not None:
+                    return self._show_site_form(errors={"base": self._single_site_client_error})
+                if not self._available_clients:
+                    return self.async_abort(reason="no_clients_available")
+                return await self.async_step_devices()
 
             controller, error = await self._async_validate_login(
                 host=self._host,

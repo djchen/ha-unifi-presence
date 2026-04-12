@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import aiohttp
 import aiounifi
@@ -109,15 +109,19 @@ async def test_connector_error_sets_unavailable(hass: HomeAssistant) -> None:
         ),
     )
 
-    with patch(
-        "custom_components.unifi_presence.websocket.async_call_later",
-        return_value=MagicMock(),
+    with (
+        patch(
+            "custom_components.unifi_presence.websocket.async_call_later",
+            return_value=MagicMock(),
+        ),
+        patch("custom_components.unifi_presence.websocket._LOGGER") as logger,
     ):
         ws.start()
         for _ in range(5):
             await asyncio.sleep(0)
 
     assert ws.available is False
+    logger.error.assert_any_call("WebSocket connector failed: %s", ANY)
 
     ws.stop()
 
@@ -438,16 +442,20 @@ async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
         ),
     )
 
-    with patch(
-        "custom_components.unifi_presence.websocket.async_call_later",
-        return_value=MagicMock(),
-    ) as mock_call_later:
+    with (
+        patch(
+            "custom_components.unifi_presence.websocket.async_call_later",
+            return_value=MagicMock(),
+        ) as mock_call_later,
+        patch("custom_components.unifi_presence.websocket._LOGGER") as logger,
+    ):
         ws.start()
         for _ in range(5):
             await asyncio.sleep(0)
 
     assert ws.available is False
     mock_call_later.assert_called_once()
+    logger.error.assert_any_call("WebSocket handshake failed with status %s: %s", 403, ANY)
 
     ws.stop()
 
