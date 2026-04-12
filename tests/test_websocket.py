@@ -53,7 +53,7 @@ async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
     assert ws.ws_task is not None
     assert ws.available is False
 
-    ws.stop()
+    await ws.stop_and_wait()
 
 
 async def test_stop_cancels_task_and_unsubscribes(hass: HomeAssistant) -> None:
@@ -64,7 +64,7 @@ async def test_stop_cancels_task_and_unsubscribes(hass: HomeAssistant) -> None:
     assert ws.ws_task is not None
 
     unsub = controller.messages.subscribe.return_value
-    ws.stop()
+    await ws.stop_and_wait()
 
     unsub.assert_called_once()
     assert ws.available is False
@@ -125,30 +125,114 @@ async def test_connector_error_sets_unavailable(hass: HomeAssistant) -> None:
 async def test_reconnect_relogins_and_restarts_ws(hass: HomeAssistant) -> None:
     """Test that _reconnect re-authenticates and restarts the WebSocket."""
     ws, controller, _ = _make_websocket(hass)
+    second_started = asyncio.Event()
+    call_count = 0
 
     # Make start_websocket block forever so the WS runner stays alive
     hang_forever = asyncio.Event()
 
     async def _block_forever() -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            second_started.set()
         await hang_forever.wait()
 
     controller.start_websocket = AsyncMock(side_effect=_block_forever)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0.01):
         ws.start()
         # Simulate a reconnect
         ws.available = False
         ws._reconnect()
 
-        # Let the reconnect coroutine and nested _start_websocket task run
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
     controller.login.assert_awaited()
     # Should have restarted WS (available should be True again)
     assert ws.available is True
 
-    ws.stop()
+    await ws.stop_and_wait()
+
+
+async def test_reconnect_waits_for_previous_runner_cleanup_before_restart(hass: HomeAssistant) -> None:
+    """Test reconnect() serializes replacement startup behind runner cancellation."""
+    ws, controller, _ = _make_websocket(hass)
+    first_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    second_started = asyncio.Event()
+    call_count = 0
+
+    async def _start_websocket() -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            first_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release_cleanup.wait()
+                raise
+
+        second_started.set()
+        await asyncio.Event().wait()
+
+    controller.start_websocket = AsyncMock(side_effect=_start_websocket)
+
+    ws.start()
+    await first_started.wait()
+
+    ws.reconnect()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert second_started.is_set() is False
+
+    release_cleanup.set()
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+
+    await ws.stop_and_wait()
+
+
+async def test_reconnect_after_login_waits_for_previous_runner_cleanup_before_restart(hass: HomeAssistant) -> None:
+    """Test _reconnect() waits for the old runner to finish before restarting."""
+    ws, controller, _ = _make_websocket(hass)
+    first_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    second_started = asyncio.Event()
+    call_count = 0
+
+    async def _start_websocket() -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            first_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release_cleanup.wait()
+                raise
+
+        second_started.set()
+        await asyncio.Event().wait()
+
+    controller.start_websocket = AsyncMock(side_effect=_start_websocket)
+
+    ws.start()
+    await first_started.wait()
+
+    ws._reconnect()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert second_started.is_set() is False
+
+    release_cleanup.set()
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+
+    await ws.stop_and_wait()
 
 
 async def test_reconnect_reschedules_on_auth_failure(hass: HomeAssistant) -> None:

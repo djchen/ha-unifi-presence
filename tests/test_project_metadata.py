@@ -78,3 +78,11 @@ def test_aiounifi_version_matches_between_manifest_and_pyproject() -> None:
 
     assert manifest["requirements"] == ["aiounifi==90"]
     assert aiounifi_requirements == ["aiounifi==90"]
+
+
+def test_project_version_matches_between_manifest_and_pyproject() -> None:
+    """Test the published project version is consistent across metadata files."""
+    manifest = json.loads((ROOT / "custom_components" / "unifi_presence" / "manifest.json").read_text())
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+
+    assert manifest["version"] == pyproject["project"]["version"]

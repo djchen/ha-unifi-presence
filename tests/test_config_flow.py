@@ -15,11 +15,13 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
+    CONF_SITE,
     CONF_TRACKED_DEVICES,
     DOMAIN,
 )
@@ -948,6 +950,36 @@ async def test_options_flow_without_runtime_data_uses_login(hass: HomeAssistant,
     create_controller.assert_called_once()
 
 
+async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Test options fallback login resolves stored site IDs to the short site name."""
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={**config_entry.data, CONF_SITE: OFFICE_SITE_ID},
+        unique_id="192.168.1.1_office",
+    )
+
+    site_lookup_controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
+    client_controller = _mock_controller(
+        clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
+    )
+
+    with (
+        patch(
+            "custom_components.unifi_presence.helpers.create_controller",
+            return_value=site_lookup_controller,
+        ) as lookup_create_controller,
+        patch(PATCH_CREATE_CONTROLLER, return_value=client_controller) as create_controller,
+    ):
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    assert lookup_create_controller.await_args.args[5] == ""
+    assert create_controller.await_args.args[5] == "office"
+
+
 async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, options_entry: MockConfigEntry) -> None:
     """Test that options flow shows error when submitting with no tracked devices."""
     mock_coordinator = MagicMock()
@@ -1037,6 +1069,54 @@ async def test_reconfigure_flow_matches_stored_site_for_legacy_or_missing_unique
     assert result["reason"] == "reconfigure_successful"
     assert entry.unique_id == DEFAULT_SITE_ID
     assert entry.data["password"] == "newpass"
+
+
+async def test_reconfigure_flow_migrates_legacy_tracker_entity_unique_ids(hass: HomeAssistant) -> None:
+    """Test reconfigure updates entity-registry tracker IDs for legacy entries."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Home",
+        data=MOCK_CONFIG_DATA,
+        unique_id="192.168.1.1_default",
+        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+    )
+    entry.add_to_hass(hass)
+
+    entity_registry = er.async_get(hass)
+    legacy_entity = entity_registry.async_get_or_create(
+        "device_tracker",
+        DOMAIN,
+        "192.168.1.1_default-aa:bb:cc:dd:ee:ff",
+        config_entry=entry,
+        suggested_object_id="dan_phone",
+    )
+
+    controller = _mock_controller()
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": "192.168.1.1",
+                "port": 443,
+                "username": "newadmin",
+                "password": "newpass",
+            },
+        )
+
+    migrated_entity = entity_registry.async_get(legacy_entity.entity_id)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert migrated_entity is not None
+    assert migrated_entity.unique_id == f"{DEFAULT_SITE_ID}-aa:bb:cc:dd:ee:ff"
+    assert (
+        entity_registry.async_get_entity_id(
+            "device_tracker",
+            DOMAIN,
+            "192.168.1.1_default-aa:bb:cc:dd:ee:ff",
+        )
+        is None
+    )
 
 
 async def test_reauth_confirm_timeout_shows_cannot_connect(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:

@@ -26,7 +26,7 @@ from .const import (
     DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import create_controller
+from .helpers import create_controller, resolve_controller_site
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
@@ -134,13 +134,23 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             return self._controller
 
         data = self.config_entry.data
-        self._controller = await create_controller(
+        site = await resolve_controller_site(
             self.hass,
             host=data[CONF_HOST],
             port=data[CONF_PORT],
             username=data[CONF_USERNAME],
             password=data[CONF_PASSWORD],
             site=data.get(CONF_SITE, DEFAULT_SITE),
+            ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+            unique_id=self.config_entry.unique_id,
+        )
+        self._controller = await create_controller(
+            self.hass,
+            host=data[CONF_HOST],
+            port=data[CONF_PORT],
+            username=data[CONF_USERNAME],
+            password=data[CONF_PASSWORD],
+            site=site,
             ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
         )
         return self._controller

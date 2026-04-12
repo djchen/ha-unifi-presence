@@ -21,7 +21,7 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
         patch("custom_components.unifi_presence.helpers.async_get_clientsession", return_value=session) as get_session,
         patch("custom_components.unifi_presence.helpers.Configuration", return_value=config) as configuration,
         patch(
-            "custom_components.unifi_presence.helpers.aiounifi.Controller",
+            "custom_components.unifi_presence.helpers.Controller",
             return_value=controller,
         ) as controller_factory,
     ):
@@ -55,7 +55,7 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
             "custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session
         ) as create_session,
         patch("custom_components.unifi_presence.helpers.Configuration") as configuration,
-        patch("custom_components.unifi_presence.helpers.aiounifi.Controller", return_value=controller),
+        patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
     ):
         await create_controller(
             hass,

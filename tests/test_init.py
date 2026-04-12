@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence import async_unload_entry
 from custom_components.unifi_presence.const import CONF_TRACKED_DEVICES, DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
@@ -79,6 +80,20 @@ async def test_async_unload_entry(hass: HomeAssistant, enable_custom_integration
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_async_unload_entry_keeps_websocket_running_when_platform_unload_fails(hass: HomeAssistant) -> None:
+    """Test unload does not tear down the websocket before a failed platform unload."""
+    entry = _make_config_entry(hass)
+    websocket = MagicMock()
+    websocket.stop_and_wait = AsyncMock()
+    entry.runtime_data = MagicMock(websocket=websocket)
+
+    with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=False)):
+        unloaded = await async_unload_entry(hass, entry)
+
+    assert unloaded is False
+    websocket.stop_and_wait.assert_not_awaited()
 
 
 async def test_shutdown_event_stops_websocket(

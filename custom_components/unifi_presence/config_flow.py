@@ -17,7 +17,8 @@ from homeassistant.config_entries import (
     OptionsFlowWithReload,
 )
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_AWAY_SECONDS,
@@ -32,7 +33,7 @@ from .const import (
     DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import create_controller, format_config_entry_title
+from .helpers import create_controller, format_config_entry_title, resolve_controller_site
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
@@ -58,6 +59,30 @@ def _normalize_mac(mac: str) -> str:
 def _format_current_client_label(name: str, mac: str) -> str:
     """Return the user-facing label for a current UniFi client."""
     return f"{name} ({mac})"
+
+
+@callback
+def _async_migrate_tracker_unique_ids(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    *,
+    old_site_id: str,
+    new_site_id: str,
+) -> None:
+    """Migrate tracker entity unique IDs when a legacy entry gains a site_id."""
+    if old_site_id == new_site_id:
+        return
+
+    entity_registry = er.async_get(hass)
+    old_prefix = f"{old_site_id}-"
+    new_prefix = f"{new_site_id}-"
+
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if registry_entry.unique_id.startswith(old_prefix):
+            entity_registry.async_update_entity(
+                registry_entry.entity_id,
+                new_unique_id=f"{new_prefix}{registry_entry.unique_id.removeprefix(old_prefix)}",
+            )
 
 
 def _build_options_client_labels(available_clients: Mapping[str, str], current_tracked: list[str]) -> dict[str, str]:
@@ -224,8 +249,10 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         if error is not None:
             return error
 
+        assert controller is not None
+
         try:
-            self._available_sites = await _fetch_sites(controller)  # type: ignore[arg-type]
+            self._available_sites = await _fetch_sites(controller)
         except Exception:
             _LOGGER.exception("Failed to fetch site list")
             return "cannot_connect"
@@ -308,11 +335,20 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 if error is not None:
                     return self._show_site_form(errors={"base": error})
 
+                assert controller is not None
+
                 try:
-                    await _fetch_all_clients(controller)  # type: ignore[arg-type]
+                    await _fetch_all_clients(controller)
                 except Exception:
                     _LOGGER.exception("Failed to validate access to the configured UniFi site")
                     return self._show_site_form(errors={"base": "cannot_discover_devices"})
+
+                _async_migrate_tracker_unique_ids(
+                    self.hass,
+                    reconfigure_entry,
+                    old_site_id=reconfigure_entry.unique_id or reconfigure_entry.entry_id,
+                    new_site_id=self._site_id,
+                )
 
                 return self.async_update_reload_and_abort(
                     reconfigure_entry,
@@ -343,8 +379,10 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if error is not None:
                 return self._show_site_form(errors={"base": error})
 
+            assert controller is not None
+
             try:
-                self._available_clients = await _fetch_all_clients(controller)  # type: ignore[arg-type]
+                self._available_clients = await _fetch_all_clients(controller)
             except Exception:
                 _LOGGER.exception("Failed to fetch client list")
                 return self._show_site_form(errors={"base": "cannot_discover_devices"})
@@ -507,13 +545,23 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                     controller = coordinator.controller
             if controller is None:
                 data = self.config_entry.data
+                site = await resolve_controller_site(
+                    self.hass,
+                    host=data[CONF_HOST],
+                    port=data[CONF_PORT],
+                    username=data[CONF_USERNAME],
+                    password=data[CONF_PASSWORD],
+                    site=data.get(CONF_SITE, DEFAULT_SITE),
+                    ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+                    unique_id=self.config_entry.unique_id,
+                )
                 controller = await create_controller(
                     self.hass,
                     data[CONF_HOST],
                     data[CONF_PORT],
                     data[CONF_USERNAME],
                     data[CONF_PASSWORD],
-                    data.get(CONF_SITE, DEFAULT_SITE),
+                    site,
                     data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
                 )
             return await _fetch_all_clients(controller), False

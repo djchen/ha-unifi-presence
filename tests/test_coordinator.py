@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL
+from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL, CONF_SITE
 from custom_components.unifi_presence.coordinator import (
     UnifiPresenceCoordinator,
     UnifiPresenceData,
@@ -249,6 +249,39 @@ async def test_ensure_controller_reuses_existing_controller(hass: HomeAssistant,
 
     assert controller is existing_controller
     create_controller.assert_not_called()
+
+
+async def test_ensure_controller_normalizes_legacy_stored_site_id(hass: HomeAssistant, config_entry: MagicMock) -> None:
+    """Test runtime controller setup resolves legacy stored site IDs to site names."""
+    config_entry.data = {**MOCK_CONFIG_DATA, CONF_SITE: "site-office-id"}
+    config_entry.unique_id = "192.168.1.1_office"
+
+    site_lookup_controller = MagicMock()
+    site_lookup_controller.sites = MagicMock()
+    site_lookup_controller.sites.update = AsyncMock()
+    site = MagicMock()
+    site.site_id = "site-office-id"
+    site.name = "office"
+    site_lookup_controller.sites.values.return_value = [site]
+
+    runtime_controller = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.unifi_presence.helpers.create_controller",
+            return_value=site_lookup_controller,
+        ) as lookup_create_controller,
+        patch(
+            "custom_components.unifi_presence.coordinator.create_controller",
+            return_value=runtime_controller,
+        ) as create_controller,
+    ):
+        coordinator = UnifiPresenceCoordinator(hass, config_entry)
+        controller = await coordinator._ensure_controller()
+
+    assert controller is runtime_controller
+    assert lookup_create_controller.await_args.args[5] == ""
+    assert create_controller.await_args.kwargs["site"] == "office"
 
 
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
