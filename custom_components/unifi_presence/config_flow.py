@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
 import aiounifi
 import homeassistant.helpers.config_validation as cv
@@ -33,35 +34,103 @@ from .const import (
     DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import async_close_controller, create_controller, format_config_entry_title, resolve_controller_site
+from .helpers import (
+    ClientLike,
+    ControllerConnectionParams,
+    SiteLike,
+    async_close_controller,
+    create_controller,
+    format_config_entry_title,
+    format_current_client_label,
+    format_missing_client_label,
+    format_site_config_entry_title,
+    get_entry_runtime_coordinator,
+    normalize_mac,
+    normalize_macs,
+    resolve_controller_site,
+    site_title,
+    tracker_unique_id,
+)
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
 
 _LOGGER = logging.getLogger(__name__)
 
-
-def _site_title(site: Any) -> str:
-    """Return the user-facing title for a UniFi site."""
-    return str(site.description or site.name)
-
-
-def _config_entry_title(site: Any, host: str) -> str:
-    """Return the config entry title shown in Home Assistant."""
-    return format_config_entry_title(_site_title(site), host)
-
-
-def _normalize_mac(mac: str) -> str:
-    """Return a normalized MAC string for config storage and labels."""
-    return mac.strip().lower()
+type SiteStepTarget = Literal["user", "reconfigure"]
+type FlowErrorKey = Literal[
+    "invalid_auth",
+    "cannot_connect",
+    "cannot_discover_devices",
+    "invalid_site",
+    "no_devices",
+    "no_tracked_devices",
+    "unknown",
+]
 
 
-def _format_current_client_label(name: str, mac: str) -> str:
-    """Return the user-facing label for a current UniFi client."""
-    return f"{name} ({mac})"
+def _as_int(value: object) -> int:
+    """Return an int from a validated flow value."""
+    return int(cast(SupportsInt | str, value))
 
 
-def _get_selected_site(available_sites: Mapping[str, Any], selected_site: object) -> Any | None:
+def _build_user_schema() -> vol.Schema:
+    """Build the credential form schema for initial setup."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST): str,
+            vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
+            vol.Required(CONF_USERNAME): str,
+            vol.Required(CONF_PASSWORD): str,
+            vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SSL_VERIFY): bool,
+        }
+    )
+
+
+def _build_reconfigure_schema(current_data: Mapping[str, object]) -> vol.Schema:
+    """Build the credential form schema for reconfigure."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST, default=current_data.get(CONF_HOST, "")): str,
+            vol.Required(CONF_PORT, default=current_data.get(CONF_PORT, DEFAULT_PORT)): cv.port,
+            vol.Required(CONF_USERNAME, default=current_data.get(CONF_USERNAME, "")): str,
+            vol.Required(CONF_PASSWORD): str,
+            vol.Optional(CONF_SSL_VERIFY, default=current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)): bool,
+        }
+    )
+
+
+def _build_reauth_schema() -> vol.Schema:
+    """Build the credential form schema for reauthentication."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_USERNAME): str,
+            vol.Required(CONF_PASSWORD): str,
+        }
+    )
+
+
+def _build_site_schema(available_sites: Mapping[str, SiteLike]) -> vol.Schema:
+    """Build the site selection schema."""
+    return vol.Schema(
+        {vol.Required(CONF_SITE): vol.In({site_id: site_title(site) for site_id, site in available_sites.items()})}
+    )
+
+
+def _build_device_selection_schema(
+    client_options: Mapping[str, str],
+    *,
+    default_selected: list[str] | None = None,
+) -> vol.Schema:
+    """Build the tracked-device multi-select schema."""
+    return vol.Schema(
+        {
+            vol.Optional(CONF_TRACKED_DEVICES, default=default_selected or []): cv.multi_select(dict(client_options)),
+        }
+    )
+
+
+def _get_selected_site(available_sites: Mapping[str, SiteLike], selected_site: object) -> SiteLike | None:
     """Return the selected site object when the flow input is valid."""
     if not isinstance(selected_site, str):
         return None
@@ -82,21 +151,27 @@ def _async_migrate_tracker_unique_ids(
         return
 
     entity_registry = er.async_get(hass)
-    old_prefix = f"{old_site_id}-"
-    new_prefix = f"{new_site_id}-"
 
     for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
-        if registry_entry.unique_id.startswith(old_prefix):
+        # Extract the MAC from the last segment of "{site_id}-{mac}".
+        # rsplit with maxsplit=1 handles site IDs containing dashes.
+        # Entities whose unique_id lacks a dash are safely skipped because
+        # the reconstructed legacy_unique_id will never match.
+        for mac in normalize_macs([registry_entry.unique_id.rsplit("-", maxsplit=1)[-1]]):
+            legacy_unique_id = tracker_unique_id(old_site_id, mac)
+            if registry_entry.unique_id != legacy_unique_id:
+                continue
+
             entity_registry.async_update_entity(
                 registry_entry.entity_id,
-                new_unique_id=f"{new_prefix}{registry_entry.unique_id.removeprefix(old_prefix)}",
+                new_unique_id=tracker_unique_id(new_site_id, mac),
             )
 
 
 def _build_options_client_labels(available_clients: Mapping[str, str], current_tracked: list[str]) -> dict[str, str]:
     """Build ordered option labels for tracked client selection."""
-    normalized_available = {_normalize_mac(mac): label for mac, label in available_clients.items()}
-    normalized_tracked = [_normalize_mac(mac) for mac in current_tracked]
+    normalized_available = {normalize_mac(mac): label for mac, label in available_clients.items()}
+    normalized_tracked = list(normalize_macs(current_tracked))
 
     preserved_missing = sorted(mac for mac in normalized_tracked if mac not in normalized_available)
     current_clients = sorted(normalized_available.items(), key=lambda item: item[1].lower())
@@ -104,7 +179,7 @@ def _build_options_client_labels(available_clients: Mapping[str, str], current_t
     client_options: dict[str, str] = {}
 
     for mac in preserved_missing:
-        client_options[mac] = f"{mac} (No longer in UniFi Client Devices)"
+        client_options[mac] = format_missing_client_label(mac)
 
     for mac, label in current_clients:
         client_options[mac] = label
@@ -112,27 +187,14 @@ def _build_options_client_labels(available_clients: Mapping[str, str], current_t
     return client_options
 
 
-async def _fetch_sites(controller: Controller) -> dict[str, Any]:
+async def _fetch_sites(controller: Controller) -> dict[str, SiteLike]:
     """Fetch sites from the UniFi controller keyed by site_id."""
     await controller.sites.update()
-    return {site.site_id: site for site in controller.sites.values()}
+    return {site.site_id: cast(SiteLike, site) for site in controller.sites.values()}
 
 
 async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
-    """Fetch all known clients from the UniFi controller.
-
-    Merges active clients (``controller.clients``) with historical clients
-    (``controller.clients_all``).  Both sources are best-effort: if one
-    endpoint fails the other is still used.  Active data takes precedence
-    so that recently-connected devices that haven't yet appeared in the
-    historical endpoint are included.
-
-    Returns a dict of {mac: display_name}.
-
-    Raises:
-        Exception: Only if *both* client sources fail to update and
-            neither store contains cached data.
-    """
+    """Fetch all known clients from the UniFi controller."""
     historical_refreshed = False
     try:
         await controller.clients_all.update()
@@ -148,19 +210,19 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
         _LOGGER.debug("Failed to refresh active UniFi clients")
 
     if not historical_refreshed and not active_refreshed:
-        # Neither update() succeeded — check if the stores have any cached data
         has_cached = any(controller.clients_all) or any(controller.clients)
         if not has_cached:
             msg = "Both active and historical client sources failed"
             raise RuntimeError(msg)
 
-    # Merge historical + active; active wins on key collision
     clients: dict[str, str] = {}
     for store in (controller.clients_all, controller.clients):
         for mac, client in store.items():
-            mac_lower = mac.lower()
-            name = client.name or client.hostname or mac_lower
-            clients[mac_lower] = _format_current_client_label(name, mac_lower)
+            client_obj = cast(ClientLike, client)
+            mac_lower = normalize_mac(mac)
+            name = client_obj.name or client_obj.hostname or mac_lower
+            clients[mac_lower] = format_current_client_label(str(name), mac_lower)
+
     return clients
 
 
@@ -179,52 +241,56 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._ssl_verify: bool = DEFAULT_SSL_VERIFY
         self._site_id: str = ""
         self._site_title: str = ""
-        self._available_sites: dict[str, Any] = {}
+        self._available_sites: dict[str, SiteLike] = {}
         self._available_clients: dict[str, str] = {}
-        self._site_step_target: str = "user"
-        self._single_site_client_error: str | None = None
+        self._site_step_target: SiteStepTarget = "user"
+        self._single_site_discovery_error: FlowErrorKey | None = None
 
-    def _set_selected_site(self, site: Any) -> None:
+    def _current_connection_params(self, *, site: str | None = None) -> ControllerConnectionParams:
+        """Return the current flow connection parameters."""
+        return ControllerConnectionParams(
+            host=self._host,
+            port=self._port,
+            username=self._username,
+            password=self._password,
+            site=self._site if site is None else site,
+            ssl_verify=self._ssl_verify,
+        )
+
+    def _store_connection_input(self, user_input: Mapping[str, object]) -> None:
+        """Persist connection settings from a submitted form."""
+        self._host = str(user_input[CONF_HOST])
+        self._port = _as_int(user_input[CONF_PORT])
+        self._username = str(user_input[CONF_USERNAME])
+        self._password = str(user_input[CONF_PASSWORD])
+        self._ssl_verify = bool(user_input.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
+
+    def _set_selected_site(self, site: SiteLike) -> None:
         """Persist the currently selected site metadata on the flow."""
         self._site_id = site.site_id
         self._site = site.name
-        self._site_title = _site_title(site)
+        self._site_title = site_title(site)
 
     async def _async_validate_login(
         self,
         *,
-        host: str,
-        port: int,
-        username: str,
-        password: str,
-        site: str,
-        ssl_verify: bool,
+        params: ControllerConnectionParams,
         log_context: str,
         unique_id: str | None = None,
-    ) -> tuple[Controller | None, str | None]:
+    ) -> tuple[Controller | None, FlowErrorKey | None]:
         """Attempt controller login and return (controller, error_key)."""
         try:
-            resolved_site = site
+            resolved_site = params.site
             if unique_id is not None:
                 resolved_site = await resolve_controller_site(
                     self.hass,
-                    host=host,
-                    port=port,
-                    username=username,
-                    password=password,
-                    site=site,
-                    ssl_verify=ssl_verify,
+                    params,
                     unique_id=unique_id,
                 )
 
             controller = await create_controller(
                 self.hass,
-                host,
-                port,
-                username,
-                password,
-                resolved_site,
-                ssl_verify,
+                replace(params, site=resolved_site),
             )
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
@@ -236,6 +302,62 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return controller, None
 
+    async def _async_discover_clients_from_controller(self, controller: Controller) -> FlowErrorKey | None:
+        """Fetch available clients for the currently selected site."""
+        try:
+            self._available_clients = await _fetch_all_clients(controller)
+        except Exception:
+            _LOGGER.exception("Failed to fetch client list")
+            self._available_clients = {}
+            return "cannot_discover_devices"
+
+        return None
+
+    async def _async_load_sites_for_current_connection(self, *, log_context: str) -> FlowErrorKey | None:
+        """Validate credentials and populate accessible sites."""
+        controller, error = await self._async_validate_login(
+            params=self._current_connection_params(site="" if self._site_step_target == "user" else self._site),
+            log_context=log_context,
+        )
+        if error is not None:
+            return error
+
+        assert controller is not None
+
+        try:
+            self._available_sites = await _fetch_sites(controller)
+            self._available_clients = {}
+            self._single_site_discovery_error = None
+
+            if self._site_step_target == "user" and len(self._available_sites) == 1:
+                site = next(iter(self._available_sites.values()))
+                self._set_selected_site(site)
+                self._single_site_discovery_error = await self._async_discover_clients_from_controller(controller)
+        except Exception:
+            _LOGGER.exception("Failed to fetch site list")
+            return "cannot_connect"
+        finally:
+            await async_close_controller(controller)
+
+        return None
+
+    async def _async_load_selected_site_clients(self, *, log_context: str) -> FlowErrorKey | None:
+        """Validate the selected site and refresh its client list."""
+        self._available_clients = {}
+
+        controller, error = await self._async_validate_login(
+            params=self._current_connection_params(),
+            log_context=log_context,
+        )
+        if error is not None:
+            return error
+
+        assert controller is not None
+        try:
+            return await self._async_discover_clients_from_controller(controller)
+        finally:
+            await async_close_controller(controller)
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> UnifiPresenceOptionsFlow:
@@ -246,17 +368,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         """Show the site selection form."""
         return self.async_show_form(
             step_id="site",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_SITE): vol.In(
-                        {site_id: _site_title(site) for site_id, site in self._available_sites.items()}
-                    )
-                }
-            ),
+            data_schema=_build_site_schema(self._available_sites),
             errors=errors,
         )
 
-    async def _async_finish_reconfigure_site_selection(self, site: Any) -> ConfigFlowResult:
+    async def _async_finish_reconfigure_site_selection(self, site: SiteLike) -> ConfigFlowResult:
         """Validate and save a selected site during reconfigure."""
         reconfigure_entry = self._get_reconfigure_entry()
         stored_site = reconfigure_entry.data.get(CONF_SITE)
@@ -267,24 +383,16 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="different_site_selected")
 
         controller, error = await self._async_validate_login(
-            host=self._host,
-            port=self._port,
-            username=self._username,
-            password=self._password,
-            site=self._site,
-            ssl_verify=self._ssl_verify,
+            params=self._current_connection_params(),
             log_context="UniFi reconfigure site validation",
         )
         if error is not None:
             return self._show_site_form(errors={"base": error})
 
         assert controller is not None
-
         try:
-            await _fetch_all_clients(controller)
-        except Exception:
-            _LOGGER.exception("Failed to validate access to the configured UniFi site")
-            return self._show_site_form(errors={"base": "cannot_discover_devices"})
+            if (client_error := await self._async_discover_clients_from_controller(controller)) is not None:
+                return self._show_site_form(errors={"base": client_error})
         finally:
             await async_close_controller(controller)
 
@@ -298,7 +406,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_update_reload_and_abort(
             reconfigure_entry,
             unique_id=self._site_id,
-            title=_config_entry_title(site, self._host),
+            title=format_site_config_entry_title(site, self._host),
             data_updates={
                 CONF_HOST: self._host,
                 CONF_PORT: self._port,
@@ -309,194 +417,109 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def _async_validate_and_fetch_sites(
-        self,
-        *,
-        host: str,
-        port: int,
-        username: str,
-        password: str,
-        site: str,
-        ssl_verify: bool,
-        log_context: str,
-    ) -> str | None:
-        """Validate credentials and populate available sites."""
-        controller, error = await self._async_validate_login(
-            host=host,
-            port=port,
-            username=username,
-            password=password,
-            site=site,
-            ssl_verify=ssl_verify,
-            log_context=log_context,
-        )
+    async def _async_finish_user_site_selection(self) -> ConfigFlowResult:
+        """Complete site selection for the initial user flow."""
+        await self.async_set_unique_id(self._site_id)
+        self._abort_if_unique_id_configured()
+
+        if len(self._available_sites) == 1:
+            return await self._async_finish_single_site_user_selection()
+
+        return await self._async_finish_multi_site_user_selection()
+
+    async def _async_finish_single_site_user_selection(self) -> ConfigFlowResult:
+        """Complete user setup when only one site is available."""
+        if self._single_site_discovery_error is not None:
+            self._single_site_discovery_error = await self._async_load_selected_site_clients(
+                log_context="UniFi site client discovery",
+            )
+            if self._single_site_discovery_error is not None:
+                return self._show_site_form(errors={"base": self._single_site_discovery_error})
+
+        if not self._available_clients:
+            return self.async_abort(reason="no_clients_available")
+
+        return await self.async_step_devices()
+
+    async def _async_finish_multi_site_user_selection(self) -> ConfigFlowResult:
+        """Complete user setup after explicit multi-site selection."""
+        error = await self._async_load_selected_site_clients(log_context="UniFi site client discovery")
         if error is not None:
-            return error
+            return self._show_site_form(errors={"base": error})
 
-        assert controller is not None
+        if not self._available_clients:
+            return self.async_abort(reason="no_clients_available")
 
-        try:
-            self._available_sites = await _fetch_sites(controller)
-            self._available_clients = {}
-            self._single_site_client_error = None
+        return await self.async_step_devices()
 
-            if self._site_step_target == "user" and len(self._available_sites) == 1:
-                site_obj = next(iter(self._available_sites.values()))
-                self._set_selected_site(site_obj)
-                try:
-                    self._available_clients = await _fetch_all_clients(controller)
-                except Exception:
-                    _LOGGER.exception("Failed to fetch client list")
-                    self._single_site_client_error = "cannot_discover_devices"
-        except Exception:
-            _LOGGER.exception("Failed to fetch site list")
-            return "cannot_connect"
-        finally:
-            await async_close_controller(controller)
-
-        return None
-
-    async def _async_fetch_selected_site_clients(self, *, log_context: str) -> str | None:
-        """Validate the selected site and refresh its client list."""
-        self._available_clients = {}
-
-        controller, error = await self._async_validate_login(
-            host=self._host,
-            port=self._port,
-            username=self._username,
-            password=self._password,
-            site=self._site,
-            ssl_verify=self._ssl_verify,
-            log_context=log_context,
-        )
-        if error is not None:
-            return error
-
-        assert controller is not None
-
-        try:
-            self._available_clients = await _fetch_all_clients(controller)
-        except Exception:
-            _LOGGER.exception("Failed to fetch client list")
-            return "cannot_discover_devices"
-        finally:
-            await async_close_controller(controller)
-
-        return None
-
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle the initial step: UniFi controller credentials."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
-            self._port = user_input[CONF_PORT]
-            self._username = user_input[CONF_USERNAME]
-            self._password = user_input[CONF_PASSWORD]
-            self._ssl_verify = user_input.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)
+            self._store_connection_input(user_input)
             self._site_step_target = "user"
 
-            error = await self._async_validate_and_fetch_sites(
-                host=self._host,
-                port=self._port,
-                username=self._username,
-                password=self._password,
-                site="",
-                ssl_verify=self._ssl_verify,
-                log_context="UniFi login",
-            )
+            error = await self._async_load_sites_for_current_connection(log_context="UniFi login")
             if error is not None:
                 errors["base"] = error
+            elif not self._available_sites:
+                return self.async_abort(reason="no_sites_available")
             else:
-                if not self._available_sites:
-                    return self.async_abort(reason="no_sites_available")
                 return await self.async_step_site()
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_HOST): str,
-                    vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
-                    vol.Required(CONF_USERNAME): str,
-                    vol.Required(CONF_PASSWORD): str,
-                    vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SSL_VERIFY): bool,
-                }
-            ),
-            errors=errors,
-        )
+        return self.async_show_form(step_id="user", data_schema=_build_user_schema(), errors=errors)
 
-    async def async_step_site(  # noqa: PLR0911
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_site(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle UniFi site selection."""
         if not self._available_sites:
             return self.async_abort(reason="no_sites_available")
 
-        if user_input is not None:
-            site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
-            if site is None:
-                return self._show_site_form(errors={"base": "invalid_site"})
+        if user_input is None:
+            return await self._async_handle_site_step_without_input()
 
-            self._set_selected_site(site)
+        site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
+        if site is None:
+            return self._show_site_form(errors={"base": "invalid_site"})
 
-            if self._site_step_target == "reconfigure":
-                return await self._async_finish_reconfigure_site_selection(site)
+        self._set_selected_site(site)
+        if self._site_step_target == "reconfigure":
+            return await self._async_finish_reconfigure_site_selection(site)
 
-            await self.async_set_unique_id(self._site_id)
-            self._abort_if_unique_id_configured()
+        return await self._async_finish_user_site_selection()
 
-            if len(self._available_sites) == 1:
-                if self._single_site_client_error is not None:
-                    self._single_site_client_error = None
-                    error = await self._async_fetch_selected_site_clients(
-                        log_context="UniFi site client discovery",
-                    )
-                    if error is not None:
-                        self._single_site_client_error = error
-                        return self._show_site_form(errors={"base": error})
-                if not self._available_clients:
-                    return self.async_abort(reason="no_clients_available")
-                return await self.async_step_devices()
+    async def _async_handle_site_step_without_input(self) -> ConfigFlowResult:
+        """Handle the site step when the user has not submitted a site yet."""
+        if len(self._available_sites) != 1:
+            return self._show_site_form()
 
-            error = await self._async_fetch_selected_site_clients(
-                log_context="UniFi site client discovery",
-            )
-            if error is not None:
-                return self._show_site_form(errors={"base": error})
+        if self._single_site_discovery_error is not None:
+            return self._show_site_form(errors={"base": self._single_site_discovery_error})
 
-            if not self._available_clients:
-                return self.async_abort(reason="no_clients_available")
+        return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
 
-            return await self.async_step_devices()
-
-        if len(self._available_sites) == 1:
-            if self._single_site_client_error is not None:
-                return self._show_site_form(errors={"base": self._single_site_client_error})
-            return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
-
-        return self._show_site_form()
-
-    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+    async def async_step_reauth(self, entry_data: Mapping[str, object]) -> ConfigFlowResult:
         """Handle reauthentication triggered by ConfigEntryAuthFailed."""
-        self._host = entry_data[CONF_HOST]
-        self._port = entry_data[CONF_PORT]
-        self._site = entry_data.get(CONF_SITE, DEFAULT_SITE)
-        self._ssl_verify = entry_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)
+        self._host = str(entry_data[CONF_HOST])
+        self._port = _as_int(entry_data[CONF_PORT])
+        self._site = str(entry_data.get(CONF_SITE, DEFAULT_SITE))
+        self._ssl_verify = bool(entry_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
         return await self.async_step_reauth_confirm()
 
-    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_reauth_confirm(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle reauthentication confirmation dialog."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             controller, error = await self._async_validate_login(
-                host=self._host,
-                port=self._port,
-                username=user_input[CONF_USERNAME],
-                password=user_input[CONF_PASSWORD],
-                site=self._site,
-                ssl_verify=self._ssl_verify,
+                params=ControllerConnectionParams(
+                    host=self._host,
+                    port=self._port,
+                    username=str(user_input[CONF_USERNAME]),
+                    password=str(user_input[CONF_PASSWORD]),
+                    site=self._site,
+                    ssl_verify=self._ssl_verify,
+                ),
                 log_context="UniFi re-authentication",
                 unique_id=self._get_reauth_entry().unique_id,
             )
@@ -508,74 +531,52 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(
                     self._get_reauth_entry(),
                     data_updates={
-                        CONF_USERNAME: user_input[CONF_USERNAME],
-                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_USERNAME: str(user_input[CONF_USERNAME]),
+                        CONF_PASSWORD: str(user_input[CONF_PASSWORD]),
                     },
                 )
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_USERNAME): str,
-                    vol.Required(CONF_PASSWORD): str,
-                }
-            ),
+            data_schema=_build_reauth_schema(),
             description_placeholders={"host": self._host},
             errors=errors,
         )
 
-    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_reconfigure(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle reconfiguration of controller credentials."""
         errors: dict[str, str] = {}
         reconfigure_entry = self._get_reconfigure_entry()
         current_data = reconfigure_entry.data
 
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
-            self._port = user_input[CONF_PORT]
-            self._username = user_input[CONF_USERNAME]
-            self._password = user_input[CONF_PASSWORD]
-            self._ssl_verify = user_input.get(CONF_SSL_VERIFY, current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
+            self._store_connection_input(user_input)
+            self._ssl_verify = bool(
+                user_input.get(CONF_SSL_VERIFY, current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
+            )
+            self._site = str(current_data.get(CONF_SITE, DEFAULT_SITE))
             self._site_step_target = "reconfigure"
 
-            error = await self._async_validate_and_fetch_sites(
-                host=self._host,
-                port=self._port,
-                username=self._username,
-                password=self._password,
-                site=current_data.get(CONF_SITE, DEFAULT_SITE),
-                ssl_verify=self._ssl_verify,
-                log_context="UniFi reconfigure",
-            )
+            error = await self._async_load_sites_for_current_connection(log_context="UniFi reconfigure")
             if error is not None:
                 errors["base"] = error
+            elif not self._available_sites:
+                return self.async_abort(reason="no_sites_available")
             else:
-                if not self._available_sites:
-                    return self.async_abort(reason="no_sites_available")
                 return await self.async_step_site()
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_HOST, default=current_data.get(CONF_HOST, "")): str,
-                    vol.Required(CONF_PORT, default=current_data.get(CONF_PORT, DEFAULT_PORT)): cv.port,
-                    vol.Required(CONF_USERNAME, default=current_data.get(CONF_USERNAME, "")): str,
-                    vol.Required(CONF_PASSWORD): str,
-                    vol.Optional(CONF_SSL_VERIFY, default=current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)): bool,
-                }
-            ),
+            data_schema=_build_reconfigure_schema(current_data),
             errors=errors,
         )
 
-    async def async_step_devices(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_devices(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle device selection step."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            tracked = list(user_input.get(CONF_TRACKED_DEVICES, []))
-
+            tracked = list(normalize_macs(cast(list[str], user_input.get(CONF_TRACKED_DEVICES, []))))
             if not tracked:
                 errors["base"] = "no_devices"
             else:
@@ -600,18 +601,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_clients_available")
 
         client_options = dict(sorted(self._available_clients.items(), key=lambda item: item[1].lower()))
-
         return self.async_show_form(
             step_id="devices",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_TRACKED_DEVICES, default=[]): cv.multi_select(client_options),
-                }
-            ),
+            data_schema=_build_device_selection_schema(client_options),
             errors=errors,
-            description_placeholders={
-                "client_count": str(len(client_options)),
-            },
+            description_placeholders={"client_count": str(len(client_options))},
         )
 
 
@@ -620,35 +614,29 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
 
     async def _async_fetch_available_clients(self) -> tuple[dict[str, str], bool]:
         """Fetch available clients for the options flow."""
+        controller: Controller | None = None
+        close_controller = False
         try:
-            controller = None
-            close_controller = False
             if self.config_entry.state is ConfigEntryState.LOADED:
-                coordinator = self.config_entry.runtime_data
-                if coordinator is not None and coordinator.controller is not None:
-                    controller = coordinator.controller
+                coordinator = get_entry_runtime_coordinator(self.config_entry)
+                if coordinator is not None and getattr(coordinator, "controller", None) is not None:
+                    controller = cast(Controller | None, coordinator.controller)
+
             if controller is None:
                 data = self.config_entry.data
-                site = await resolve_controller_site(
+                params = ControllerConnectionParams.from_mapping(data)
+                resolved_site = await resolve_controller_site(
                     self.hass,
-                    host=data[CONF_HOST],
-                    port=data[CONF_PORT],
-                    username=data[CONF_USERNAME],
-                    password=data[CONF_PASSWORD],
-                    site=data.get(CONF_SITE, DEFAULT_SITE),
-                    ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+                    params,
                     unique_id=self.config_entry.unique_id,
                 )
+                params = replace(params, site=resolved_site)
                 controller = await create_controller(
                     self.hass,
-                    data[CONF_HOST],
-                    data[CONF_PORT],
-                    data[CONF_USERNAME],
-                    data[CONF_PASSWORD],
-                    site,
-                    data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+                    params,
                 )
                 close_controller = True
+
             return await _fetch_all_clients(controller), False
         except Exception:
             _LOGGER.warning("Could not fetch UniFi clients for options flow")
@@ -657,13 +645,14 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             if close_controller and controller is not None:
                 await async_close_controller(controller)
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_init(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         errors: dict[str, str] = {}
+        current_options = self.config_entry.options
+        current_tracked = list(normalize_macs(current_options.get(CONF_TRACKED_DEVICES, [])))
 
         if user_input is not None:
-            tracked = list(user_input.get(CONF_TRACKED_DEVICES, []))
-
+            tracked = list(normalize_macs(cast(list[str], user_input.get(CONF_TRACKED_DEVICES, []))))
             if not tracked:
                 errors["base"] = "no_tracked_devices"
             else:
@@ -671,38 +660,31 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                     title="",
                     data={
                         CONF_TRACKED_DEVICES: tracked,
-                        CONF_AWAY_SECONDS: user_input.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS),
-                        CONF_FALLBACK_POLL_INTERVAL: user_input.get(
-                            CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL
+                        CONF_AWAY_SECONDS: _as_int(user_input.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)),
+                        CONF_FALLBACK_POLL_INTERVAL: _as_int(
+                            user_input.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
                         ),
                     },
                 )
 
-        # Try to reuse the coordinator's authenticated controller, fall back to new login
         available_clients, discovery_failed = await self._async_fetch_available_clients()
-
-        current_options = self.config_entry.options
-        current_tracked = [_normalize_mac(mac) for mac in current_options.get(CONF_TRACKED_DEVICES, [])]
-
         client_options = _build_options_client_labels(available_clients, current_tracked)
 
-        schema_fields: dict[Any, Any] = {}
-        if client_options:
-            schema_fields[vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked)] = cv.multi_select(client_options)
-        else:
+        if not client_options:
             return self.async_abort(reason="cannot_discover_devices" if discovery_failed else "no_devices_discovered")
-        schema_fields[
+
+        schema_fields: dict[object, object] = {
+            vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked): cv.multi_select(client_options),
             vol.Optional(
                 CONF_AWAY_SECONDS,
                 default=current_options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS),
-            )
-        ] = vol.All(int, vol.Range(min=1))
-        schema_fields[
+            ): vol.All(int, vol.Range(min=1)),
             vol.Optional(
                 CONF_FALLBACK_POLL_INTERVAL,
                 default=current_options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL),
-            )
-        ] = vol.All(int, vol.Range(min=60))
+            ): vol.All(int, vol.Range(min=60)),
+        }
+
         if discovery_failed and "base" not in errors:
             errors["base"] = "cannot_discover_devices"
 

@@ -325,8 +325,8 @@ async def test_ensure_controller_normalizes_legacy_stored_site_id(hass: HomeAssi
         controller = await coordinator._ensure_controller()
 
     assert controller is runtime_controller
-    assert lookup_create_controller.await_args.args[5] == ""
-    assert create_controller.await_args.kwargs["site"] == "office"
+    assert lookup_create_controller.await_args.args[1].site == ""
+    assert create_controller.await_args.args[1].site == "office"
 
 
 async def test_coordinator_reauth_detaches_replaced_runtime_controller(
@@ -337,7 +337,6 @@ async def test_coordinator_reauth_detaches_replaced_runtime_controller(
     owned_session = MagicMock()
     owned_session.closed = False
     owned_session.detach = MagicMock()
-    mock_coordinator_controller._unifi_presence_owned_session = owned_session
     mock_coordinator_controller.clients.update_mock.side_effect = aiounifi.LoginRequired
 
     replacement_controller = make_mock_controller(
@@ -347,9 +346,12 @@ async def test_coordinator_reauth_detaches_replaced_runtime_controller(
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     coordinator._controller = mock_coordinator_controller
 
-    with patch(
-        "custom_components.unifi_presence.coordinator.create_controller",
-        return_value=replacement_controller,
+    with (
+        patch("custom_components.unifi_presence.helpers._OWNED_SESSIONS", {mock_coordinator_controller: owned_session}),
+        patch(
+            "custom_components.unifi_presence.coordinator.create_controller",
+            return_value=replacement_controller,
+        ),
     ):
         data = await coordinator._async_update_data()
 
@@ -366,12 +368,11 @@ async def test_coordinator_async_shutdown_detaches_owned_runtime_session(
     owned_session.closed = False
     owned_session.detach = MagicMock()
     controller = MagicMock()
-    controller._unifi_presence_owned_session = owned_session
-
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     coordinator._controller = controller
 
-    await coordinator.async_shutdown()
+    with patch("custom_components.unifi_presence.helpers._OWNED_SESSIONS", {controller: owned_session}):
+        await coordinator.async_shutdown()
 
     assert coordinator.controller is None
     owned_session.detach.assert_called_once_with()
@@ -922,7 +923,7 @@ async def test_reauth_resets_controller_before_retry(
 async def test_reauth_triggers_websocket_reconnect(
     hass: HomeAssistant, config_entry: MagicMock, exception: type[Exception]
 ) -> None:
-    """Test that websocket.reconnect() is called after a poll-triggered controller swap."""
+    """Test that websocket.restart_with_current_controller() is called after a poll-triggered controller swap."""
     now = int(time.time())
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
 
@@ -942,7 +943,7 @@ async def test_reauth_triggers_websocket_reconnect(
         coordinator.websocket = mock_ws
         await coordinator._async_update_data()
 
-    mock_ws.reconnect.assert_called_once()
+    mock_ws.restart_with_current_controller.assert_called_once()
 
 
 async def test_controller_property(hass: HomeAssistant, config_entry: MagicMock) -> None:

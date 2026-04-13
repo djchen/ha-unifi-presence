@@ -99,11 +99,16 @@ def _make_mock_site(site_id: str, name: str, description: str = "") -> MagicMock
 
 
 def _site_arg_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-    """Return the `site` argument from a mocked create_controller() call."""
-    if "site" in kwargs:
-        return str(kwargs["site"])
+    """Return the `site` argument from a mocked create_controller() call.
 
-    return str(args[5])
+    The production signature is ``create_controller(hass, params)`` where
+    *params* is a ``ControllerConnectionParams`` dataclass.
+    """
+    if "params" in kwargs:
+        return str(kwargs["params"].site)
+
+    # Positional: create_controller(hass, params)
+    return str(args[1].site)
 
 
 def _get_tracked_device_options(result: dict[str, Any]) -> dict[str, str]:

@@ -126,7 +126,6 @@ async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
     owned_session.closed = False
     owned_session.detach = MagicMock()
     controller = MagicMock()
-    controller._unifi_presence_owned_session = owned_session
     controller.clients.get = MagicMock(return_value=None)
     controller.clients.update = AsyncMock()
     controller.clients_all.get = MagicMock(return_value=None)
@@ -136,6 +135,7 @@ async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
         coordinator._controller = controller
 
     with (
+        patch("custom_components.unifi_presence.helpers._OWNED_SESSIONS", {controller: owned_session}),
         patch.object(
             UnifiPresenceCoordinator,
             "async_config_entry_first_refresh",

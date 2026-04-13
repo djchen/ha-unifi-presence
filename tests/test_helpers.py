@@ -9,7 +9,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.unifi_presence.helpers import async_close_controller, create_controller
+from custom_components.unifi_presence.helpers import (
+    ControllerConnectionParams,
+    async_close_controller,
+    create_controller,
+    normalize_macs,
+    tracker_unique_id,
+)
+
+_SSL_PARAMS = ControllerConnectionParams(
+    host="192.168.1.1", port=443, username="admin", password="password", site="default", ssl_verify=True
+)
+_NO_SSL_PARAMS = ControllerConnectionParams(
+    host="192.168.1.1", port=8443, username="admin", password="password", site="office", ssl_verify=False
+)
 
 
 async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) -> None:
@@ -29,12 +42,7 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
     ):
         result = await create_controller(
             hass,
-            host="192.168.1.1",
-            port=443,
-            username="admin",
-            password="password",
-            site="default",
-            ssl_verify=True,
+            _SSL_PARAMS,
         )
 
     assert result is controller
@@ -61,12 +69,7 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     ):
         await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
 
     create_session.assert_called_once()
@@ -98,18 +101,26 @@ async def test_create_controller_closes_ssl_false_owned_session(hass: HomeAssist
     ):
         result = await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
         await async_close_controller(result)
 
     assert result is controller
     assert create_session.call_args.kwargs["auto_cleanup"] is False
     session.detach.assert_called_once_with()
+
+
+def test_normalize_macs_deduplicates_and_preserves_order() -> None:
+    """Test shared MAC normalization trims, lowercases, and deduplicates."""
+    assert normalize_macs([" AA:BB:CC:DD:EE:FF ", "", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"]) == (
+        "aa:bb:cc:dd:ee:ff",
+        "11:22:33:44:55:66",
+    )
+
+
+def test_tracker_unique_id_uses_normalized_mac() -> None:
+    """Test tracker unique IDs are site-scoped and normalized."""
+    assert tracker_unique_id("default", " AA:BB:CC:DD:EE:FF ") == "default-aa:bb:cc:dd:ee:ff"
 
 
 async def test_create_controller_closes_owned_session_on_login_failure(hass: HomeAssistant) -> None:
@@ -128,12 +139,7 @@ async def test_create_controller_closes_owned_session_on_login_failure(hass: Hom
     ):
         await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
 
     session.detach.assert_called_once_with()
@@ -155,12 +161,7 @@ async def test_create_controller_closes_owned_session_on_login_cancellation(hass
     ):
         await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
 
     session.detach.assert_called_once_with()

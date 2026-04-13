@@ -157,7 +157,7 @@ def test_tracker_entity_registry_enabled_default() -> None:
     assert tracker.entity_registry_enabled_default is True
 
 
-def test_tracker_translation_key() -> None:
+def test_tracker_name_falls_back_to_mac_without_runtime_data() -> None:
     """Test that name falls back to MAC when coordinator has no data."""
     coordinator = _make_coordinator(None)
 

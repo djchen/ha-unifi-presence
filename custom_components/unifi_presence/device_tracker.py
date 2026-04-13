@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import UnifiPresenceConfigEntry
 from .coordinator import UnifiPresenceCoordinator, UnifiPresenceData
+from .helpers import tracker_unique_id
 
 PARALLEL_UPDATES = 0
 
@@ -52,13 +53,18 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         super().__init__(coordinator)
         self._mac = mac
 
-        self._attr_unique_id = f"{coordinator.site_id}-{mac}"
+        self._attr_unique_id = tracker_unique_id(coordinator.site_id, mac)
         self._attr_has_entity_name = True
+
+    @property
+    def _data(self) -> UnifiPresenceData | None:
+        """Return typed coordinator data."""
+        return cast(UnifiPresenceData | None, self.coordinator.data)
 
     @property
     def name(self) -> str:
         """Return the display name from coordinator client_info, falling back to MAC."""
-        data = cast(UnifiPresenceData | None, self.coordinator.data)
+        data = self._data
         if data is None:
             return self._mac
 
@@ -73,7 +79,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     @property
     def is_connected(self) -> bool:
         """Return true if the device is connected (home)."""
-        data = cast(UnifiPresenceData | None, self.coordinator.data)
+        data = self._data
         if data is None:
             return False
 
@@ -82,7 +88,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     @property
     def available(self) -> bool:
         """Return whether the tracked client is currently available."""
-        data = cast(UnifiPresenceData | None, self.coordinator.data)
+        data = self._data
         return super().available and data is not None
 
     @property

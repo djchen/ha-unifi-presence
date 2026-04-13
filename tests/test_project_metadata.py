@@ -86,3 +86,37 @@ def test_project_version_matches_between_manifest_and_pyproject() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
     assert manifest["version"] == pyproject["project"]["version"]
+
+
+def test_hacs_homeassistant_version_matches_readme_requirements() -> None:
+    """Test HACS minimum HA version matches the README requirement."""
+    hacs = json.loads((ROOT / "hacs.json").read_text())
+    readme = (ROOT / "README.md").read_text()
+
+    assert f"- Home Assistant {hacs['homeassistant']} or later" in readme
+
+
+def test_quality_commands_and_coverage_are_consistent_in_readme() -> None:
+    """Test README dev commands match the canonical pyproject thresholds."""
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    readme = (ROOT / "README.md").read_text()
+
+    coverage = pyproject["tool"]["pytest"]["ini_options"]["addopts"][2].removeprefix("--cov-fail-under=")
+
+    assert 'pip install ".[dev]"' in readme
+    assert "pre-commit install" in readme
+    assert "PYTHONPATH=. pytest tests/ -v" in readme
+    assert "ruff check ." in readme
+    assert "ruff format --check ." in readme
+    assert "mypy --strict custom_components/unifi_presence/" in readme
+    assert f"Coverage is enforced at {coverage}% minimum" in readme
+
+
+def test_validate_workflow_uses_stable_action_refs() -> None:
+    """Test CI workflow avoids floating branch refs for third-party actions."""
+    workflow = (ROOT / ".github" / "workflows" / "validate.yml").read_text()
+
+    assert "hacs/action@22.5.0" in workflow
+    assert "home-assistant/actions/hassfest@1.0.0" in workflow
+    assert "@main" not in workflow
+    assert "@master" not in workflow

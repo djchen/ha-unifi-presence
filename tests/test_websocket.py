@@ -58,15 +58,15 @@ async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
 
 
 async def test_start_websocket_is_idempotent_while_runner_active(hass: HomeAssistant) -> None:
-    """Test _start_websocket() does not create a second runner while active."""
+    """Test _start_websocket_runner() does not create a second runner while active."""
     ws, controller, _ = _make_websocket(hass)
     hang = asyncio.Event()
     controller.start_websocket = AsyncMock(side_effect=hang.wait)
 
-    ws._start_websocket()
+    ws._start_websocket_runner()
     first_task = ws.ws_task
 
-    ws._start_websocket()
+    ws._start_websocket_runner()
     await asyncio.sleep(0)
 
     assert ws.ws_task is first_task
@@ -100,7 +100,7 @@ async def test_stop_and_wait(hass: HomeAssistant) -> None:
     assert ws._unsub_messages is None
 
 
-async def test_websocket_error_sets_unavailable_and_schedules_reconnect(
+async def test_websocket_error_sets_unavailable_and_schedules_reauth_restart(
     hass: HomeAssistant,
 ) -> None:
     """Test that a WebSocket error marks unavailable and schedules reconnect."""
@@ -145,8 +145,8 @@ async def test_connector_error_sets_unavailable(hass: HomeAssistant) -> None:
     ws.stop()
 
 
-async def test_reconnect_relogins_and_restarts_ws(hass: HomeAssistant) -> None:
-    """Test that _reconnect re-authenticates and restarts the WebSocket."""
+async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAssistant) -> None:
+    """Test that _schedule_reauth_and_restart re-authenticates and restarts the WebSocket."""
     ws, controller, _ = _make_websocket(hass)
     second_started = asyncio.Event()
     call_count = 0
@@ -167,7 +167,7 @@ async def test_reconnect_relogins_and_restarts_ws(hass: HomeAssistant) -> None:
         ws.start()
         # Simulate a reconnect
         ws.available = False
-        ws._reconnect()
+        ws._schedule_reauth_and_restart()
 
         await asyncio.wait_for(second_started.wait(), timeout=1)
         await asyncio.sleep(0.02)
@@ -180,8 +180,10 @@ async def test_reconnect_relogins_and_restarts_ws(hass: HomeAssistant) -> None:
     await ws.stop_and_wait()
 
 
-async def test_reconnect_waits_for_previous_runner_cleanup_before_restart(hass: HomeAssistant) -> None:
-    """Test reconnect() serializes replacement startup behind runner cancellation."""
+async def test_restart_with_current_controller_waits_for_previous_runner_cleanup(
+    hass: HomeAssistant,
+) -> None:
+    """Test restart_with_current_controller() serializes replacement startup behind runner cancellation."""
     ws, controller, _ = _make_websocket(hass)
     first_started = asyncio.Event()
     release_cleanup = asyncio.Event()
@@ -207,7 +209,7 @@ async def test_reconnect_waits_for_previous_runner_cleanup_before_restart(hass: 
     ws.start()
     await first_started.wait()
 
-    ws.reconnect()
+    ws.restart_with_current_controller()
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
@@ -219,8 +221,10 @@ async def test_reconnect_waits_for_previous_runner_cleanup_before_restart(hass: 
     await ws.stop_and_wait()
 
 
-async def test_reconnect_after_login_waits_for_previous_runner_cleanup_before_restart(hass: HomeAssistant) -> None:
-    """Test _reconnect() waits for the old runner to finish before restarting."""
+async def test_schedule_reauth_and_restart_after_login_waits_for_runner_cleanup(
+    hass: HomeAssistant,
+) -> None:
+    """Test _schedule_reauth_and_restart() waits for the old runner to finish before restarting."""
     ws, controller, _ = _make_websocket(hass)
     first_started = asyncio.Event()
     release_cleanup = asyncio.Event()
@@ -246,7 +250,7 @@ async def test_reconnect_after_login_waits_for_previous_runner_cleanup_before_re
     ws.start()
     await first_started.wait()
 
-    ws._reconnect()
+    ws._schedule_reauth_and_restart()
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
@@ -258,8 +262,8 @@ async def test_reconnect_after_login_waits_for_previous_runner_cleanup_before_re
     await ws.stop_and_wait()
 
 
-async def test_reconnect_reschedules_on_auth_failure(hass: HomeAssistant) -> None:
-    """Test that _reconnect reschedules itself on login failure."""
+async def test_schedule_reauth_and_restart_reschedules_on_auth_failure(hass: HomeAssistant) -> None:
+    """Test that _schedule_reauth_and_restart reschedules itself on login failure."""
     ws, controller, _ = _make_websocket(hass)
     controller.login = AsyncMock(side_effect=aiounifi.AiounifiException("auth failed"))
 
@@ -270,7 +274,7 @@ async def test_reconnect_reschedules_on_auth_failure(hass: HomeAssistant) -> Non
         "custom_components.unifi_presence.websocket.async_call_later",
         return_value=MagicMock(),
     ) as mock_call_later:
-        ws._reconnect()
+        ws._schedule_reauth_and_restart()
         for _ in range(5):
             await asyncio.sleep(0)
 
@@ -281,19 +285,19 @@ async def test_reconnect_reschedules_on_auth_failure(hass: HomeAssistant) -> Non
     ws.stop()
 
 
-async def test_reconnect_blocked_after_stop(hass: HomeAssistant) -> None:
-    """Test that _reconnect is a no-op after stop() has been called."""
+async def test_schedule_reauth_and_restart_blocked_after_stop(hass: HomeAssistant) -> None:
+    """Test that _schedule_reauth_and_restart is a no-op after stop() has been called."""
     ws, _controller, _ = _make_websocket(hass)
 
     ws.start()
     ws.stop()
 
-    # _reconnect should bail out immediately due to _stopped flag
+    # _schedule_reauth_and_restart should bail out immediately due to _stopped flag
     with patch(
         "custom_components.unifi_presence.websocket.async_call_later",
         return_value=MagicMock(),
     ) as mock_call_later:
-        ws._reconnect()
+        ws._schedule_reauth_and_restart()
         await asyncio.sleep(0)
 
     # No reconnect should have been scheduled
@@ -427,7 +431,9 @@ async def test_set_available_noop_when_value_unchanged(hass: HomeAssistant) -> N
     assert ws.available is True
 
 
-async def test_async_watch_websocket_reconnects_done_task_while_available(hass: HomeAssistant) -> None:
+async def test_health_check_reauths_when_task_done_while_available(
+    hass: HomeAssistant,
+) -> None:
     """Test health checks reconnect when the runner is done but still marked available."""
     ws, controller, _ = _make_websocket(hass)
     ws.available = True
@@ -436,10 +442,10 @@ async def test_async_watch_websocket_reconnects_done_task_while_available(hass: 
     ws.ws_task = finished_task
     controller.connectivity.ws_message_received = datetime.now(UTC)
 
-    with patch.object(ws, "_reconnect") as mock_reconnect:
+    with patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart:
         ws._async_watch_websocket(None)
 
-    mock_reconnect.assert_called_once()
+    mock_schedule_reauth_and_restart.assert_called_once()
 
 
 async def test_websocket_becomes_available_after_runner_confirms_session(hass: HomeAssistant) -> None:
@@ -473,7 +479,7 @@ async def test_schedule_retry_clears_handle_when_callback_runs(hass: HomeAssista
 
     with (
         patch("custom_components.unifi_presence.websocket.async_call_later", side_effect=_call_later),
-        patch.object(ws, "_reconnect") as mock_reconnect,
+        patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart,
     ):
         ws._schedule_retry()
         assert ws._cancel_retry is not None
@@ -482,7 +488,7 @@ async def test_schedule_retry_clears_handle_when_callback_runs(hass: HomeAssista
         scheduled_callback(None)
 
     assert ws._cancel_retry is None
-    mock_reconnect.assert_called_once()
+    mock_schedule_reauth_and_restart.assert_called_once()
 
 
 async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
@@ -516,7 +522,9 @@ async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
     ws.stop()
 
 
-async def test_unexpected_exception_sets_unavailable_and_schedules_reconnect(hass: HomeAssistant) -> None:
+async def test_unexpected_exception_sets_unavailable_and_schedules_reauth_restart(
+    hass: HomeAssistant,
+) -> None:
     """Test that an unexpected exception in start_websocket is caught and triggers reconnect."""
     ws, _controller, _ = _make_websocket(
         hass,
@@ -559,7 +567,7 @@ async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant
         "custom_components.unifi_presence.websocket.async_call_later",
         return_value=MagicMock(),
     ) as mock_call_later:
-        ws._start_websocket()
+        ws._start_websocket_runner()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
@@ -567,8 +575,8 @@ async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant
     mock_call_later.assert_not_called()
 
 
-async def test_reconnect_schedules_retry_when_controller_none(hass: HomeAssistant) -> None:
-    """Test that _reconnect schedules a retry when the controller getter returns None."""
+async def test_schedule_reauth_and_restart_schedules_retry_when_controller_none(hass: HomeAssistant) -> None:
+    """Test that _schedule_reauth_and_restart schedules a retry when the controller getter returns None."""
     on_message = MagicMock()
     ws = UnifiPresenceWebsocket(hass, lambda: None, on_message)
 
@@ -576,7 +584,7 @@ async def test_reconnect_schedules_retry_when_controller_none(hass: HomeAssistan
         "custom_components.unifi_presence.websocket.async_call_later",
         return_value=MagicMock(),
     ) as mock_call_later:
-        ws._reconnect()
+        ws._schedule_reauth_and_restart()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
@@ -593,7 +601,7 @@ async def test_health_check_with_none_controller(hass: HomeAssistant) -> None:
     ws._async_watch_websocket(None)
 
 
-async def test_async_watch_websocket_reconnects_stale_session(hass: HomeAssistant) -> None:
+async def test_health_check_reauths_on_stale_session(hass: HomeAssistant) -> None:
     """Test that the health check reconnects a stale but marked-available session."""
     ws, controller, _ = _make_websocket(hass)
     ws.available = True
@@ -601,14 +609,14 @@ async def test_async_watch_websocket_reconnects_stale_session(hass: HomeAssistan
     ws.ws_task.done.return_value = False
     controller.connectivity.ws_message_received = datetime.now(UTC) - STALE_WEBSOCKET_INTERVAL - timedelta(seconds=1)
 
-    with patch.object(ws, "_reconnect") as mock_reconnect:
+    with patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart:
         ws._async_watch_websocket(None)
 
-    mock_reconnect.assert_called_once()
+    mock_schedule_reauth_and_restart.assert_called_once()
 
 
-async def test_reconnect_public_resubscribes_and_restarts(hass: HomeAssistant) -> None:
-    """Test that the public reconnect() re-subscribes to the new controller."""
+async def test_restart_with_current_controller_resubscribes_and_restarts(hass: HomeAssistant) -> None:
+    """Test restart_with_current_controller() re-subscribes to the new controller."""
     # Build the first controller and start the websocket against it
     old_controller = AsyncMock()
     old_controller.messages = MagicMock()
@@ -640,7 +648,7 @@ async def test_reconnect_public_resubscribes_and_restarts(hass: HomeAssistant) -
     current["api"] = new_controller
 
     with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.reconnect()
+        ws.restart_with_current_controller()
         for _ in range(5):
             await asyncio.sleep(0)
 
@@ -651,22 +659,24 @@ async def test_reconnect_public_resubscribes_and_restarts(hass: HomeAssistant) -
     ws.stop()
 
 
-async def test_reconnect_public_noop_after_stop(hass: HomeAssistant) -> None:
-    """Test that the public reconnect() is a no-op after stop()."""
+async def test_restart_with_current_controller_noop_after_stop(hass: HomeAssistant) -> None:
+    """Test restart_with_current_controller() is a no-op after stop()."""
     ws, controller, _ = _make_websocket(hass)
 
     ws.start()
     ws.stop()
 
     controller.messages.subscribe.reset_mock()
-    ws.reconnect()
+    ws.restart_with_current_controller()
 
     controller.messages.subscribe.assert_not_called()
     assert ws.ws_task is None
 
 
-async def test_reconnect_public_cancels_inflight_reconnect_task(hass: HomeAssistant) -> None:
-    """Test that the public reconnect() cancels an in-flight _reconnect_task."""
+async def test_restart_with_current_controller_cancels_inflight_reconnect_task(
+    hass: HomeAssistant,
+) -> None:
+    """Test restart_with_current_controller() cancels an in-flight reconnect task."""
     ws, controller, _ = _make_websocket(hass)
 
     hang = asyncio.Event()
@@ -682,7 +692,7 @@ async def test_reconnect_public_cancels_inflight_reconnect_task(hass: HomeAssist
     ws._reconnect_task = stale_task
 
     with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.reconnect()
+        ws.restart_with_current_controller()
         for _ in range(5):
             await asyncio.sleep(0)
 
@@ -694,8 +704,10 @@ async def test_reconnect_public_cancels_inflight_reconnect_task(hass: HomeAssist
     ws.stop()
 
 
-async def test_reconnect_public_old_task_does_not_clear_new_reconnect_task(hass: HomeAssistant) -> None:
-    """Test an older reconnect task cannot clear a newer reconnect task reference."""
+async def test_restart_with_current_controller_old_task_does_not_clear_new_reconnect_task(
+    hass: HomeAssistant,
+) -> None:
+    """Test an older restart task cannot clear a newer reconnect task reference."""
     ws, controller, _ = _make_websocket(hass)
     release_restart = asyncio.Event()
     restart_started = asyncio.Event()
@@ -710,7 +722,7 @@ async def test_reconnect_public_old_task_does_not_clear_new_reconnect_task(hass:
         ws.start()
         await asyncio.sleep(0)
 
-    ws.reconnect()
+    ws.restart_with_current_controller()
     first_task = ws._reconnect_task
     assert first_task is not None
     await restart_started.wait()
@@ -731,8 +743,10 @@ async def test_reconnect_public_old_task_does_not_clear_new_reconnect_task(hass:
     await ws.stop_and_wait()
 
 
-async def test_reconnect_after_login_old_task_does_not_clear_new_reconnect_task(hass: HomeAssistant) -> None:
-    """Test an older _reconnect task cannot clear a newer reconnect task reference."""
+async def test_schedule_reauth_and_restart_after_login_old_task_does_not_clear_new_reconnect_task(
+    hass: HomeAssistant,
+) -> None:
+    """Test an older _schedule_reauth_and_restart task cannot clear a newer reconnect task reference."""
     ws, controller, _ = _make_websocket(hass)
     release_restart = asyncio.Event()
     restart_started = asyncio.Event()
@@ -747,7 +761,7 @@ async def test_reconnect_after_login_old_task_does_not_clear_new_reconnect_task(
         ws.start()
         await asyncio.sleep(0)
 
-    ws._reconnect()
+    ws._schedule_reauth_and_restart()
     first_task = ws._reconnect_task
     assert first_task is not None
     await restart_started.wait()
@@ -768,7 +782,7 @@ async def test_reconnect_after_login_old_task_does_not_clear_new_reconnect_task(
     await ws.stop_and_wait()
 
 
-async def test_async_watch_websocket_reconnects_stale_startup(hass: HomeAssistant) -> None:
+async def test_health_check_reauths_on_stale_startup(hass: HomeAssistant) -> None:
     """Test that the health check reconnects when no message received since a stale startup."""
     ws, controller, _ = _make_websocket(hass)
     ws.available = True
@@ -777,13 +791,13 @@ async def test_async_watch_websocket_reconnects_stale_startup(hass: HomeAssistan
     controller.connectivity.ws_message_received = None
     ws._ws_started_at = datetime.now(UTC) - STALE_WEBSOCKET_INTERVAL - timedelta(seconds=1)
 
-    with patch.object(ws, "_reconnect") as mock_reconnect:
+    with patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart:
         ws._async_watch_websocket(None)
 
-    mock_reconnect.assert_called_once()
+    mock_schedule_reauth_and_restart.assert_called_once()
 
 
-async def test_async_watch_websocket_no_reconnect_recent_startup(hass: HomeAssistant) -> None:
+async def test_health_check_skips_reauth_on_recent_startup(hass: HomeAssistant) -> None:
     """Test that the health check does NOT reconnect when startup is recent."""
     ws, controller, _ = _make_websocket(hass)
     ws.available = True
@@ -792,7 +806,7 @@ async def test_async_watch_websocket_no_reconnect_recent_startup(hass: HomeAssis
     controller.connectivity.ws_message_received = None
     ws._ws_started_at = datetime.now(UTC) - timedelta(seconds=30)
 
-    with patch.object(ws, "_reconnect") as mock_reconnect:
+    with patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart:
         ws._async_watch_websocket(None)
 
-    mock_reconnect.assert_not_called()
+    mock_schedule_reauth_and_restart.assert_not_called()

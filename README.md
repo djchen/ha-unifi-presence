@@ -272,14 +272,14 @@ source .venv/bin/activate
 PYTHONPATH=. pytest tests/ -v
 ```
 
-Coverage is enforced at 95% minimum and runs automatically with pytest.
+Coverage is enforced at 98% minimum and runs automatically with pytest.
 
 ### Linting & Formatting
 
 ```bash
 source .venv/bin/activate
-ruff check .          # Check for issues
-ruff format .         # Format code
+ruff check .
+ruff format --check .
 ```
 
 ### Type Checking
