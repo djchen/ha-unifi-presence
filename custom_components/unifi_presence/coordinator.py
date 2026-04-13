@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -12,9 +11,11 @@ import aiounifi
 from aiounifi.models.message import Message
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_AWAY_SECONDS,
@@ -36,11 +37,6 @@ if TYPE_CHECKING:
     from .websocket import UnifiPresenceWebsocket
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _current_epoch_seconds() -> int:
-    """Return the current Unix timestamp in seconds."""
-    return int(time.time())
 
 
 def _normalize_tracked_macs(raw_tracked: list[str]) -> tuple[str, ...]:
@@ -98,6 +94,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     """Coordinator for UniFi client presence via WebSocket + fallback poll."""
 
     config_entry: ConfigEntry
+    _heartbeat_expiry: dict[str, datetime]
+    _last_seen_by_mac: dict[str, int]
+    _cancel_heartbeat_check: CALLBACK_TYPE | None
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
@@ -109,6 +108,13 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._tracked_macs = _normalize_tracked_macs(raw_tracked)
         self._tracked_set: frozenset[str] = frozenset(self._tracked_macs)
         self._away_seconds: int = config_entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
+        self._last_seen_by_mac = {}
+        self._heartbeat_expiry = {}
+        self._cancel_heartbeat_check = async_track_time_interval(
+            hass,
+            self._async_check_heartbeat_expiry,
+            timedelta(seconds=1),
+        )
 
         fallback_interval = config_entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
 
@@ -153,10 +159,191 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def async_shutdown(self) -> None:
         """Release the current controller session, if owned by this integration."""
+        if self._cancel_heartbeat_check is not None:
+            self._cancel_heartbeat_check()
+            self._cancel_heartbeat_check = None
+
+        self._heartbeat_expiry.clear()
+        self._last_seen_by_mac.clear()
+
+        await self._async_close_runtime_controller()
+        await super().async_shutdown()
+
+    async def _async_close_runtime_controller(self) -> None:
+        """Release the current controller session without stopping heartbeat tracking."""
         controller = self._controller
         self._controller = None
         if controller is not None:
             await async_close_controller(controller)
+
+    @property
+    def heartbeat_expiry_count(self) -> int:
+        """Return the number of tracked heartbeat expiries."""
+        return len(self._heartbeat_expiry)
+
+    @callback
+    def _set_last_seen(self, mac: str, last_seen: int | float) -> int:
+        """Store the newest known last_seen for a client and return it.
+
+        Only updates the cache when the incoming timestamp is strictly newer,
+        so stale fallback-poll values and out-of-order WebSocket frames cannot
+        move the clock backwards.
+        """
+        normalized = int(last_seen)
+        existing = self._last_seen_by_mac.get(mac)
+        if existing is not None and existing >= normalized:
+            return existing
+        self._last_seen_by_mac[mac] = normalized
+        return normalized
+
+    @callback
+    def _get_known_last_seen(self, mac: str) -> int | None:
+        """Return the newest known last_seen for a client."""
+        return self._last_seen_by_mac.get(mac)
+
+    @callback
+    def _clear_heartbeat(self, mac: str) -> None:
+        """Forget any pending heartbeat expiry for a client."""
+        self._heartbeat_expiry.pop(mac, None)
+
+    @callback
+    def _compute_presence_from_last_seen(self, last_seen: int | float) -> tuple[bool, datetime | None]:
+        """Return current presence and optional expiry from a last_seen timestamp."""
+        normalized_last_seen = int(last_seen)
+        now = dt_util.utcnow()
+        last_seen_at = dt_util.utc_from_timestamp(normalized_last_seen)
+        expiry = last_seen_at + timedelta(seconds=self._away_seconds)
+        if now >= expiry:
+            return False, None
+
+        return True, expiry
+
+    @callback
+    def _apply_presence_observation(
+        self,
+        mac: str,
+        *,
+        last_seen: int | float | None,
+        active: bool,
+    ) -> bool:
+        """Apply an observed presence update and maintain heartbeat expiry.
+
+        Args:
+            mac: Tracked client MAC.
+            last_seen: Latest trustworthy timestamp, if any.
+            active: Whether the client is currently in the active clients store.
+
+        Returns:
+            Whether the client should currently be considered home.
+        """
+        effective_last_seen = (
+            self._set_last_seen(mac, last_seen) if last_seen is not None else self._get_known_last_seen(mac)
+        )
+
+        if active and effective_last_seen is not None:
+            is_home, expiry = self._compute_presence_from_last_seen(effective_last_seen)
+            if is_home and expiry is not None:
+                self._heartbeat_expiry[mac] = expiry
+            else:
+                self._clear_heartbeat(mac)
+            return is_home
+
+        if effective_last_seen is None:
+            self._clear_heartbeat(mac)
+            return False
+
+        is_home, expiry = self._compute_presence_from_last_seen(effective_last_seen)
+        if is_home and expiry is not None:
+            self._heartbeat_expiry[mac] = expiry
+            return True
+
+        self._clear_heartbeat(mac)
+        return False
+
+    @callback
+    def _get_current_info(self, mac: str) -> ClientInfo:
+        """Return the current client info for a device, falling back to bare MAC."""
+        current_data = self.data
+        if current_data is not None and (info := current_data.client_info.get(mac)) is not None:
+            return info
+
+        return self._build_client_info(mac)
+
+    @callback
+    def _update_single_device_state(self, mac: str, is_home: bool, info: ClientInfo) -> None:
+        """Publish a single-device state update when state or metadata changes."""
+        current_data = self.data
+        previous_info = current_data.client_info.get(mac) if current_data is not None else None
+        previous_state = current_data.device_states.get(mac) if current_data is not None else None
+
+        if previous_state == is_home and previous_info == info:
+            return
+
+        new_states = dict(current_data.device_states) if current_data is not None else {}
+        new_states[mac] = is_home
+
+        new_info = dict(current_data.client_info) if current_data is not None else {}
+        new_info[mac] = info
+
+        _LOGGER.debug(
+            "Device %s (%s) %s: %s",
+            info["name"],
+            mac,
+            "initial state" if current_data is None else "state changed",
+            "home" if is_home else "away",
+        )
+
+        self.async_set_updated_data(
+            UnifiPresenceData(
+                device_states=new_states,
+                client_info=new_info,
+            )
+        )
+
+    @callback
+    def _async_check_heartbeat_expiry(self, *_: datetime) -> None:
+        """Expire tracked clients whose away deadline has elapsed."""
+        if self.data is None or not self._heartbeat_expiry:
+            return
+
+        now = dt_util.utcnow()
+        current_states = self.data.device_states
+        current_info = self.data.client_info
+        changed_macs: list[str] = []
+
+        for mac, expiry in tuple(self._heartbeat_expiry.items()):
+            if now < expiry:
+                continue
+
+            effective_last_seen = self._get_known_last_seen(mac)
+            if effective_last_seen is not None:
+                is_home, refreshed_expiry = self._compute_presence_from_last_seen(effective_last_seen)
+                if is_home and refreshed_expiry is not None:
+                    self._heartbeat_expiry[mac] = refreshed_expiry
+                    continue
+
+            self._heartbeat_expiry.pop(mac, None)
+            if current_states.get(mac, False):
+                changed_macs.append(mac)
+
+        if not changed_macs:
+            return
+
+        new_states = dict(current_states)
+        new_info = dict(current_info)
+        for mac in changed_macs:
+            new_states[mac] = False
+            new_info.setdefault(mac, self._get_current_info(mac))
+
+        # Update data and notify listeners directly instead of calling
+        # async_set_updated_data(), which would set last_update_success=True
+        # (masking a real controller failure) and reset the refresh timer
+        # (delaying the REST fallback recovery path).
+        self.data = UnifiPresenceData(
+            device_states=new_states,
+            client_info=new_info,
+        )
+        self.async_update_listeners()
 
     async def _ensure_controller(self) -> Controller:
         """Create or re-authenticate the controller connection."""
@@ -240,16 +427,16 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         if mac not in self._tracked_set:
             return
 
-        now = _current_epoch_seconds()
         last_seen_raw = raw.get("last_seen")
         if last_seen_raw is None:
-            last_seen: int | float = 0
+            # No timestamp in the payload — fall back to the cached value in
+            # _apply_presence_observation rather than treating a bare WS event
+            # as proof of current activity.
+            last_seen: int | float | None = None
         elif isinstance(last_seen_raw, bool) or not isinstance(last_seen_raw, (int, float)):
             return
         else:
             last_seen = last_seen_raw
-
-        is_home = (now - last_seen) < self._away_seconds
 
         current_data = self.data
         previous_info = current_data.client_info.get(mac) if current_data is not None else None
@@ -263,31 +450,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             else previous_info
         )
 
-        if current_data is not None:
-            old_home = current_data.device_states.get(mac)
-            if old_home == is_home and previous_info == info:
-                return
-
-        new_states = dict(current_data.device_states) if current_data is not None else {}
-        new_states[mac] = is_home
-
-        new_info = dict(current_data.client_info) if current_data is not None else {}
-        new_info[mac] = info
-
-        _LOGGER.debug(
-            "Device %s (%s) %s: %s",
-            info["name"],
-            mac,
-            "initial state" if current_data is None else "state changed",
-            "home" if is_home else "away",
-        )
-
-        self.async_set_updated_data(
-            UnifiPresenceData(
-                device_states=new_states,
-                client_info=new_info,
-            )
-        )
+        is_home = self._apply_presence_observation(mac, last_seen=last_seen, active=True)
+        self._update_single_device_state(mac, is_home, info)
 
     def _connect_error(self) -> UpdateFailed:
         """Build an UpdateFailed for connection errors."""
@@ -313,9 +477,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
-        now = _current_epoch_seconds()
         tracked_macs = self._tracked_macs
-        away_threshold = self._away_seconds
 
         try:
             controller = await self._ensure_controller()
@@ -323,7 +485,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             # Session expired or credentials rejected — force re-auth
             _LOGGER.info("UniFi session expired, re-authenticating")
-            await self.async_shutdown()
+            await self._async_close_runtime_controller()
             try:
                 controller = await self._ensure_controller()
                 await self._refresh_clients(controller)
@@ -354,15 +516,15 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             client = clients.get(mac)
 
             if client is not None:
-                last_seen = client.last_seen or 0
-                is_home = (now - last_seen) < away_threshold
+                last_seen = client.last_seen or None
+                is_home = self._apply_presence_observation(mac, last_seen=last_seen, active=True)
                 client_info[mac] = self._build_client_info(
                     mac,
                     name=client.name or "",
                     hostname=client.hostname or "",
                 )
             else:
-                is_home = False
+                is_home = self._apply_presence_observation(mac, last_seen=None, active=False)
                 client_info[mac] = self._resolve_offline_client_info(mac, previous_info, clients_all)
 
             device_states[mac] = is_home
