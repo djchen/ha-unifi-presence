@@ -193,8 +193,8 @@ async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
 async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAssistant) -> None:
     """Test that setup shows a discovery error if both client sources fail after login."""
     controller = _mock_controller(clients_all_items=[])
-    controller.clients_all.update = AsyncMock(side_effect=Exception("historical fetch failed"))
-    controller.clients.update = AsyncMock(side_effect=Exception("active fetch failed"))
+    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical fetch failed"))
+    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
@@ -357,7 +357,7 @@ async def test_user_step_historical_client_failure_uses_active_clients(
     """Test that setup still proceeds when historical client refresh fails but active succeeds."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_items=[("aa:bb:cc:dd:ee:ff", client1)])
-    controller.clients_all.update = AsyncMock(side_effect=Exception("historical clients unavailable"))
+    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical clients unavailable"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
@@ -435,8 +435,8 @@ async def test_user_step_single_site_reuses_site_fetch_for_client_discovery(hass
 async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: HomeAssistant) -> None:
     """Test single-site client discovery errors are retried on the next submit."""
     controller = _mock_controller(clients_all_items=[])
-    controller.clients_all.update = AsyncMock(side_effect=Exception("historical clients unavailable"))
-    controller.clients.update = AsyncMock(side_effect=Exception("active clients unavailable"))
+    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical clients unavailable"))
+    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active clients unavailable"))
 
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     retry_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
@@ -1546,8 +1546,8 @@ async def test_user_step_both_updates_fail_but_cached_data_proceeds(hass: HomeAs
     """Test that setup proceeds when both update() calls fail but stores have cached data."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
-    controller.clients_all.update = AsyncMock(side_effect=Exception("historical fetch failed"))
-    controller.clients.update = AsyncMock(side_effect=Exception("active fetch failed"))
+    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical fetch failed"))
+    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})

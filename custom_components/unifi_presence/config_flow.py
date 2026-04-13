@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import replace
+from json import JSONDecodeError
 from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
 import aiounifi
@@ -199,14 +200,14 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     try:
         await controller.clients_all.update()
         historical_refreshed = True
-    except Exception:
+    except TimeoutError, aiounifi.AiounifiException, JSONDecodeError:
         _LOGGER.debug("Failed to refresh historical UniFi clients")
 
     active_refreshed = False
     try:
         await controller.clients.update()
         active_refreshed = True
-    except Exception:
+    except TimeoutError, aiounifi.AiounifiException, JSONDecodeError:
         _LOGGER.debug("Failed to refresh active UniFi clients")
 
     if not historical_refreshed and not active_refreshed:

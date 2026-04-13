@@ -48,7 +48,7 @@ ha-unifi-presence/
 - **Test**: `PYTHONPATH=. pytest tests/ -v` (don't use editable install — py3.14 compat issue)
 - **Lint**: `ruff check . && ruff format .`
 - **Type check**: `mypy --strict custom_components/unifi_presence/`
-- **Coverage**: enforced at 95% via pytest-cov
+- **Coverage**: enforced at 98% via pytest-cov
 
 ## Conventions
 

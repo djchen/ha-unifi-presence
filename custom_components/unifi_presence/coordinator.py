@@ -442,7 +442,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         """Best-effort refresh of historical clients, then required refresh of active clients."""
         try:
             await controller.clients_all.update()
-        except Exception:
+        except TimeoutError, aiounifi.AiounifiException, JSONDecodeError:
             _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
 
         await controller.clients.update()

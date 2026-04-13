@@ -141,7 +141,7 @@ async def test_clients_all_failure_uses_cached_data(
     mock_coordinator_controller.clients.clear()
     # Pre-populate clients_all cache, then make update fail on next call
     mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
-    mock_coordinator_controller.clients_all.update_mock.side_effect = Exception("network")
+    mock_coordinator_controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("network")
 
     coordinator = UnifiPresenceCoordinator(hass, config_entry)
     data = await coordinator._async_update_data()
