@@ -1309,3 +1309,59 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     assert coordinator._get_known_last_seen(mac) == newer_but_expired
     # But it's still past the away threshold, so device is away
     assert data.device_states[mac] is False
+
+
+async def test_reschedule_heartbeat_schedules_at_earliest_expiry(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that _reschedule_heartbeat_check schedules at the earliest pending expiry."""
+    now = int(time.time())
+    mac1 = "aa:bb:cc:dd:ee:ff"
+    mac2 = "11:22:33:44:55:66"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Both devices home via WS
+    coordinator.process_message(MagicMock(data={"mac": mac1, "name": "Dan Phone", "last_seen": now}))
+    coordinator.process_message(MagicMock(data={"mac": mac2, "name": "Jane Phone", "last_seen": now - 30}))
+
+    # A heartbeat check should be scheduled
+    assert coordinator._cancel_heartbeat_check is not None
+    assert coordinator.heartbeat_expiry_count == 2
+
+
+async def test_reschedule_heartbeat_clears_when_no_expiries(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that _reschedule_heartbeat_check cancels the timer when no expiries remain."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # No devices tracked as home
+    assert coordinator._cancel_heartbeat_check is None
+    assert coordinator.heartbeat_expiry_count == 0
+
+    # Manually call reschedule — should remain None
+    coordinator._reschedule_heartbeat_check()
+    assert coordinator._cancel_heartbeat_check is None
+
+
+async def test_heartbeat_fires_at_scheduled_time(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that the on-demand heartbeat timer fires and transitions device to away."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Device comes home via WS
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac] is True
+    assert coordinator._cancel_heartbeat_check is not None
+
+    # Simulate time advancing past the away threshold and fire the scheduled callback
+    coordinator._last_seen_by_mac[mac] = now - coordinator.away_seconds
+    coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+    coordinator._async_check_heartbeat_expiry()
+
+    assert coordinator.data.device_states[mac] is False
+    # No more expiries — timer should be cleared
+    assert coordinator._cancel_heartbeat_check is None

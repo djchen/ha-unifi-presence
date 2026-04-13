@@ -13,7 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -110,11 +110,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._away_seconds: int = config_entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
         self._last_seen_by_mac = {}
         self._heartbeat_expiry = {}
-        self._cancel_heartbeat_check = async_track_time_interval(
-            hass,
-            self._async_check_heartbeat_expiry,
-            timedelta(seconds=1),
-        )
+        self._cancel_heartbeat_check = None
 
         fallback_interval = config_entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
 
@@ -207,6 +203,27 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._heartbeat_expiry.pop(mac, None)
 
     @callback
+    def _reschedule_heartbeat_check(self) -> None:
+        """Schedule the next heartbeat check at the earliest pending expiry.
+
+        The event loop only wakes when a tracked device is actually due
+        to expire, rather than polling on a fixed interval.
+        """
+        if self._cancel_heartbeat_check is not None:
+            self._cancel_heartbeat_check()
+            self._cancel_heartbeat_check = None
+
+        if not self._heartbeat_expiry:
+            return
+
+        earliest = min(self._heartbeat_expiry.values())
+        self._cancel_heartbeat_check = async_track_point_in_utc_time(
+            self.hass,
+            self._async_check_heartbeat_expiry,
+            earliest,
+        )
+
+    @callback
     def _compute_presence_from_last_seen(self, last_seen: int | float) -> tuple[bool, datetime | None]:
         """Return current presence and optional expiry from a last_seen timestamp."""
         normalized_last_seen = int(last_seen)
@@ -224,14 +241,12 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         mac: str,
         *,
         last_seen: int | float | None,
-        active: bool,
     ) -> bool:
         """Apply an observed presence update and maintain heartbeat expiry.
 
         Args:
             mac: Tracked client MAC.
             last_seen: Latest trustworthy timestamp, if any.
-            active: Whether the client is currently in the active clients store.
 
         Returns:
             Whether the client should currently be considered home.
@@ -240,14 +255,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             self._set_last_seen(mac, last_seen) if last_seen is not None else self._get_known_last_seen(mac)
         )
 
-        if active and effective_last_seen is not None:
-            is_home, expiry = self._compute_presence_from_last_seen(effective_last_seen)
-            if is_home and expiry is not None:
-                self._heartbeat_expiry[mac] = expiry
-            else:
-                self._clear_heartbeat(mac)
-            return is_home
-
         if effective_last_seen is None:
             self._clear_heartbeat(mac)
             return False
@@ -255,10 +262,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         is_home, expiry = self._compute_presence_from_last_seen(effective_last_seen)
         if is_home and expiry is not None:
             self._heartbeat_expiry[mac] = expiry
-            return True
-
-        self._clear_heartbeat(mac)
-        return False
+        else:
+            self._clear_heartbeat(mac)
+        return is_home
 
     @callback
     def _get_current_info(self, mac: str) -> ClientInfo:
@@ -327,6 +333,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 changed_macs.append(mac)
 
         if not changed_macs:
+            self._reschedule_heartbeat_check()
             return
 
         new_states = dict(current_states)
@@ -344,6 +351,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             client_info=new_info,
         )
         self.async_update_listeners()
+        self._reschedule_heartbeat_check()
 
     async def _ensure_controller(self) -> Controller:
         """Create or re-authenticate the controller connection."""
@@ -450,8 +458,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             else previous_info
         )
 
-        is_home = self._apply_presence_observation(mac, last_seen=last_seen, active=True)
+        is_home = self._apply_presence_observation(mac, last_seen=last_seen)
         self._update_single_device_state(mac, is_home, info)
+        self._reschedule_heartbeat_check()
 
     def _connect_error(self) -> UpdateFailed:
         """Build an UpdateFailed for connection errors."""
@@ -517,17 +526,19 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
             if client is not None:
                 last_seen = client.last_seen or None
-                is_home = self._apply_presence_observation(mac, last_seen=last_seen, active=True)
+                is_home = self._apply_presence_observation(mac, last_seen=last_seen)
                 client_info[mac] = self._build_client_info(
                     mac,
                     name=client.name or "",
                     hostname=client.hostname or "",
                 )
             else:
-                is_home = self._apply_presence_observation(mac, last_seen=None, active=False)
+                is_home = self._apply_presence_observation(mac, last_seen=None)
                 client_info[mac] = self._resolve_offline_client_info(mac, previous_info, clients_all)
 
             device_states[mac] = is_home
+
+        self._reschedule_heartbeat_check()
 
         new_data = UnifiPresenceData(
             device_states=device_states,
