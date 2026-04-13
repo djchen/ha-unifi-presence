@@ -13,7 +13,7 @@ This integration intentionally does not implement discovery. UniFi hardware disc
 - **Real-time updates**: WebSocket connection for instant presence detection
 - **Device selection**: Choose which devices to track from auto-discovered clients
 - **Configurable away threshold**: Set how long before marking a device as away (default: 60s)
-- **Fallback polling**: REST polling (default: 300s) catches missed WebSocket events
+- **Fallback polling**: REST polling (default: 300s) catches missed WebSocket events and refreshes offline metadata
 - **UI-only configuration**: No YAML required
 - **Options flow**: Add or remove tracked devices after setup. Adjust away threshold and polling interval.
 - **Reconfigure flow**: Change controller settings without removing the integration
@@ -109,7 +109,7 @@ Any client device (wireless or wired) that has connected to your UniFi network a
 |---|---|
 | **Presence detection** | Tracks whether selected devices are home or away |
 | **Real-time updates** | WebSocket connection delivers instant state changes |
-| **Fallback polling** | REST polling catches events missed by WebSocket |
+| **Fallback polling** | REST polling catches events missed by WebSocket and refreshes offline metadata |
 | **Device selection** | Choose specific devices to track during setup or in options |
 | **Away threshold** | Configure how long before a device is marked away |
 | **Reauthentication** | Update credentials when they expire without removing the integration |
@@ -123,13 +123,13 @@ This integration uses a **push-primary, poll-fallback** strategy:
 
 1. **WebSocket (primary)**: A persistent WebSocket connection to the UniFi controller receives real-time `sta:sync` events whenever a client's state changes. This provides near-instant presence updates.
 2. **REST polling (fallback)**: A configurable REST poll (default: every 300 seconds) fetches all tracked clients to catch any events that may have been missed during WebSocket disconnections.
-3. **Away detection**: A device is marked `not_home` when `current_time - last_seen >= away_seconds` (default: 60 seconds). Away evaluation happens when a WebSocket event arrives for that client or during a fallback poll — it is not continuous.
+3. **Away detection**: A device is marked `not_home` when `current_time - last_seen >= away_seconds` (default: 60 seconds). The coordinator maintains a heartbeat-style expiry timer for tracked clients, so away transitions continue to happen even if no second WebSocket message arrives for that client.
 
-If the WebSocket disconnects, the integration automatically reconnects with backoff. During disconnection, the fallback poll ensures presence state remains current.
+If the WebSocket disconnects, the integration automatically reconnects with backoff. During disconnection, the fallback poll still ensures presence state remains current and refreshes the latest known client activity.
 
 ### Offline vs. Unavailable
 
-- **Offline (not_home)**: A tracked client that is not in the controller's active client list is marked `not_home`. The integration resolves metadata (display name) from the controller's historical client store (`clients_all`) when it has a usable name/hostname, falling back to the last-known name or the raw MAC address.
+- **Offline (not_home)**: A tracked client that is no longer in the controller's active client list stays `home` until its configured away heartbeat expires. Once it expires, the client is marked `not_home`. The integration resolves metadata (display name) from the controller's historical client store (`clients_all`) when it has a usable name/hostname, falling back to the last-known name or the raw MAC address.
 - **Unavailable**: Indicates a coordinator or controller health problem (e.g., the controller is unreachable, or authentication failed). All tracked entities become `unavailable` during these conditions and recover automatically once connectivity is restored.
 
 ## Entities
@@ -207,7 +207,7 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 
 ## Known Limitations
 
-- **Away detection delay**: Devices are marked away only after the configured `away_seconds` threshold elapses since the last activity seen by the controller. Some devices sleep aggressively and may appear away prematurely.
+- **Away detection delay**: Devices are marked away only after the configured `away_seconds` threshold elapses since the last activity seen by the controller. A coordinator heartbeat monitor enforces that expiry continuously, but some devices sleep aggressively and may still appear away prematurely.
 - **Clock skew**: Presence detection compares the Home Assistant server's clock with the controller's `last_seen` timestamps. If the two clocks diverge significantly, devices may be incorrectly marked home or away.
 - **Single controller**: Each integration instance connects to one UniFi controller and site. Add multiple instances for multiple controllers.
 - **Client visibility**: Only devices that have previously connected to the UniFi network appear in the client list. New devices must connect at least once before they can be tracked.
@@ -241,6 +241,7 @@ Diagnostics include:
 - Tracked device count and states
 - Away threshold and poll interval settings
 - WebSocket connection status
+- Heartbeat expiry count for tracked clients still within the away window
 
 ## System Health
 
@@ -249,6 +250,7 @@ The integration also adds a system health summary to Home Assistant. It reports:
 - Number of configured and loaded UniFi Presence entries
 - Number of entries with successful coordinator updates
 - Number of active WebSocket connections
+- Number of active heartbeat expiries currently being tracked
 - Total tracked device count
 - Configured controller host and site targets
 

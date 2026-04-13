@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Coroutine
+from datetime import timedelta
 from json import JSONDecodeError
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL, CONF_SITE, CONF_TRACKED_DEVICES
 from custom_components.unifi_presence.coordinator import (
@@ -166,14 +168,14 @@ async def test_clients_all_stub_falls_back_to_previous_metadata(
 
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is False
+    assert data.device_states[mac] is True
     assert data.client_info[mac]["name"] == "Dan Phone"
 
 
 async def test_clients_all_name_takes_priority_over_previous_info(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
 ) -> None:
-    """Test that a rename in UniFi propagates to an offline device on the next fallback poll.
+    """Test that a rename in UniFi propagates to a recently inactive device on the next fallback poll.
 
     When clients_all supplies a usable name it must win over stale previous_info
     so that renaming a device in UniFi while it is offline is not silently ignored.
@@ -192,7 +194,7 @@ async def test_clients_all_name_takes_priority_over_previous_info(
 
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is False
+    assert data.device_states[mac] is True
     # clients_all has the updated name and must win over the stale previous_info
     assert data.client_info[mac]["name"] == "Dan's iPhone"
 
@@ -504,6 +506,7 @@ async def test_process_message_updates_state(
     # State should now be home
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+    assert coordinator.heartbeat_expiry_count == 1
 
 
 async def test_process_message_updates_offline_client(
@@ -526,6 +529,114 @@ async def test_process_message_updates_offline_client(
 
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+    assert coordinator.heartbeat_expiry_count == 1
+
+
+async def test_heartbeat_expiry_marks_recently_offline_client_away(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test heartbeat expiry marks a client away without waiting for fallback poll."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    coordinator.process_message(
+        MagicMock(
+            data={
+                "mac": mac,
+                "name": "Dan Phone",
+                "last_seen": now,
+            }
+        )
+    )
+
+    assert coordinator.data.device_states[mac] is True
+    assert coordinator.heartbeat_expiry_count == 1
+
+    coordinator._last_seen_by_mac[mac] = now - coordinator.away_seconds
+    coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+
+    coordinator._async_check_heartbeat_expiry()
+
+    assert coordinator.data.device_states[mac] is False
+    assert coordinator.heartbeat_expiry_count == 0
+
+
+async def test_heartbeat_expiry_skips_client_when_newer_activity_arrives(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test stale heartbeat expiry does not mark away after a newer reconnect."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    coordinator.process_message(
+        MagicMock(
+            data={
+                "mac": mac,
+                "name": "Dan Phone",
+                "last_seen": now - coordinator.away_seconds + 1,
+            }
+        )
+    )
+
+    stale_expiry = dt_util.utcnow() - timedelta(seconds=1)
+    coordinator._heartbeat_expiry[mac] = stale_expiry
+    coordinator._last_seen_by_mac[mac] = now
+
+    coordinator._async_check_heartbeat_expiry()
+
+    assert coordinator.data.device_states[mac] is True
+    assert coordinator.heartbeat_expiry_count == 1
+    # Verify expiry was refreshed forward based on the newer last_seen
+    assert coordinator._heartbeat_expiry[mac] > stale_expiry
+
+
+async def test_fallback_poll_keeps_recently_missing_client_home_until_heartbeat_expires(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test missing active clients stay home while cached last_seen is still fresh."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+    first_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(first_data)
+
+    mock_coordinator_controller.clients.clear()
+
+    second_data = await coordinator._async_update_data()
+
+    assert second_data.device_states[mac] is True
+    assert coordinator.heartbeat_expiry_count == 1
+
+
+async def test_async_shutdown_clears_heartbeat_tracking(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test shutdown clears heartbeat expiry and cached last_seen state."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    coordinator.process_message(
+        MagicMock(
+            data={
+                "mac": mac,
+                "name": "Dan Phone",
+                "last_seen": now,
+            }
+        )
+    )
+
+    assert coordinator.heartbeat_expiry_count == 1
+    assert coordinator._get_known_last_seen(mac) == now
+
+    await coordinator.async_shutdown()
+
+    assert coordinator.heartbeat_expiry_count == 0
+    assert coordinator._get_known_last_seen(mac) is None
 
 
 async def test_process_message_noop_for_equivalent_update(
@@ -769,9 +880,10 @@ async def test_fallback_poll_returns_new_data_on_state_change(
     coordinator.async_set_updated_data(data1)
     assert data1.device_states["aa:bb:cc:dd:ee:ff"] is True
 
-    # Simulate device going away
-    client1_away = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now - 120)
-    mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1_away
+    # Simulate device going away: remove from active clients and age out
+    # the cached timestamp past the away threshold
+    mock_coordinator_controller.clients.clear()
+    coordinator._last_seen_by_mac["aa:bb:cc:dd:ee:ff"] = now - 120
 
     data2 = await coordinator._async_update_data()
 
@@ -964,3 +1076,292 @@ async def test_reauth_retry_calls_clients_all_and_preserves_prior_metadata(
 
     # clients_all.update should have been called on both the initial and retry paths
     assert controller.clients_all.update.await_count == 2
+
+
+async def test_set_last_seen_rejects_stale_timestamp(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that _set_last_seen keeps the newer cached value when a stale timestamp arrives."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Seed with a recent timestamp
+    result1 = coordinator._set_last_seen(mac, now)
+    assert result1 == now
+    assert coordinator._get_known_last_seen(mac) == now
+
+    # Attempt to overwrite with an older timestamp
+    stale = now - 300
+    result2 = coordinator._set_last_seen(mac, stale)
+
+    # Should return the existing (newer) value, cache unchanged
+    assert result2 == now
+    assert coordinator._get_known_last_seen(mac) == now
+
+
+async def test_out_of_order_ws_does_not_regress_presence(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that out-of-order WebSocket frames cannot move last_seen backwards."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # First WS message: device seen now -> home
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac] is True
+    assert coordinator._get_known_last_seen(mac) == now
+
+    # Delayed/reordered WS message: stale timestamp from before the away threshold
+    stale = now - coordinator.away_seconds - 10
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": stale}))
+
+    # Should still be home — the stale timestamp must not overwrite the newer one
+    assert coordinator.data.device_states[mac] is True
+    assert coordinator._get_known_last_seen(mac) == now
+
+
+async def test_stale_poll_does_not_regress_ws_last_seen(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that a REST poll with an older last_seen does not overwrite a newer WS value."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # WS message: device seen now
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac] is True
+
+    # REST poll returns an older last_seen (e.g. stale cache on controller)
+    stale = now - 10
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=stale)
+    data = await coordinator._async_update_data()
+
+    # The newer WS timestamp must be preserved
+    assert data.device_states[mac] is True
+    assert coordinator._get_known_last_seen(mac) == now
+
+
+async def test_poll_with_missing_last_seen_uses_cached(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that a poll with None/0 last_seen falls back to cached value."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # WS message: device seen now
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac] is True
+
+    # REST poll returns last_seen=0 (missing/null from controller)
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=0)
+    data = await coordinator._async_update_data()
+
+    # Should still be home — 0 is treated as None and the cached timestamp is used
+    assert data.device_states[mac] is True
+    assert coordinator._get_known_last_seen(mac) == now
+
+
+async def test_heartbeat_expiry_preserves_last_update_success_false(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test heartbeat expiry does not mask a real controller failure.
+
+    After a failed refresh, last_update_success is False and entities are
+    unavailable.  A subsequent local heartbeat expiry must not flip
+    last_update_success back to True.
+    """
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Establish device as home via WS
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac] is True
+    assert coordinator.last_update_success is True
+
+    # Simulate a controller failure
+    coordinator.last_update_success = False
+
+    # Force heartbeat expiry
+    coordinator._last_seen_by_mac[mac] = now - coordinator.away_seconds
+    coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+    coordinator._async_check_heartbeat_expiry()
+
+    # Device should transition to away, but last_update_success must stay False
+    assert coordinator.data.device_states[mac] is False
+    assert coordinator.last_update_success is False
+
+
+async def test_heartbeat_expiry_does_not_reset_refresh_timer(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test heartbeat expiry does not push the next REST poll further out.
+
+    During a WebSocket outage, heartbeat expiries should not reschedule
+    the coordinator refresh timer — that would weaken the REST fallback.
+    """
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Establish device as home via WS
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+
+    # Spy on _schedule_refresh (called by async_set_updated_data but not by
+    # our direct data assignment + async_update_listeners path)
+    with patch.object(coordinator, "_schedule_refresh") as mock_schedule:
+        coordinator._last_seen_by_mac[mac] = now - coordinator.away_seconds
+        coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+        coordinator._async_check_heartbeat_expiry()
+
+        mock_schedule.assert_not_called()
+
+
+async def test_heartbeat_expiry_noop_when_already_away(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test heartbeat expiry is a no-op for a device already marked not_home."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Device starts home
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac] is True
+
+    # Expire it normally
+    coordinator._last_seen_by_mac[mac] = now - coordinator.away_seconds
+    coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+    coordinator._async_check_heartbeat_expiry()
+    assert coordinator.data.device_states[mac] is False
+
+    # Re-inject a stale heartbeat entry for the already-away device
+    coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+    snapshot = coordinator.data
+
+    coordinator._async_check_heartbeat_expiry()
+
+    # Data object unchanged — already away, no redundant update
+    assert coordinator.data is snapshot
+    assert coordinator.heartbeat_expiry_count == 0
+
+
+async def test_heartbeat_expiry_mixed_devices(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test heartbeat sweep with one device expiring and another staying home."""
+    now = int(time.time())
+    mac1 = "aa:bb:cc:dd:ee:ff"
+    mac2 = "11:22:33:44:55:66"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Both devices home
+    coordinator.process_message(MagicMock(data={"mac": mac1, "name": "Dan Phone", "last_seen": now}))
+    coordinator.process_message(MagicMock(data={"mac": mac2, "name": "Jane Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac1] is True
+    assert coordinator.data.device_states[mac2] is True
+    assert coordinator.heartbeat_expiry_count == 2
+
+    # Expire mac1 only; mac2 keeps a fresh last_seen
+    coordinator._last_seen_by_mac[mac1] = now - coordinator.away_seconds
+    coordinator._heartbeat_expiry[mac1] = dt_util.utcnow() - timedelta(seconds=1)
+
+    coordinator._async_check_heartbeat_expiry()
+
+    assert coordinator.data.device_states[mac1] is False
+    assert coordinator.data.device_states[mac2] is True
+    # mac1 expired and removed, mac2 still tracked
+    assert coordinator.heartbeat_expiry_count == 1
+
+
+async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that a newer timestamp that's still past the away threshold is accepted and marks away."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # WS message: device seen a while ago but within threshold
+    initial_ts = now - 30
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": initial_ts}))
+    assert coordinator.data.device_states[mac] is True
+
+    # REST poll returns a newer timestamp, but it's past the away threshold
+    newer_but_expired = now - coordinator.away_seconds - 5
+    # This is only newer if initial_ts < newer_but_expired
+    # initial_ts = now - 30, newer_but_expired = now - 65 → NOT newer
+    # So let's use a scenario where the initial was even older
+    old_ts = now - coordinator.away_seconds - 100
+    coordinator._last_seen_by_mac[mac] = old_ts  # simulate very old cache
+
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=newer_but_expired)
+    data = await coordinator._async_update_data()
+
+    # The newer timestamp should be accepted (it's > old_ts)
+    assert coordinator._get_known_last_seen(mac) == newer_but_expired
+    # But it's still past the away threshold, so device is away
+    assert data.device_states[mac] is False
+
+
+async def test_reschedule_heartbeat_schedules_at_earliest_expiry(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that _reschedule_heartbeat_check schedules at the earliest pending expiry."""
+    now = int(time.time())
+    mac1 = "aa:bb:cc:dd:ee:ff"
+    mac2 = "11:22:33:44:55:66"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Both devices home via WS
+    coordinator.process_message(MagicMock(data={"mac": mac1, "name": "Dan Phone", "last_seen": now}))
+    coordinator.process_message(MagicMock(data={"mac": mac2, "name": "Jane Phone", "last_seen": now - 30}))
+
+    # A heartbeat check should be scheduled
+    assert coordinator._cancel_heartbeat_check is not None
+    assert coordinator.heartbeat_expiry_count == 2
+
+
+async def test_reschedule_heartbeat_clears_when_no_expiries(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that _reschedule_heartbeat_check cancels the timer when no expiries remain."""
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # No devices tracked as home
+    assert coordinator._cancel_heartbeat_check is None
+    assert coordinator.heartbeat_expiry_count == 0
+
+    # Manually call reschedule — should remain None
+    coordinator._reschedule_heartbeat_check()
+    assert coordinator._cancel_heartbeat_check is None
+
+
+async def test_heartbeat_fires_at_scheduled_time(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, config_entry: MagicMock
+) -> None:
+    """Test that the on-demand heartbeat timer fires and transitions device to away."""
+    now = int(time.time())
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, config_entry)
+
+    # Device comes home via WS
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
+    assert coordinator.data.device_states[mac] is True
+    assert coordinator._cancel_heartbeat_check is not None
+
+    # Simulate time advancing past the away threshold and fire the scheduled callback
+    coordinator._last_seen_by_mac[mac] = now - coordinator.away_seconds
+    coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+    coordinator._async_check_heartbeat_expiry()
+
+    assert coordinator.data.device_states[mac] is False
+    # No more expiries — timer should be cleared
+    assert coordinator._cancel_heartbeat_check is None

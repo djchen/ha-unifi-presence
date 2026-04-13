@@ -62,6 +62,7 @@ async def async_get_config_entry_diagnostics(
         DEFAULT_FALLBACK_POLL_INTERVAL,
     )
     websocket_connected = False
+    heartbeat_expiry_count = 0
     if coordinator is not None:
         tracked_count = len(coordinator.tracked_devices)
         away_seconds = coordinator.away_seconds
@@ -69,6 +70,7 @@ async def async_get_config_entry_diagnostics(
             coordinator.update_interval.total_seconds() if coordinator.update_interval else None
         )
         websocket_connected = coordinator.websocket is not None and coordinator.websocket.available
+        heartbeat_expiry_count = coordinator.heartbeat_expiry_count
 
     device_states = coordinator_data.device_states if coordinator_data is not None else {}
 
@@ -87,4 +89,5 @@ async def async_get_config_entry_diagnostics(
         "away_seconds": away_seconds,
         "fallback_poll_interval_seconds": fallback_poll_interval_seconds,
         "websocket_connected": websocket_connected,
+        "heartbeat_expiry_count": heartbeat_expiry_count,
     }
