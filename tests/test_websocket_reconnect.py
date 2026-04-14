@@ -169,6 +169,28 @@ async def test_clear_retry_cancels_active_handle(hass: HomeAssistant) -> None:
     assert ws._cancel_retry is None
 
 
+async def test_schedule_reauth_and_restart_clears_pending_retry_handle(
+    hass: HomeAssistant,
+) -> None:
+    """Test _schedule_reauth_and_restart() cancels a pending retry handle first."""
+    ws, controller, _ = make_websocket(hass)
+    cancel_retry = MagicMock()
+    ws._cancel_retry = cancel_retry
+    controller.login = AsyncMock(side_effect=aiounifi.AiounifiException("auth failed"))
+
+    with patch(
+        "custom_components.unifi_presence.websocket.async_call_later",
+        return_value=MagicMock(),
+    ):
+        ws._schedule_reauth_and_restart()
+        await wait_for_task(ws._reconnect_task)
+
+    cancel_retry.assert_called_once()
+    assert ws._cancel_retry is not cancel_retry
+
+    ws.stop()
+
+
 async def test_websocket_runner_returns_when_stopped(hass: HomeAssistant) -> None:
     """Test that ws runner exits without scheduling retry when _stopped is True."""
     ws, controller, _ = make_websocket(hass)

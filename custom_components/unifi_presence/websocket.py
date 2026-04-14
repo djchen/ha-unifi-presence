@@ -269,7 +269,7 @@ class UnifiPresenceWebsocket:
         if self._stopped:
             return
 
-        self._cancel_retry = None
+        self._clear_retry()
         self._set_available(False, force_signal=True)
 
         async def _do_reconnect() -> None:
