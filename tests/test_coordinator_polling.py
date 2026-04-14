@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import time
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import aiounifi
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL
 from custom_components.unifi_presence.coordinator import (
@@ -18,12 +20,25 @@ from .conftest import MOCK_OPTIONS, _make_mock_client
 
 
 async def test_coordinator_fetches_clients(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that the coordinator fetches and processes client data."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", ip="192.168.1.100", last_seen=now)
-    client2 = _make_mock_client("11:22:33:44:55:66", name="Jane Phone", ip="192.168.1.101", last_seen=now - 120)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client(
+        "aa:bb:cc:dd:ee:ff",
+        name="Dan Phone",
+        ip="192.168.1.100",
+        last_seen=int(now.timestamp()),
+    )
+    client2 = _make_mock_client(
+        "11:22:33:44:55:66",
+        name="Jane Phone",
+        ip="192.168.1.101",
+        last_seen=int((now - timedelta(seconds=120)).timestamp()),
+    )
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
     mock_coordinator_controller.clients["11:22:33:44:55:66"] = client2
 
@@ -84,12 +99,15 @@ async def test_clients_all_failure_uses_cached_data(
 
 
 async def test_clients_all_stub_falls_back_to_previous_metadata(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that empty historical stubs do not overwrite richer prior metadata."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     first_data = await coordinator._async_update_data()
@@ -105,16 +123,19 @@ async def test_clients_all_stub_falls_back_to_previous_metadata(
 
 
 async def test_clients_all_name_takes_priority_over_previous_info(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that a rename in UniFi propagates to a recently inactive device on the next fallback poll.
 
     When clients_all supplies a usable name it must win over stale previous_info
     so that renaming a device in UniFi while it is offline is not silently ignored.
     """
-    now = int(time.time())
+    now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     first_data = await coordinator._async_update_data()
@@ -143,12 +164,15 @@ async def test_coordinator_fallback_interval(
 
 
 async def test_fallback_poll_keeps_recently_missing_client_home_until_heartbeat_expires(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test missing active clients stay home while cached last_seen is still fresh."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     first_data = await coordinator._async_update_data()
@@ -163,11 +187,14 @@ async def test_fallback_poll_keeps_recently_missing_client_home_until_heartbeat_
 
 
 async def test_fallback_poll_diff_returns_existing_data(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that fallback poll returns existing data when state unchanged."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=int(now.timestamp()))
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -183,11 +210,14 @@ async def test_fallback_poll_diff_returns_existing_data(
 
 
 async def test_async_refresh_skips_listener_update_when_state_unchanged(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that unchanged fallback polls do not notify listeners."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=int(now.timestamp()))
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -201,12 +231,15 @@ async def test_async_refresh_skips_listener_update_when_state_unchanged(
 
 
 async def test_async_refresh_notifies_listeners_on_metadata_only_change(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that fallback polls notify listeners when only metadata changes."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = _make_mock_client(
-        "aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now
+        "aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=int(now.timestamp())
     )
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -216,7 +249,7 @@ async def test_async_refresh_notifies_listeners_on_metadata_only_change(
     assert coordinator.async_update_listeners.call_count == 1
 
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = _make_mock_client(
-        "aa:bb:cc:dd:ee:ff", name="Dan Phone Updated", last_seen=now
+        "aa:bb:cc:dd:ee:ff", name="Dan Phone Updated", last_seen=int(now.timestamp())
     )
 
     await coordinator.async_refresh()
@@ -226,11 +259,14 @@ async def test_async_refresh_notifies_listeners_on_metadata_only_change(
 
 
 async def test_fallback_poll_returns_new_data_on_state_change(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that fallback poll returns new data when device state changes between polls."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=int(now.timestamp()))
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -242,7 +278,7 @@ async def test_fallback_poll_returns_new_data_on_state_change(
     # Simulate device going away: remove from active clients and age out
     # the cached timestamp past the away threshold
     mock_coordinator_controller.clients.clear()
-    coordinator._last_seen_by_mac["aa:bb:cc:dd:ee:ff"] = now - 120
+    coordinator._last_seen_by_mac["aa:bb:cc:dd:ee:ff"] = int((now - timedelta(seconds=120)).timestamp())
 
     data2 = await coordinator._async_update_data()
 

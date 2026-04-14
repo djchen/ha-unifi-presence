@@ -180,7 +180,7 @@ class UnifiPresenceWebsocket:
             with suppress(asyncio.CancelledError):
                 await websocket_task
             raise
-        except Exception:
+        except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, RuntimeError:
             _LOGGER.exception("Unexpected WebSocket error")
         finally:
             is_active_runner = self.ws_task is asyncio.current_task()

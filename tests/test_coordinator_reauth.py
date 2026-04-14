@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import time
 from json import JSONDecodeError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiounifi
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 
@@ -20,12 +21,13 @@ from .conftest import _make_mock_client, make_mock_controller, make_reauth_side_
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
 async def test_coordinator_reauth_on_session_error(
     hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
     mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
     exception: type[Exception],
 ) -> None:
     """Test that the coordinator re-authenticates on LoginRequired or Unauthorized."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
     mock_coordinator_controller.clients.update_mock.side_effect = make_reauth_side_effect(exception, recover=True)
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
@@ -82,10 +84,13 @@ async def test_coordinator_initial_timeout_raises_update_failed(
 
 
 async def test_coordinator_reauth_detaches_replaced_runtime_controller(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test poll-triggered reauth detaches the replaced runtime controller session."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     owned_session = MagicMock()
     owned_session.closed = False
     owned_session.detach = MagicMock()
@@ -208,10 +213,13 @@ async def test_coordinator_reauth_timeout_raises_update_failed(
 
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
 async def test_reauth_resets_controller_before_retry(
-    hass: HomeAssistant, coordinator_config_entry: MagicMock, exception: type[Exception]
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    coordinator_config_entry: MagicMock,
+    exception: type[Exception],
 ) -> None:
     """Test that re-auth resets _controller to None before retrying."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
 
     controller = AsyncMock()
@@ -234,10 +242,13 @@ async def test_reauth_resets_controller_before_retry(
 
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
 async def test_reauth_triggers_websocket_reconnect(
-    hass: HomeAssistant, coordinator_config_entry: MagicMock, exception: type[Exception]
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    coordinator_config_entry: MagicMock,
+    exception: type[Exception],
 ) -> None:
     """Test that websocket.restart_with_current_controller() is called after a poll-triggered controller swap."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
 
     controller = AsyncMock()
@@ -261,10 +272,13 @@ async def test_reauth_triggers_websocket_reconnect(
 
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
 async def test_reauth_retry_calls_clients_all_and_preserves_prior_metadata(
-    hass: HomeAssistant, coordinator_config_entry: MagicMock, exception: type[Exception]
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    coordinator_config_entry: MagicMock,
+    exception: type[Exception],
 ) -> None:
     """Test reauth retry refreshes clients_all and offline metadata comes from prior data."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     mac = "aa:bb:cc:dd:ee:ff"
     client1 = _make_mock_client(mac, name="Dan Phone", last_seen=now)
 

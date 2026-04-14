@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_presence.const import CONF_SITE, CONF_TRACKED_DEVICES
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
@@ -16,11 +17,14 @@ from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client
 
 
 async def test_coordinator_uses_hostname_when_name_missing(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that hostname is used as the runtime display name fallback."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", hostname="dan-phone", last_seen=now)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", hostname="dan-phone", last_seen=int(now.timestamp()))
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -30,11 +34,14 @@ async def test_coordinator_uses_hostname_when_name_missing(
 
 
 async def test_coordinator_uses_mac_when_name_and_hostname_missing(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that MAC remains the last-resort tracker name fallback."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", last_seen=now)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", last_seen=int(now.timestamp()))
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -162,10 +169,13 @@ async def test_controller_property(hass: HomeAssistant, coordinator_config_entry
 
 
 async def test_set_last_seen_rejects_stale_timestamp(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that _set_last_seen keeps the newer cached value when a stale timestamp arrives."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     mac = "aa:bb:cc:dd:ee:ff"
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -185,10 +195,13 @@ async def test_set_last_seen_rejects_stale_timestamp(
 
 
 async def test_out_of_order_ws_does_not_regress_presence(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that out-of-order WebSocket frames cannot move last_seen backwards."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     mac = "aa:bb:cc:dd:ee:ff"
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
 
@@ -207,10 +220,13 @@ async def test_out_of_order_ws_does_not_regress_presence(
 
 
 async def test_stale_poll_does_not_regress_ws_last_seen(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that a REST poll with an older last_seen does not overwrite a newer WS value."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     mac = "aa:bb:cc:dd:ee:ff"
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -230,10 +246,13 @@ async def test_stale_poll_does_not_regress_ws_last_seen(
 
 
 async def test_poll_with_missing_last_seen_uses_cached(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that a poll with None/0 last_seen falls back to cached value."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     mac = "aa:bb:cc:dd:ee:ff"
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -252,10 +271,13 @@ async def test_poll_with_missing_last_seen_uses_cached(
 
 
 async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that a newer timestamp that's still past the away threshold is accepted and marks away."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     mac = "aa:bb:cc:dd:ee:ff"
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
 

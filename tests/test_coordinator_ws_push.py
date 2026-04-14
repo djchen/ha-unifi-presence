@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import time
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 
@@ -13,11 +15,18 @@ from .conftest import _make_mock_client
 
 
 async def test_process_message_updates_state(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that process_message updates device state on change."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now - 120)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client(
+        "aa:bb:cc:dd:ee:ff",
+        name="Dan Phone",
+        last_seen=int((now - timedelta(seconds=120)).timestamp()),
+    )
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -31,7 +40,7 @@ async def test_process_message_updates_state(
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
         "name": "Dan Phone",
-        "last_seen": now,
+        "last_seen": int(now.timestamp()),
     }
     coordinator.process_message(message)
 
@@ -42,7 +51,10 @@ async def test_process_message_updates_state(
 
 
 async def test_process_message_updates_offline_client(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that websocket updates transition offline clients to home."""
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -55,7 +67,7 @@ async def test_process_message_updates_offline_client(
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
         "name": "Dan Phone",
-        "last_seen": int(time.time()),
+        "last_seen": int(dt_util.utcnow().timestamp()),
     }
     coordinator.process_message(message)
 
@@ -65,12 +77,15 @@ async def test_process_message_updates_offline_client(
 
 
 async def test_process_message_noop_for_equivalent_update(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test repeated equivalent websocket updates do not publish redundant data."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     initial_data = await coordinator._async_update_data()
@@ -81,7 +96,7 @@ async def test_process_message_noop_for_equivalent_update(
     message.data = {
         "mac": mac,
         "name": "Dan Phone",
-        "last_seen": now,
+        "last_seen": int(now.timestamp()),
     }
 
     coordinator.process_message(message)
@@ -91,12 +106,15 @@ async def test_process_message_noop_for_equivalent_update(
 
 
 async def test_process_message_preserves_metadata_when_offline_client_reappears(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that websocket recovery keeps last-known metadata when payload omits names."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     first_data = await coordinator._async_update_data()
@@ -109,7 +127,7 @@ async def test_process_message_preserves_metadata_when_offline_client_reappears(
     message = MagicMock()
     message.data = {
         "mac": mac,
-        "last_seen": now,
+        "last_seen": int(now.timestamp()),
     }
     coordinator.process_message(message)
 
@@ -117,10 +135,13 @@ async def test_process_message_preserves_metadata_when_offline_client_reappears(
 
 
 async def test_process_message_uses_hostname_when_name_missing(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that websocket updates fall back to hostname for display name."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     await coordinator._async_update_data()
 
@@ -128,7 +149,7 @@ async def test_process_message_uses_hostname_when_name_missing(
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
         "hostname": "dan-phone",
-        "last_seen": now,
+        "last_seen": int(now.timestamp()),
     }
     coordinator.process_message(message)
 
@@ -136,7 +157,10 @@ async def test_process_message_uses_hostname_when_name_missing(
 
 
 async def test_process_message_ignores_untracked_mac(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that process_message ignores MACs not in tracked set."""
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -147,7 +171,7 @@ async def test_process_message_ignores_untracked_mac(
     message = MagicMock()
     message.data = {
         "mac": "ff:ff:ff:ff:ff:ff",
-        "last_seen": int(time.time()),
+        "last_seen": int(dt_util.utcnow().timestamp()),
     }
     coordinator.process_message(message)
 
@@ -156,11 +180,14 @@ async def test_process_message_ignores_untracked_mac(
 
 
 async def test_process_message_metadata_only_update_notifies_listeners(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that metadata-only websocket updates refresh entities immediately."""
-    now = int(time.time())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
+    now = dt_util.utcnow()
+    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=int(now.timestamp()))
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -175,7 +202,7 @@ async def test_process_message_metadata_only_update_notifies_listeners(
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
         "name": "Dan Phone Updated",
-        "last_seen": now,
+        "last_seen": int(now.timestamp()),
     }
     coordinator.process_message(message)
 
@@ -185,10 +212,13 @@ async def test_process_message_metadata_only_update_notifies_listeners(
 
 
 async def test_process_message_when_data_is_none(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that process_message works when self.data is None (first WS message before poll)."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
 
     # data is None before first poll
@@ -198,7 +228,7 @@ async def test_process_message_when_data_is_none(
     message.data = {
         "mac": "aa:bb:cc:dd:ee:ff",
         "name": "Dan Phone",
-        "last_seen": now,
+        "last_seen": int(now.timestamp()),
     }
     coordinator.process_message(message)
 
@@ -209,10 +239,13 @@ async def test_process_message_when_data_is_none(
 
 
 async def test_process_message_case_insensitive_mac(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that process_message matches upper-case MACs from WS against lower-case tracked set."""
-    now = int(time.time())
+    now = dt_util.utcnow()
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     await coordinator._async_update_data()
 
@@ -220,7 +253,7 @@ async def test_process_message_case_insensitive_mac(
     message.data = {
         "mac": "AA:BB:CC:DD:EE:FF",
         "name": "Dan Phone",
-        "last_seen": now,
+        "last_seen": int(now.timestamp()),
     }
     coordinator.process_message(message)
 
@@ -255,7 +288,7 @@ async def test_process_message_missing_mac(
     original_data = coordinator.data
 
     message = MagicMock()
-    message.data = {"last_seen": int(time.time())}
+    message.data = {"last_seen": int(dt_util.utcnow().timestamp())}
     coordinator.process_message(message)
 
     assert coordinator.data is original_data
@@ -285,7 +318,7 @@ async def test_process_message_non_string_mac(
     original_data = coordinator.data
 
     message = MagicMock()
-    message.data = {"mac": 123, "last_seen": int(time.time())}
+    message.data = {"mac": 123, "last_seen": int(dt_util.utcnow().timestamp())}
     coordinator.process_message(message)
 
     assert coordinator.data is original_data
