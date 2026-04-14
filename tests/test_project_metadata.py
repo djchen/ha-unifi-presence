@@ -8,6 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 QUALITY_SCALE = ROOT / "custom_components" / "unifi_presence" / "quality_scale.yaml"
+README = ROOT / "README.md"
+AGENTS = ROOT / "AGENTS.md"
+COPILOT_INSTRUCTIONS = ROOT / ".github" / "copilot-instructions.md"
 
 
 def _parse_quality_scale_statuses() -> dict[str, dict[str, str]]:
@@ -91,25 +94,45 @@ def test_project_version_matches_between_manifest_and_pyproject() -> None:
 def test_hacs_homeassistant_version_matches_readme_requirements() -> None:
     """Test HACS minimum HA version matches the README requirement."""
     hacs = json.loads((ROOT / "hacs.json").read_text())
-    readme = (ROOT / "README.md").read_text()
+    readme = README.read_text()
 
     assert f"- Home Assistant {hacs['homeassistant']} or later" in readme
 
 
-def test_quality_commands_and_coverage_are_consistent_in_readme() -> None:
-    """Test README dev commands match the canonical pyproject thresholds."""
+def _coverage_threshold(pyproject: dict) -> str:
+    """Return the pytest coverage threshold from pyproject addopts."""
+    addopts = pyproject["tool"]["pytest"]["ini_options"]["addopts"]
+
+    for opt in addopts:
+        if opt.startswith("--cov-fail-under="):
+            return opt.removeprefix("--cov-fail-under=")
+
+    msg = "Missing --cov-fail-under in pyproject addopts"
+    raise AssertionError(msg)
+
+
+def test_quality_commands_and_coverage_are_consistent_in_repo_docs() -> None:
+    """Test repo docs use the same dev commands and coverage threshold."""
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    readme = (ROOT / "README.md").read_text()
+    coverage = _coverage_threshold(pyproject)
+    docs = {
+        "README": README.read_text(),
+        "AGENTS": AGENTS.read_text(),
+        "Copilot": COPILOT_INSTRUCTIONS.read_text(),
+    }
 
-    coverage = pyproject["tool"]["pytest"]["ini_options"]["addopts"][2].removeprefix("--cov-fail-under=")
+    for name, content in docs.items():
+        assert 'pip install ".[dev]"' in content, name
+        assert "pre-commit install" in content, name
+        assert "PYTHONPATH=. pytest tests/ -v" in content, name
+        assert "ruff check ." in content, name
+        assert "ruff format --check ." in content, name
+        assert "ruff format ." not in content, name
+        assert "mypy --strict custom_components/unifi_presence/" in content, name
 
-    assert 'pip install ".[dev]"' in readme
-    assert "pre-commit install" in readme
-    assert "PYTHONPATH=. pytest tests/ -v" in readme
-    assert "ruff check ." in readme
-    assert "ruff format --check ." in readme
-    assert "mypy --strict custom_components/unifi_presence/" in readme
-    assert f"Coverage is enforced at {coverage}% minimum" in readme
+    assert f"Coverage is enforced at {coverage}% minimum" in docs["README"]
+    assert f"enforced at {coverage}% via pytest-cov" in docs["AGENTS"]
+    assert "173 passed" not in docs["Copilot"]
 
 
 def test_validate_workflow_uses_stable_action_refs() -> None:
