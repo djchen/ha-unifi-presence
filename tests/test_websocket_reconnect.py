@@ -14,7 +14,7 @@ from custom_components.unifi_presence.websocket import (
     UnifiPresenceWebsocket,
 )
 
-from .websocket_helpers import make_websocket
+from .websocket_helpers import make_websocket, wait_for_task
 
 
 async def test_websocket_error_sets_unavailable_and_schedules_reauth_restart(
@@ -28,8 +28,7 @@ async def test_websocket_error_sets_unavailable_and_schedules_reauth_restart(
         return_value=MagicMock(),
     ) as mock_call_later:
         ws.start()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_for_task(ws.ws_task)
 
     assert ws.available is False
     mock_call_later.assert_called_once()
@@ -53,8 +52,7 @@ async def test_connector_error_sets_unavailable(hass: HomeAssistant) -> None:
         patch("custom_components.unifi_presence.websocket._LOGGER") as logger,
     ):
         ws.start()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_for_task(ws.ws_task)
 
     assert ws.available is False
     logger.error.assert_any_call("WebSocket connector failed: %s", ANY)
@@ -110,8 +108,7 @@ async def test_schedule_reauth_and_restart_reschedules_on_auth_failure(hass: Hom
         return_value=MagicMock(),
     ) as mock_call_later:
         ws._schedule_reauth_and_restart()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_for_task(ws._reconnect_task)
 
     # Should have scheduled another reconnect
     mock_call_later.assert_called()
@@ -150,8 +147,7 @@ async def test_stop_cancels_pending_retry(hass: HomeAssistant) -> None:
         return_value=cancel_mock,
     ):
         ws.start()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_for_task(ws.ws_task)
 
     assert ws._cancel_retry is cancel_mock
 
@@ -190,8 +186,7 @@ async def test_websocket_runner_returns_when_stopped(hass: HomeAssistant) -> Non
         return_value=MagicMock(),
     ) as mock_call_later:
         ws.start()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_for_task(ws.ws_task)
 
     # No retry should be scheduled because _stopped was True when runner exited
     mock_call_later.assert_not_called()
@@ -242,8 +237,7 @@ async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
         patch("custom_components.unifi_presence.websocket._LOGGER") as logger,
     ):
         ws.start()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_for_task(ws.ws_task)
 
     assert ws.available is False
     mock_call_later.assert_called_once()
@@ -266,8 +260,7 @@ async def test_unexpected_exception_sets_unavailable_and_schedules_reauth_restar
         return_value=MagicMock(),
     ) as mock_call_later:
         ws.start()
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await wait_for_task(ws.ws_task)
 
     assert ws.available is False
     mock_call_later.assert_called_once()
@@ -285,8 +278,7 @@ async def test_schedule_reauth_and_restart_schedules_retry_when_controller_none(
         return_value=MagicMock(),
     ) as mock_call_later:
         ws._schedule_reauth_and_restart()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await wait_for_task(ws._reconnect_task)
 
     mock_call_later.assert_called_once()
     assert mock_call_later.call_args[0][1] == RETRY_TIMER

@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
-from .websocket_helpers import make_websocket
+from .websocket_helpers import make_websocket, wait_for_task
 
 
 async def test_restart_with_current_controller_waits_for_previous_runner_cleanup(
@@ -211,8 +211,7 @@ async def test_restart_with_current_controller_old_task_does_not_clear_new_recon
     ws._reconnect_task = replacement_task
 
     release_restart.set()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await wait_for_task(first_task)
 
     assert ws._reconnect_task is replacement_task
 
@@ -250,8 +249,7 @@ async def test_schedule_reauth_and_restart_after_login_old_task_does_not_clear_n
     ws._reconnect_task = replacement_task
 
     release_restart.set()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await wait_for_task(first_task)
 
     assert ws._reconnect_task is replacement_task
 

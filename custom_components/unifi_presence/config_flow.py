@@ -621,7 +621,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             if self.config_entry.state is ConfigEntryState.LOADED:
                 coordinator = get_entry_runtime_coordinator(self.config_entry)
                 if coordinator is not None and getattr(coordinator, "controller", None) is not None:
-                    controller = cast(Controller | None, coordinator.controller)
+                    controller = cast("Controller | None", coordinator.controller)
 
             if controller is None:
                 data = self.config_entry.data

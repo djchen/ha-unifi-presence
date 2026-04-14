@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
-from .websocket_helpers import make_websocket
+from .websocket_helpers import make_websocket, wait_for_task
 
 
 async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
@@ -173,8 +173,7 @@ async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant
         return_value=MagicMock(),
     ) as mock_call_later:
         ws._start_websocket_runner()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await wait_for_task(ws.ws_task)
 
     # Should not schedule a retry — just returns
     mock_call_later.assert_not_called()

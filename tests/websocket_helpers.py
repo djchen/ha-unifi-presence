@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.core import HomeAssistant
@@ -28,3 +29,9 @@ def make_websocket(
         on_message,
     )
     return ws, controller, on_message
+
+
+async def wait_for_task(task: asyncio.Task[object] | None, *, timeout: float = 1.0) -> None:
+    """Wait for a task to finish without relying on repeated loop yields."""
+    assert task is not None
+    await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
