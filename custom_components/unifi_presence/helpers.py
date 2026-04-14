@@ -5,14 +5,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import timedelta
 from typing import Any, Protocol, cast
-from weakref import WeakKeyDictionary
 
-from aiohttp import ClientSession, CookieJar
+from aiohttp import CookieJar
 from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import (
@@ -22,13 +19,8 @@ from homeassistant.helpers.aiohttp_client import (
 from homeassistant.util.ssl import client_context as ha_client_context
 
 from .const import (
-    CONF_AWAY_SECONDS,
-    CONF_FALLBACK_POLL_INTERVAL,
     CONF_SITE,
     CONF_SSL_VERIFY,
-    CONF_TRACKED_DEVICES,
-    DEFAULT_AWAY_SECONDS,
-    DEFAULT_FALLBACK_POLL_INTERVAL,
     DEFAULT_SITE,
     DEFAULT_SSL_VERIFY,
 )
@@ -51,25 +43,6 @@ class ClientLike(Protocol):
     name: str | None
     hostname: str | None
     last_seen: int | float | None
-
-
-class WebsocketLike(Protocol):
-    """Subset of WebSocket fields used by runtime summary."""
-
-    available: bool
-
-
-class RuntimeCoordinatorLike(Protocol):
-    """Subset of coordinator fields shared by diagnostics/system health."""
-
-    tracked_devices: tuple[str, ...]
-    away_seconds: int
-    update_interval: timedelta | None
-    heartbeat_expiry_count: int
-    last_update_success: bool
-    data: Any
-    controller: object
-    websocket: WebsocketLike | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -99,26 +72,6 @@ class ControllerConnectionParams:
             site=str(data.get(CONF_SITE, DEFAULT_SITE) if site is None else site),
             ssl_verify=bool(data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)),
         )
-
-
-@dataclass(slots=True, frozen=True)
-class EntryRuntimeSummary:
-    """Shared runtime summary derived from a config entry and coordinator."""
-
-    tracked_macs: tuple[str, ...]
-    away_seconds: int
-    fallback_poll_interval_seconds: float | None
-    websocket_connected: bool
-    heartbeat_expiry_count: int
-    last_update_success: bool | None
-
-    @property
-    def tracked_device_count(self) -> int:
-        """Return the normalized tracked-device count."""
-        return len(self.tracked_macs)
-
-
-_OWNED_SESSIONS: WeakKeyDictionary[Controller, ClientSession] = WeakKeyDictionary()
 
 
 def normalize_mac(mac: str) -> str:
@@ -174,43 +127,6 @@ def format_missing_client_label(mac: str) -> str:
     return f"{normalized_mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})"
 
 
-def get_entry_runtime_coordinator(entry: ConfigEntry[Any]) -> RuntimeCoordinatorLike | None:
-    """Return typed runtime data for a loaded UniFi Presence entry, if any."""
-    return cast(RuntimeCoordinatorLike | None, getattr(entry, "runtime_data", None))
-
-
-def build_entry_runtime_summary(entry: ConfigEntry[Any]) -> EntryRuntimeSummary:
-    """Build a shared runtime summary for diagnostics and system health."""
-    coordinator = get_entry_runtime_coordinator(entry)
-    tracked_macs = normalize_macs(entry.options.get(CONF_TRACKED_DEVICES, []))
-    away_seconds = int(entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS))
-    fallback_poll_interval_seconds: float | None = float(
-        entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
-    )
-    websocket_connected = False
-    heartbeat_expiry_count = 0
-    last_update_success: bool | None = None
-
-    if coordinator is not None:
-        tracked_macs = coordinator.tracked_devices
-        away_seconds = coordinator.away_seconds
-        fallback_poll_interval_seconds = (
-            coordinator.update_interval.total_seconds() if coordinator.update_interval is not None else None
-        )
-        websocket_connected = coordinator.websocket is not None and coordinator.websocket.available
-        heartbeat_expiry_count = coordinator.heartbeat_expiry_count
-        last_update_success = coordinator.last_update_success
-
-    return EntryRuntimeSummary(
-        tracked_macs=tracked_macs,
-        away_seconds=away_seconds,
-        fallback_poll_interval_seconds=fallback_poll_interval_seconds,
-        websocket_connected=websocket_connected,
-        heartbeat_expiry_count=heartbeat_expiry_count,
-        last_update_success=last_update_success,
-    )
-
-
 async def resolve_controller_site(
     hass: HomeAssistant,
     params: ControllerConnectionParams,
@@ -253,8 +169,8 @@ async def async_close_controller(controller: Controller) -> None:
     correct cleanup here: it closes the session wrapper without tearing down
     the shared connector used elsewhere in Home Assistant.
     """
-    owned_session = _OWNED_SESSIONS.pop(controller, None)
-    if owned_session is None or owned_session.closed:
+    owned_session = getattr(controller, "_unifi_presence_owned_session", None)
+    if owned_session is None or getattr(owned_session, "closed", False):
         return
 
     owned_session.detach()
@@ -288,7 +204,7 @@ async def create_controller(
     )
     controller = Controller(config)
     if not params.ssl_verify:
-        _OWNED_SESSIONS[controller] = session
+        cast(Any, controller)._unifi_presence_owned_session = session
 
     login_succeeded = False
     try:

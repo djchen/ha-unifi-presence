@@ -10,9 +10,12 @@ from homeassistant.core import HomeAssistant
 
 from . import UnifiPresenceConfigEntry
 from .const import (
+    CONF_AWAY_SECONDS,
+    CONF_FALLBACK_POLL_INTERVAL,
     CONF_TRACKED_DEVICES,
+    DEFAULT_AWAY_SECONDS,
+    DEFAULT_FALLBACK_POLL_INTERVAL,
 )
-from .helpers import build_entry_runtime_summary, get_entry_runtime_coordinator
 
 TO_REDACT = {CONF_HOST, CONF_PASSWORD, CONF_USERNAME}
 
@@ -48,9 +51,25 @@ async def async_get_config_entry_diagnostics(
     entry: UnifiPresenceConfigEntry,
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    coordinator = get_entry_runtime_coordinator(entry)
+    coordinator = getattr(entry, "runtime_data", None)
     coordinator_data = coordinator.data if coordinator is not None else None
-    summary = build_entry_runtime_summary(entry)
+    tracked_count = len(entry.options.get(CONF_TRACKED_DEVICES, []))
+    away_seconds = entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
+    fallback_poll_interval_seconds = entry.options.get(
+        CONF_FALLBACK_POLL_INTERVAL,
+        DEFAULT_FALLBACK_POLL_INTERVAL,
+    )
+    websocket_connected = False
+    heartbeat_expiry_count = 0
+
+    if coordinator is not None:
+        tracked_count = len(coordinator.tracked_devices)
+        away_seconds = coordinator.away_seconds
+        fallback_poll_interval_seconds = (
+            coordinator.update_interval.total_seconds() if coordinator.update_interval else None
+        )
+        websocket_connected = coordinator.websocket is not None and coordinator.websocket.available
+        heartbeat_expiry_count = coordinator.heartbeat_expiry_count
 
     device_states = coordinator_data.device_states if coordinator_data is not None else {}
 
@@ -64,10 +83,10 @@ async def async_get_config_entry_diagnostics(
             "data": async_redact_data(dict(entry.data), TO_REDACT),
             "options": redacted_options,
         },
-        "tracked_device_count": summary.tracked_device_count,
+        "tracked_device_count": tracked_count,
         "device_states": _redact_mac_keys(device_states),
-        "away_seconds": summary.away_seconds,
-        "fallback_poll_interval_seconds": summary.fallback_poll_interval_seconds,
-        "websocket_connected": summary.websocket_connected,
-        "heartbeat_expiry_count": summary.heartbeat_expiry_count,
+        "away_seconds": away_seconds,
+        "fallback_poll_interval_seconds": fallback_poll_interval_seconds,
+        "websocket_connected": websocket_connected,
+        "heartbeat_expiry_count": heartbeat_expiry_count,
     }

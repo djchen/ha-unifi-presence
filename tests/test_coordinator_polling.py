@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import aiounifi
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
@@ -95,6 +96,22 @@ async def test_clients_all_failure_uses_cached_data(
 
     assert data.device_states[mac] is False
     # Metadata should still come from the cached clients_all dict
+    assert data.client_info[mac]["name"] == "Dan Phone"
+
+
+async def test_clients_all_client_error_uses_cached_data(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+) -> None:
+    """Test that aiohttp client errors still use cached historical data."""
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients.clear()
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
+    mock_coordinator_controller.clients_all.update_mock.side_effect = aiohttp.ClientError("network")
+
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is False
     assert data.client_info[mac]["name"] == "Dan Phone"
 
 

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, TypedDict, cast
 
+import aiohttp
 import aiounifi
 from aiounifi.models.message import Message
 from homeassistant.config_entries import ConfigEntry
@@ -442,7 +443,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         """Best-effort refresh of historical clients, then required refresh of active clients."""
         try:
             await controller.clients_all.update()
-        except TimeoutError, aiounifi.AiounifiException, JSONDecodeError:
+        except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
             _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
 
         await controller.clients.update()

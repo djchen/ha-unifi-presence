@@ -144,11 +144,11 @@ async def test_coordinator_async_shutdown_detaches_owned_runtime_session(
     owned_session.closed = False
     owned_session.detach = MagicMock()
     controller = MagicMock()
+    controller._unifi_presence_owned_session = owned_session
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     coordinator._controller = controller
 
-    with patch("custom_components.unifi_presence.helpers._OWNED_SESSIONS", {controller: owned_session}):
-        await coordinator.async_shutdown()
+    await coordinator.async_shutdown()
 
     assert coordinator.controller is None
     owned_session.detach.assert_called_once_with()

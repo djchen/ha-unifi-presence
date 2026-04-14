@@ -135,8 +135,9 @@ async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
     async def _first_refresh(coordinator: UnifiPresenceCoordinator) -> None:
         coordinator._controller = controller
 
+    controller._unifi_presence_owned_session = owned_session
+
     with (
-        patch("custom_components.unifi_presence.helpers._OWNED_SESSIONS", {controller: owned_session}),
         patch.object(
             UnifiPresenceCoordinator,
             "async_config_entry_first_refresh",

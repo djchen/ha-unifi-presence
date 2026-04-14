@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import ssl
-from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,7 +13,6 @@ from homeassistant.core import HomeAssistant
 from custom_components.unifi_presence.helpers import (
     ControllerConnectionParams,
     async_close_controller,
-    build_entry_runtime_summary,
     create_controller,
     format_config_entry_title,
     format_current_client_label,
@@ -25,7 +23,7 @@ from custom_components.unifi_presence.helpers import (
     tracker_unique_id,
 )
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
+from .conftest import MOCK_CONFIG_DATA
 
 _SSL_PARAMS = ControllerConnectionParams(
     host="192.168.1.1", port=443, username="admin", password="password", site="default", ssl_verify=True
@@ -172,56 +170,6 @@ def test_controller_connection_params_from_mapping_uses_override_site() -> None:
         site="office",
         ssl_verify=False,
     )
-
-
-def test_build_entry_runtime_summary_uses_entry_options_without_runtime_data() -> None:
-    """Test runtime summary falls back to normalized config-entry options."""
-    entry = SimpleNamespace(
-        options={
-            **MOCK_OPTIONS,
-            "tracked_devices": [" AA:BB:CC:DD:EE:FF ", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"],
-            "away_seconds": 90,
-            "fallback_poll_interval": 600,
-        }
-    )
-
-    summary = build_entry_runtime_summary(entry)
-
-    assert summary.tracked_macs == (
-        "aa:bb:cc:dd:ee:ff",
-        "11:22:33:44:55:66",
-    )
-    assert summary.tracked_device_count == 2
-    assert summary.away_seconds == 90
-    assert summary.fallback_poll_interval_seconds == 600.0
-    assert summary.websocket_connected is False
-    assert summary.heartbeat_expiry_count == 0
-    assert summary.last_update_success is None
-
-
-def test_build_entry_runtime_summary_prefers_loaded_coordinator_state() -> None:
-    """Test runtime summary uses live coordinator values when available."""
-    coordinator = SimpleNamespace(
-        tracked_devices=("aa:bb:cc:dd:ee:ff",),
-        away_seconds=120,
-        update_interval=timedelta(seconds=450),
-        heartbeat_expiry_count=3,
-        last_update_success=True,
-        data=object(),
-        controller=object(),
-        websocket=SimpleNamespace(available=True),
-    )
-    entry = SimpleNamespace(options=MOCK_OPTIONS, runtime_data=coordinator)
-
-    summary = build_entry_runtime_summary(entry)
-
-    assert summary.tracked_macs == ("aa:bb:cc:dd:ee:ff",)
-    assert summary.tracked_device_count == 1
-    assert summary.away_seconds == 120
-    assert summary.fallback_poll_interval_seconds == 450.0
-    assert summary.websocket_connected is True
-    assert summary.heartbeat_expiry_count == 3
-    assert summary.last_update_success is True
 
 
 async def test_create_controller_closes_owned_session_on_login_failure(hass: HomeAssistant) -> None:

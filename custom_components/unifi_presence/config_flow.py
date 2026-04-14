@@ -8,6 +8,7 @@ from dataclasses import replace
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
+import aiohttp
 import aiounifi
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -45,7 +46,6 @@ from .helpers import (
     format_current_client_label,
     format_missing_client_label,
     format_site_config_entry_title,
-    get_entry_runtime_coordinator,
     normalize_mac,
     normalize_macs,
     resolve_controller_site,
@@ -200,14 +200,14 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     try:
         await controller.clients_all.update()
         historical_refreshed = True
-    except TimeoutError, aiounifi.AiounifiException, JSONDecodeError:
+    except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
         _LOGGER.debug("Failed to refresh historical UniFi clients")
 
     active_refreshed = False
     try:
         await controller.clients.update()
         active_refreshed = True
-    except TimeoutError, aiounifi.AiounifiException, JSONDecodeError:
+    except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
         _LOGGER.debug("Failed to refresh active UniFi clients")
 
     if not historical_refreshed and not active_refreshed:
@@ -619,7 +619,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
         close_controller = False
         try:
             if self.config_entry.state is ConfigEntryState.LOADED:
-                coordinator = get_entry_runtime_coordinator(self.config_entry)
+                coordinator = getattr(self.config_entry, "runtime_data", None)
                 if coordinator is not None and getattr(coordinator, "controller", None) is not None:
                     controller = cast("Controller | None", coordinator.controller)
 

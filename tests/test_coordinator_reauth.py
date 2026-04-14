@@ -95,6 +95,7 @@ async def test_coordinator_reauth_detaches_replaced_runtime_controller(
     owned_session.closed = False
     owned_session.detach = MagicMock()
     mock_coordinator_controller.clients.update_mock.side_effect = aiounifi.LoginRequired
+    mock_coordinator_controller._unifi_presence_owned_session = owned_session
 
     replacement_controller = make_mock_controller(
         clients_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now))]
@@ -103,12 +104,9 @@ async def test_coordinator_reauth_detaches_replaced_runtime_controller(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     coordinator._controller = mock_coordinator_controller
 
-    with (
-        patch("custom_components.unifi_presence.helpers._OWNED_SESSIONS", {mock_coordinator_controller: owned_session}),
-        patch(
-            "custom_components.unifi_presence.coordinator.create_controller",
-            return_value=replacement_controller,
-        ),
+    with patch(
+        "custom_components.unifi_presence.coordinator.create_controller",
+        return_value=replacement_controller,
     ):
         data = await coordinator._async_update_data()
 

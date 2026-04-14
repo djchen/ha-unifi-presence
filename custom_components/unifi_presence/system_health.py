@@ -9,8 +9,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_SITE, DEFAULT_SITE, DOMAIN
-from .helpers import build_entry_runtime_summary
+from .const import CONF_SITE, CONF_TRACKED_DEVICES, DEFAULT_SITE, DOMAIN
 
 
 @callback
@@ -36,20 +35,21 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
     for entry in config_entries:
         site = entry.data.get(CONF_SITE, DEFAULT_SITE)
         controller_targets.append(f"{entry.data[CONF_HOST]} ({site})")
-        summary = build_entry_runtime_summary(entry)
-        tracked_devices += summary.tracked_device_count
+        tracked_devices += len(entry.options.get(CONF_TRACKED_DEVICES, []))
 
         if entry.state is not ConfigEntryState.LOADED:
             continue
 
         loaded_entries += 1
-        if summary.last_update_success:
+        coordinator = entry.runtime_data
+
+        if coordinator.last_update_success:
             coordinator_available += 1
 
-        if summary.websocket_connected:
+        if coordinator.websocket is not None and coordinator.websocket.available:
             websocket_connected += 1
 
-        heartbeat_expiry += summary.heartbeat_expiry_count
+        heartbeat_expiry += coordinator.heartbeat_expiry_count
 
     return {
         "config_entry_count": len(config_entries),
