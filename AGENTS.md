@@ -77,6 +77,10 @@ Follow official HA developer guidelines. Project-specific notes:
 - Mock `create_controller` via the module-local alias (e.g. `custom_components.unifi_presence.config_flow.create_controller` or `custom_components.unifi_presence.coordinator.create_controller`); use `MagicMock` for controller with explicit `AsyncMock()` for async methods
 - Controller mocks must include `messages.subscribe = MagicMock(return_value=MagicMock())` and `connectivity = MagicMock()`
 
+### CI Workflow
+- Follow the upstream action docs for CI refs in `.github/workflows/validate.yml`
+- Keep `hacs/action@main` and `home-assistant/actions/hassfest@master`; do not pin those two actions to version tags unless their own docs change
+
 ### Error Handling
 - `ConfigEntryAuthFailed` for persistent auth failures; `UpdateFailed` for transient
 - On session expiry: re-auth once, then raise `ConfigEntryAuthFailed`

@@ -135,11 +135,9 @@ def test_quality_commands_and_coverage_are_consistent_in_repo_docs() -> None:
     assert "173 passed" not in docs["Copilot"]
 
 
-def test_validate_workflow_uses_stable_action_refs() -> None:
-    """Test CI workflow avoids floating branch refs for third-party actions."""
+def test_validate_workflow_uses_documented_upstream_action_refs() -> None:
+    """Test CI workflow follows the upstream-documented HACS and Hassfest refs."""
     workflow = (ROOT / ".github" / "workflows" / "validate.yml").read_text()
 
-    assert "hacs/action@22.5.0" in workflow
-    assert "home-assistant/actions/hassfest@1.0.0" in workflow
-    assert "@main" not in workflow
-    assert "@master" not in workflow
+    assert "hacs/action@main" in workflow
+    assert "home-assistant/actions/hassfest@master" in workflow

@@ -45,8 +45,8 @@
 ## CI And Required Checks
 - CI is defined in `.github/workflows/validate.yml`.
 - PRs to `main` run four jobs: `pre-commit`, `test`, `hacs`, and `hassfest`.
-- `hacs` is pinned to `hacs/action@22.5.0`.
-- `hassfest` is pinned to `home-assistant/actions/hassfest@1.0.0`.
+- `hacs` follows the upstream documented ref: `hacs/action@main`.
+- `hassfest` follows the upstream documented ref: `home-assistant/actions/hassfest@master`.
 
 ## Architecture And Invariants
 - `custom_components/unifi_presence/config_flow.py`: credential entry, site selection, tracked-device selection, options flow, reauth, and reconfigure. Config identity is site-based, using UniFi `site_id` as the unique ID.
