@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from typing import Any, Protocol, cast
 
 from aiohttp import CookieJar
 from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import (
     async_create_clientsession,
@@ -14,26 +18,119 @@ from homeassistant.helpers.aiohttp_client import (
 )
 from homeassistant.util.ssl import client_context as ha_client_context
 
-from .const import DEFAULT_SITE
+from .const import (
+    CONF_SITE,
+    CONF_SSL_VERIFY,
+    DEFAULT_SITE,
+    DEFAULT_SSL_VERIFY,
+)
 
-_OWNED_SESSION_ATTR = "_unifi_presence_owned_session"
 CONTROLLER_LOGIN_TIMEOUT = 10
+NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL = "No longer in UniFi Client Devices"
 
 
-def format_config_entry_title(site_title: str, host: str) -> str:
+class SiteLike(Protocol):
+    """Subset of UniFi site fields used by this integration."""
+
+    site_id: str
+    name: str
+    description: str | None
+
+
+class ClientLike(Protocol):
+    """Subset of UniFi client fields used by this integration."""
+
+    name: str | None
+    hostname: str | None
+    last_seen: int | float | None
+
+
+@dataclass(slots=True, frozen=True)
+class ControllerConnectionParams:
+    """Connection parameters for opening a UniFi controller session."""
+
+    host: str
+    port: int
+    username: str
+    password: str
+    site: str
+    ssl_verify: bool
+
+    @classmethod
+    def from_mapping(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        site: str | None = None,
+    ) -> ControllerConnectionParams:
+        """Build typed connection params from config-entry style data."""
+        return cls(
+            host=str(data[CONF_HOST]),
+            port=int(data[CONF_PORT]),
+            username=str(data[CONF_USERNAME]),
+            password=str(data[CONF_PASSWORD]),
+            site=str(data.get(CONF_SITE, DEFAULT_SITE) if site is None else site),
+            ssl_verify=bool(data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)),
+        )
+
+
+def normalize_mac(mac: str) -> str:
+    """Return a normalized MAC string for storage and comparisons."""
+    return mac.strip().lower()
+
+
+def normalize_macs(macs: Iterable[str]) -> tuple[str, ...]:
+    """Return trimmed, lowercased, deduplicated MACs preserving order."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+
+    for mac in macs:
+        normalized_mac = normalize_mac(mac)
+        if not normalized_mac or normalized_mac in seen:
+            continue
+
+        seen.add(normalized_mac)
+        normalized.append(normalized_mac)
+
+    return tuple(normalized)
+
+
+def tracker_unique_id(site_id: str, mac: str) -> str:
+    """Return the site-scoped unique ID for a tracked client."""
+    return f"{site_id}-{normalize_mac(mac)}"
+
+
+def site_title(site: SiteLike) -> str:
+    """Return the user-facing title for a UniFi site."""
+    return str(site.description or site.name)
+
+
+def format_config_entry_title(site_title_value: str, host: str) -> str:
     """Return the Home Assistant config entry title for a site."""
-    return f"{site_title} ({host})"
+    return f"{site_title_value} ({host})"
+
+
+def format_site_config_entry_title(site: SiteLike, host: str) -> str:
+    """Return the Home Assistant config entry title for a site object."""
+    return format_config_entry_title(site_title(site), host)
+
+
+def format_current_client_label(name: str, mac: str) -> str:
+    """Return the user-facing label for a current UniFi client."""
+    normalized_mac = normalize_mac(mac)
+    return f"{name} ({normalized_mac})"
+
+
+def format_missing_client_label(mac: str) -> str:
+    """Return the label used for tracked clients no longer listed by UniFi."""
+    normalized_mac = normalize_mac(mac)
+    return f"{normalized_mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})"
 
 
 async def resolve_controller_site(
     hass: HomeAssistant,
+    params: ControllerConnectionParams,
     *,
-    host: str,
-    port: int,
-    username: str,
-    password: str,
-    site: str,
-    ssl_verify: bool,
     unique_id: str | None,
 ) -> str:
     """Resolve a config entry's stored site to the short UniFi site name.
@@ -43,31 +140,26 @@ async def resolve_controller_site(
     site's ``site_id``, return that site's short name. Otherwise return the
     stored value unchanged.
     """
-    if site == DEFAULT_SITE:
-        return site
+    if params.site == DEFAULT_SITE:
+        return params.site
 
-    if unique_id is not None and site != unique_id and "_" not in unique_id:
-        return site
+    if unique_id is not None and params.site != unique_id and "_" not in unique_id:
+        return params.site
 
     controller = await create_controller(
         hass,
-        host,
-        port,
-        username,
-        password,
-        "",
-        ssl_verify,
+        replace(params, site=""),
     )
     try:
         await controller.sites.update()
 
         for available_site in controller.sites.values():
-            if available_site.site_id in {site, unique_id}:
+            if available_site.site_id in {params.site, unique_id}:
                 return str(available_site.name)
     finally:
         await async_close_controller(controller)
 
-    return site
+    return params.site
 
 
 async def async_close_controller(controller: Controller) -> None:
@@ -77,7 +169,7 @@ async def async_close_controller(controller: Controller) -> None:
     correct cleanup here: it closes the session wrapper without tearing down
     the shared connector used elsewhere in Home Assistant.
     """
-    owned_session = getattr(controller, _OWNED_SESSION_ATTR, None)
+    owned_session = getattr(controller, "_unifi_presence_owned_session", None)
     if owned_session is None or getattr(owned_session, "closed", False):
         return
 
@@ -86,15 +178,10 @@ async def async_close_controller(controller: Controller) -> None:
 
 async def create_controller(
     hass: HomeAssistant,
-    host: str,
-    port: int,
-    username: str,
-    password: str,
-    site: str,
-    ssl_verify: bool,
+    params: ControllerConnectionParams,
 ) -> Controller:
     """Create, authenticate, and return an aiounifi Controller."""
-    if ssl_verify:
+    if params.ssl_verify:
         session = async_get_clientsession(hass)
         ssl_context = ha_client_context()
     else:
@@ -105,27 +192,27 @@ async def create_controller(
             cookie_jar=CookieJar(unsafe=True),
         )
         ssl_context = None
+
     config = Configuration(
         session,
-        host=host,
-        port=port,
-        username=username,
-        password=password,
-        site=site,
+        host=params.host,
+        port=params.port,
+        username=params.username,
+        password=params.password,
+        site=params.site,
         ssl_context=ssl_context if ssl_context is not None else False,
     )
     controller = Controller(config)
-    if not ssl_verify:
-        setattr(controller, _OWNED_SESSION_ATTR, session)
+    if not params.ssl_verify:
+        cast(Any, controller)._unifi_presence_owned_session = session
 
+    login_succeeded = False
     try:
         async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
             await controller.login()
-    except asyncio.CancelledError:
-        await async_close_controller(controller)
-        raise
-    except Exception:
-        await async_close_controller(controller)
-        raise
+        login_succeeded = True
+    finally:
+        if not login_succeeded:
+            await async_close_controller(controller)
 
     return controller

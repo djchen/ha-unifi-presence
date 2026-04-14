@@ -4,12 +4,33 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.unifi_presence.helpers import async_close_controller, create_controller
+from custom_components.unifi_presence.helpers import (
+    ControllerConnectionParams,
+    async_close_controller,
+    create_controller,
+    format_config_entry_title,
+    format_current_client_label,
+    format_missing_client_label,
+    normalize_mac,
+    normalize_macs,
+    site_title,
+    tracker_unique_id,
+)
+
+from .conftest import MOCK_CONFIG_DATA
+
+_SSL_PARAMS = ControllerConnectionParams(
+    host="192.168.1.1", port=443, username="admin", password="password", site="default", ssl_verify=True
+)
+_NO_SSL_PARAMS = ControllerConnectionParams(
+    host="192.168.1.1", port=8443, username="admin", password="password", site="office", ssl_verify=False
+)
 
 
 async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) -> None:
@@ -29,12 +50,7 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
     ):
         result = await create_controller(
             hass,
-            host="192.168.1.1",
-            port=443,
-            username="admin",
-            password="password",
-            site="default",
-            ssl_verify=True,
+            _SSL_PARAMS,
         )
 
     assert result is controller
@@ -61,12 +77,7 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     ):
         await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
 
     create_session.assert_called_once()
@@ -98,18 +109,67 @@ async def test_create_controller_closes_ssl_false_owned_session(hass: HomeAssist
     ):
         result = await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
         await async_close_controller(result)
 
     assert result is controller
     assert create_session.call_args.kwargs["auto_cleanup"] is False
     session.detach.assert_called_once_with()
+
+
+def test_normalize_macs_deduplicates_and_preserves_order() -> None:
+    """Test shared MAC normalization trims, lowercases, and deduplicates."""
+    assert normalize_macs([" AA:BB:CC:DD:EE:FF ", "", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"]) == (
+        "aa:bb:cc:dd:ee:ff",
+        "11:22:33:44:55:66",
+    )
+
+
+def test_normalize_mac_trims_and_lowercases() -> None:
+    """Test shared MAC normalization trims whitespace and lowercases."""
+    assert normalize_mac(" AA:BB:CC:DD:EE:FF ") == "aa:bb:cc:dd:ee:ff"
+
+
+def test_tracker_unique_id_uses_normalized_mac() -> None:
+    """Test tracker unique IDs are site-scoped and normalized."""
+    assert tracker_unique_id("default", " AA:BB:CC:DD:EE:FF ") == "default-aa:bb:cc:dd:ee:ff"
+
+
+def test_site_title_prefers_description_then_name() -> None:
+    """Test site titles use description when present and fall back to name."""
+    site = SimpleNamespace(site_id="site-id", name="office", description="Office")
+    assert site_title(site) == "Office"
+
+    unnamed_description = SimpleNamespace(site_id="site-id", name="office", description="")
+    assert site_title(unnamed_description) == "office"
+
+
+def test_format_config_entry_title() -> None:
+    """Test config entry titles combine site title and host."""
+    assert format_config_entry_title("Home", "192.168.1.1") == "Home (192.168.1.1)"
+
+
+def test_client_label_helpers_normalize_mac() -> None:
+    """Test client label helpers normalize MACs before formatting."""
+    assert format_current_client_label("Dan Phone", " AA:BB:CC:DD:EE:FF ") == ("Dan Phone (aa:bb:cc:dd:ee:ff)")
+    assert format_missing_client_label(" AA:BB:CC:DD:EE:FF ") == (
+        "aa:bb:cc:dd:ee:ff (No longer in UniFi Client Devices)"
+    )
+
+
+def test_controller_connection_params_from_mapping_uses_override_site() -> None:
+    """Test typed controller params honor an explicit site override."""
+    params = ControllerConnectionParams.from_mapping(MOCK_CONFIG_DATA, site="office")
+
+    assert params == ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="office",
+        ssl_verify=False,
+    )
 
 
 async def test_create_controller_closes_owned_session_on_login_failure(hass: HomeAssistant) -> None:
@@ -128,12 +188,7 @@ async def test_create_controller_closes_owned_session_on_login_failure(hass: Hom
     ):
         await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
 
     session.detach.assert_called_once_with()
@@ -155,12 +210,7 @@ async def test_create_controller_closes_owned_session_on_login_cancellation(hass
     ):
         await create_controller(
             hass,
-            host="192.168.1.1",
-            port=8443,
-            username="admin",
-            password="password",
-            site="office",
-            ssl_verify=False,
+            _NO_SSL_PARAMS,
         )
 
     session.detach.assert_called_once_with()

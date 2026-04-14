@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, callback
@@ -11,16 +9,12 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_TRACKED_DEVICES
 from .coordinator import UnifiPresenceCoordinator
+from .helpers import normalize_macs, tracker_unique_id
 from .websocket import UnifiPresenceWebsocket
 
 type UnifiPresenceConfigEntry = ConfigEntry[UnifiPresenceCoordinator]
 
 PLATFORMS: list[Platform] = [Platform.DEVICE_TRACKER]
-
-
-def _normalize_macs(macs: Iterable[str]) -> set[str]:
-    """Return normalized MACs for comparisons."""
-    return {mac.strip().lower() for mac in macs}
 
 
 @callback
@@ -34,7 +28,7 @@ def _async_remove_deselected_entities(
         return
 
     entity_registry = er.async_get(hass)
-    removed_unique_ids = {f"{entry.runtime_data.site_id}-{mac}" for mac in removed_macs}
+    removed_unique_ids = {tracker_unique_id(entry.runtime_data.site_id, mac) for mac in removed_macs}
 
     for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         if registry_entry.unique_id in removed_unique_ids:
@@ -44,8 +38,8 @@ def _async_remove_deselected_entities(
 async def _async_handle_entry_update(hass: HomeAssistant, entry: UnifiPresenceConfigEntry) -> None:
     """Clean up deselected entities before Home Assistant reloads the entry."""
     coordinator = entry.runtime_data
-    removed_macs = _normalize_macs(coordinator.tracked_devices) - _normalize_macs(
-        entry.options.get(CONF_TRACKED_DEVICES, [])
+    removed_macs = set(normalize_macs(coordinator.tracked_devices)) - set(
+        normalize_macs(entry.options.get(CONF_TRACKED_DEVICES, []))
     )
     _async_remove_deselected_entities(hass, entry, removed_macs)
 

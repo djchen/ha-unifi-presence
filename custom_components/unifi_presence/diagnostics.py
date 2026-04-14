@@ -53,9 +53,7 @@ async def async_get_config_entry_diagnostics(
     """Return diagnostics for a config entry."""
     coordinator = getattr(entry, "runtime_data", None)
     coordinator_data = coordinator.data if coordinator is not None else None
-
-    tracked_devices = entry.options.get(CONF_TRACKED_DEVICES, [])
-    tracked_count = len(tracked_devices)
+    tracked_count = len(entry.options.get(CONF_TRACKED_DEVICES, []))
     away_seconds = entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
     fallback_poll_interval_seconds = entry.options.get(
         CONF_FALLBACK_POLL_INTERVAL,
@@ -63,6 +61,7 @@ async def async_get_config_entry_diagnostics(
     )
     websocket_connected = False
     heartbeat_expiry_count = 0
+
     if coordinator is not None:
         tracked_count = len(coordinator.tracked_devices)
         away_seconds = coordinator.away_seconds

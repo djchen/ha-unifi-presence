@@ -46,9 +46,9 @@ ha-unifi-presence/
 
 - **Install**: `pip install ".[dev]" && pre-commit install`
 - **Test**: `PYTHONPATH=. pytest tests/ -v` (don't use editable install — py3.14 compat issue)
-- **Lint**: `ruff check . && ruff format .`
+- **Lint**: `ruff check . && ruff format --check .`
 - **Type check**: `mypy --strict custom_components/unifi_presence/`
-- **Coverage**: enforced at 95% via pytest-cov
+- **Coverage**: enforced at 98% via pytest-cov
 
 ## Conventions
 
@@ -76,6 +76,10 @@ Follow official HA developer guidelines. Project-specific notes:
 - `pytest-homeassistant-custom-component`; `enable_custom_integrations` fixture for config flow tests
 - Mock `create_controller` via the module-local alias (e.g. `custom_components.unifi_presence.config_flow.create_controller` or `custom_components.unifi_presence.coordinator.create_controller`); use `MagicMock` for controller with explicit `AsyncMock()` for async methods
 - Controller mocks must include `messages.subscribe = MagicMock(return_value=MagicMock())` and `connectivity = MagicMock()`
+
+### CI Workflow
+- Follow the upstream action docs for CI refs in `.github/workflows/validate.yml`
+- Keep `hacs/action@main` and `home-assistant/actions/hassfest@master`; do not pin those two actions to version tags unless their own docs change
 
 ### Error Handling
 - `ConfigEntryAuthFailed` for persistent auth failures; `UpdateFailed` for transient

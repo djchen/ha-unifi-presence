@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence import _async_remove_deselected_entities, async_setup_entry, async_unload_entry
@@ -126,7 +127,6 @@ async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
     owned_session.closed = False
     owned_session.detach = MagicMock()
     controller = MagicMock()
-    controller._unifi_presence_owned_session = owned_session
     controller.clients.get = MagicMock(return_value=None)
     controller.clients.update = AsyncMock()
     controller.clients_all.get = MagicMock(return_value=None)
@@ -134,6 +134,8 @@ async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
 
     async def _first_refresh(coordinator: UnifiPresenceCoordinator) -> None:
         coordinator._controller = controller
+
+    controller._unifi_presence_owned_session = owned_session
 
     with (
         patch.object(
@@ -209,13 +211,16 @@ async def test_websocket_starts_after_shutdown_registration(
 
 
 async def test_entity_states_reflect_coordinator_data(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    enable_custom_integrations,
+    mock_controller: MagicMock,
 ) -> None:
     """Test that device_tracker entities have correct states after full setup.
 
     No entity pre-seeding — entities should be enabled by default on a clean install.
     """
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     home_client = _make_mock_client(
         "aa:bb:cc:dd:ee:ff", name="Dan Phone", hostname="dan-phone", ip="192.168.1.100", last_seen=now, is_wired=False
     )
@@ -253,10 +258,13 @@ async def test_entity_states_reflect_coordinator_data(
 
 
 async def test_offline_tracked_client_entity_is_not_home(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    enable_custom_integrations,
+    mock_controller: MagicMock,
 ) -> None:
     """Test that offline selected tracked clients show as not_home, not unavailable."""
-    now = int(time.time())
+    now = int(dt_util.utcnow().timestamp())
     home_client = _make_mock_client(
         "aa:bb:cc:dd:ee:ff", name="Dan Phone", hostname="dan-phone", ip="192.168.1.100", last_seen=now
     )

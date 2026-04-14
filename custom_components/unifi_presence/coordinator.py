@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from json import JSONDecodeError
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
+import aiohttp
 import aiounifi
 from aiounifi.models.message import Message
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
+from homeassistant.const import CONF_HOST
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -20,16 +22,21 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
-    CONF_SITE,
-    CONF_SSL_VERIFY,
     CONF_TRACKED_DEVICES,
     DEFAULT_AWAY_SECONDS,
     DEFAULT_FALLBACK_POLL_INTERVAL,
     DEFAULT_SITE,
-    DEFAULT_SSL_VERIFY,
     DOMAIN,
 )
-from .helpers import async_close_controller, create_controller, resolve_controller_site
+from .helpers import (
+    ClientLike,
+    ControllerConnectionParams,
+    async_close_controller,
+    create_controller,
+    normalize_mac,
+    normalize_macs,
+    resolve_controller_site,
+)
 
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
@@ -39,22 +46,6 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _normalize_tracked_macs(raw_tracked: list[str]) -> tuple[str, ...]:
-    """Normalize tracked MACs by trimming blanks, lowercasing, and deduplicating."""
-    normalized: list[str] = []
-    seen: set[str] = set()
-
-    for mac in raw_tracked:
-        normalized_mac = mac.strip().lower()
-        if not normalized_mac or normalized_mac in seen:
-            continue
-
-        seen.add(normalized_mac)
-        normalized.append(normalized_mac)
-
-    return tuple(normalized)
-
-
 class ClientInfo(TypedDict):
     """Typed dictionary describing a single UniFi client."""
 
@@ -62,32 +53,12 @@ class ClientInfo(TypedDict):
     mac: str
 
 
+@dataclass(slots=True)
 class UnifiPresenceData:
     """Container for coordinator data."""
 
-    __slots__ = ("client_info", "device_states")
-    __hash__ = None  # type: ignore[assignment]
-
-    def __init__(
-        self,
-        device_states: dict[str, bool],
-        client_info: dict[str, ClientInfo],
-    ) -> None:
-        """Initialize.
-
-        Args:
-            device_states: MAC address -> is_home (True = home, False = not_home).
-            client_info: MAC address -> client metadata used by entities.
-        """
-        self.device_states = device_states
-        self.client_info = client_info
-
-    def __eq__(self, other: object) -> bool:
-        """Return whether two coordinator payloads are equivalent."""
-        if not isinstance(other, UnifiPresenceData):
-            return NotImplemented
-
-        return self.device_states == other.device_states and self.client_info == other.client_info
+    device_states: dict[str, bool]
+    client_info: dict[str, ClientInfo]
 
 
 class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
@@ -103,9 +74,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._controller: Controller | None = None
         self.websocket: UnifiPresenceWebsocket | None = None
 
-        # Cache options that only change on reload
-        raw_tracked: list[str] = config_entry.options.get(CONF_TRACKED_DEVICES, [])
-        self._tracked_macs = _normalize_tracked_macs(raw_tracked)
+        self._tracked_macs = normalize_macs(config_entry.options.get(CONF_TRACKED_DEVICES, []))
         self._tracked_set: frozenset[str] = frozenset(self._tracked_macs)
         self._away_seconds: int = config_entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
         self._last_seen_by_mac = {}
@@ -120,14 +89,16 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             name=DOMAIN,
             update_interval=timedelta(seconds=fallback_interval),
             config_entry=config_entry,
-            # We return the existing data object when presence state is unchanged,
-            # so listener updates can be suppressed on no-op fallback polls.
+            # Suppress entity writes when the snapshot is identical to the
+            # previous one.  State transitions come from WebSocket pushes and
+            # heartbeat expiry; the fallback poll only needs to write when
+            # something actually changed.
             always_update=False,
         )
 
     @property
     def tracked_devices(self) -> tuple[str, ...]:
-        """Return the tuple of tracked MAC addresses (pre-lowercased)."""
+        """Return the tuple of tracked MAC addresses."""
         return self._tracked_macs
 
     @property
@@ -181,14 +152,15 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     def _set_last_seen(self, mac: str, last_seen: int | float) -> int:
         """Store the newest known last_seen for a client and return it.
 
-        Only updates the cache when the incoming timestamp is strictly newer,
-        so stale fallback-poll values and out-of-order WebSocket frames cannot
-        move the clock backwards.
+        Only stores the value when it is newer than any previously recorded
+        timestamp. This ensures a stale fallback-poll value cannot overwrite a
+        more recent WebSocket observation.
         """
         normalized = int(last_seen)
         existing = self._last_seen_by_mac.get(mac)
         if existing is not None and existing >= normalized:
             return existing
+
         self._last_seen_by_mac[mac] = normalized
         return normalized
 
@@ -206,8 +178,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     def _reschedule_heartbeat_check(self) -> None:
         """Schedule the next heartbeat check at the earliest pending expiry.
 
-        The event loop only wakes when a tracked device is actually due
-        to expire, rather than polling on a fixed interval.
+        By scheduling a point-in-time callback the event loop is woken
+        precisely when the first device should transition to ``not_home``,
+        avoiding unnecessary periodic polling.
         """
         if self._cancel_heartbeat_check is not None:
             self._cancel_heartbeat_check()
@@ -245,16 +218,17 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         """Apply an observed presence update and maintain heartbeat expiry.
 
         Args:
-            mac: Tracked client MAC.
-            last_seen: Latest trustworthy timestamp, if any.
+            mac: Normalized MAC address of the client.
+            last_seen: Unix timestamp from a WebSocket message or REST poll,
+                or ``None`` when no fresh timestamp is available (offline
+                client during a poll).
 
         Returns:
-            Whether the client should currently be considered home.
+            ``True`` if the client is considered home, ``False`` otherwise.
         """
         effective_last_seen = (
             self._set_last_seen(mac, last_seen) if last_seen is not None else self._get_known_last_seen(mac)
         )
-
         if effective_last_seen is None:
             self._clear_heartbeat(mac)
             return False
@@ -264,7 +238,18 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             self._heartbeat_expiry[mac] = expiry
         else:
             self._clear_heartbeat(mac)
+
         return is_home
+
+    @staticmethod
+    def _build_client_info(
+        mac: str,
+        *,
+        name: str = "",
+        hostname: str = "",
+    ) -> ClientInfo:
+        """Build a normalized client_info dict."""
+        return {"name": name or hostname or mac, "mac": mac}
 
     @callback
     def _get_current_info(self, mac: str) -> ClientInfo:
@@ -272,6 +257,47 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         current_data = self.data
         if current_data is not None and (info := current_data.client_info.get(mac)) is not None:
             return info
+
+        return self._build_client_info(mac)
+
+    @staticmethod
+    def _client_name_parts(client: ClientLike | None) -> tuple[str, str]:
+        """Return normalized client name and hostname values."""
+        if client is None:
+            return "", ""
+
+        return str(client.name or ""), str(client.hostname or "")
+
+    def _build_client_info_from_client(
+        self,
+        mac: str,
+        client: ClientLike | None,
+        *,
+        previous_info: ClientInfo | None = None,
+    ) -> ClientInfo:
+        """Build client metadata from live or historical UniFi data."""
+        name, hostname = self._client_name_parts(client)
+        if name or hostname or previous_info is None:
+            return self._build_client_info(mac, name=name, hostname=hostname)
+
+        return previous_info
+
+    def _resolve_offline_client_info(
+        self,
+        mac: str,
+        previous_info: dict[str, ClientInfo],
+        clients_all: dict[str, ClientLike],
+    ) -> ClientInfo:
+        """Resolve display metadata for an offline client."""
+        historical = clients_all.get(mac)
+        if historical is not None:
+            name, hostname = self._client_name_parts(historical)
+            if name or hostname:
+                return self._build_client_info(mac, name=name, hostname=hostname)
+
+        prior = previous_info.get(mac)
+        if prior is not None:
+            return prior
 
         return self._build_client_info(mac)
 
@@ -299,12 +325,19 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             "home" if is_home else "away",
         )
 
-        self.async_set_updated_data(
-            UnifiPresenceData(
-                device_states=new_states,
-                client_info=new_info,
-            )
-        )
+        self.async_set_updated_data(UnifiPresenceData(device_states=new_states, client_info=new_info))
+
+    @callback
+    def _publish_local_state_change(self, new_data: UnifiPresenceData) -> None:
+        """Publish local state changes without altering refresh success bookkeeping.
+
+        Unlike ``async_set_updated_data()``, this does not reset the refresh
+        timer or flip ``last_update_success`` to ``True``. That distinction
+        matters for heartbeat-only transitions: a device going ``not_home``
+        due to expiry should not look like a successful REST poll.
+        """
+        self.data = new_data
+        self.async_update_listeners()
 
     @callback
     def _async_check_heartbeat_expiry(self, *_: datetime) -> None:
@@ -342,15 +375,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             new_states[mac] = False
             new_info.setdefault(mac, self._get_current_info(mac))
 
-        # Update data and notify listeners directly instead of calling
-        # async_set_updated_data(), which would set last_update_success=True
-        # (masking a real controller failure) and reset the refresh timer
-        # (delaying the REST fallback recovery path).
-        self.data = UnifiPresenceData(
-            device_states=new_states,
-            client_info=new_info,
-        )
-        self.async_update_listeners()
+        self._publish_local_state_change(UnifiPresenceData(device_states=new_states, client_info=new_info))
         self._reschedule_heartbeat_check()
 
     async def _ensure_controller(self) -> Controller:
@@ -359,67 +384,18 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             return self._controller
 
         data = self.config_entry.data
-        site = await resolve_controller_site(
+        params = ControllerConnectionParams.from_mapping(data)
+        resolved_site = await resolve_controller_site(
             self.hass,
-            host=data[CONF_HOST],
-            port=data[CONF_PORT],
-            username=data[CONF_USERNAME],
-            password=data[CONF_PASSWORD],
-            site=data.get(CONF_SITE, DEFAULT_SITE),
-            ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+            params,
             unique_id=self.config_entry.unique_id,
         )
+        params = replace(params, site=resolved_site)
         self._controller = await create_controller(
             self.hass,
-            host=data[CONF_HOST],
-            port=data[CONF_PORT],
-            username=data[CONF_USERNAME],
-            password=data[CONF_PASSWORD],
-            site=site,
-            ssl_verify=data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY),
+            params,
         )
         return self._controller
-
-    @staticmethod
-    def _build_client_info(
-        mac: str,
-        *,
-        name: str = "",
-        hostname: str = "",
-    ) -> ClientInfo:
-        """Build a normalised client_info dict."""
-        return {
-            "name": name or hostname or mac,
-            "mac": mac,
-        }
-
-    def _resolve_offline_client_info(
-        self,
-        mac: str,
-        previous_info: dict[str, ClientInfo],
-        clients_all: Any,
-    ) -> ClientInfo:
-        """Resolve display metadata for an offline client.
-
-        Priority order: historical metadata from ``clients_all`` (so that
-        renames made in UniFi while a device is offline propagate on the next
-        fallback poll), then prior coordinator data (avoids a bare-MAC
-        regression when clients_all has no record for the device), then the
-        bare MAC address as a last resort.
-        """
-        historical = clients_all.get(mac)
-        if historical is not None and (historical.name or historical.hostname):
-            return self._build_client_info(
-                mac,
-                name=historical.name or "",
-                hostname=historical.hostname or "",
-            )
-
-        prior = previous_info.get(mac)
-        if prior is not None:
-            return prior
-
-        return self._build_client_info(mac)
 
     def process_message(self, message: Message) -> None:
         """Handle a sta:sync WebSocket message for a tracked client."""
@@ -431,15 +407,12 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         if not isinstance(mac_raw, str):
             return
 
-        mac = mac_raw.lower()
+        mac = normalize_mac(mac_raw)
         if mac not in self._tracked_set:
             return
 
         last_seen_raw = raw.get("last_seen")
         if last_seen_raw is None:
-            # No timestamp in the payload — fall back to the cached value in
-            # _apply_presence_observation rather than treating a bare WS event
-            # as proof of current activity.
             last_seen: int | float | None = None
         elif isinstance(last_seen_raw, bool) or not isinstance(last_seen_raw, (int, float)):
             return
@@ -448,14 +421,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         current_data = self.data
         previous_info = current_data.client_info.get(mac) if current_data is not None else None
-        name_raw = raw.get("name")
-        name = name_raw if isinstance(name_raw, str) else ""
-        hostname_raw = raw.get("hostname")
-        hostname = hostname_raw if isinstance(hostname_raw, str) else ""
-        info = (
-            self._build_client_info(mac, name=name, hostname=hostname)
-            if name or hostname or previous_info is None
-            else previous_info
+        info = self._build_client_info_from_client(
+            mac,
+            cast(ClientLike, _MessageClientView(raw)),
+            previous_info=previous_info,
         )
 
         is_home = self._apply_presence_observation(mac, last_seen=last_seen)
@@ -471,28 +440,21 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         )
 
     async def _refresh_clients(self, controller: Controller) -> None:
-        """Best-effort refresh of historical clients, then required refresh of active clients.
-
-        The historical store (clients_all) retains cached data from prior
-        successful refreshes, so its failure is non-fatal.  The active store
-        (clients) is required — its failure propagates.
-        """
+        """Best-effort refresh of historical clients, then required refresh of active clients."""
         try:
             await controller.clients_all.update()
-        except Exception:
+        except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
             _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
 
         await controller.clients.update()
 
-    async def _async_update_data(self) -> UnifiPresenceData:
-        """Fallback REST poll — fetch data from the UniFi controller."""
-        tracked_macs = self._tracked_macs
-
+    async def _async_refresh_with_reauth(self) -> Controller:
+        """Refresh client stores, re-authenticating once on session expiry."""
         try:
             controller = await self._ensure_controller()
             await self._refresh_clients(controller)
+            return controller
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
-            # Session expired or credentials rejected — force re-auth
             _LOGGER.info("UniFi session expired, re-authenticating")
             await self._async_close_runtime_controller()
             try:
@@ -506,47 +468,62 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             except (TimeoutError, aiounifi.AiounifiException, JSONDecodeError) as err:
                 raise self._connect_error() from err
 
-            # Controller was replaced — restart websocket so it binds to the new one
             if self.websocket is not None:
-                self.websocket.reconnect()
+                self.websocket.restart_with_current_controller()
+
+            return controller
         except (TimeoutError, aiounifi.AiounifiException, JSONDecodeError) as err:
             raise self._connect_error() from err
 
-        _LOGGER.debug("Fallback poll for tracked device(s)")
-
-        # Look up only tracked MACs directly — avoids copying the full client dict
-        clients = controller.clients
-        clients_all = controller.clients_all
+    def _build_snapshot(
+        self,
+        controller: Controller,
+    ) -> UnifiPresenceData:
+        """Build the current coordinator snapshot from controller client stores."""
+        clients = cast(dict[str, ClientLike], controller.clients)
+        clients_all = cast(dict[str, ClientLike], controller.clients_all)
         device_states: dict[str, bool] = {}
         client_info: dict[str, ClientInfo] = {}
         previous_info = self.data.client_info if self.data is not None else {}
 
-        for mac in tracked_macs:
+        for mac in self._tracked_macs:
             client = clients.get(mac)
-
             if client is not None:
                 last_seen = client.last_seen or None
                 is_home = self._apply_presence_observation(mac, last_seen=last_seen)
-                client_info[mac] = self._build_client_info(
-                    mac,
-                    name=client.name or "",
-                    hostname=client.hostname or "",
-                )
+                client_info[mac] = self._build_client_info_from_client(mac, client)
             else:
                 is_home = self._apply_presence_observation(mac, last_seen=None)
                 client_info[mac] = self._resolve_offline_client_info(mac, previous_info, clients_all)
 
             device_states[mac] = is_home
 
-        self._reschedule_heartbeat_check()
+        return UnifiPresenceData(device_states=device_states, client_info=client_info)
 
-        new_data = UnifiPresenceData(
-            device_states=device_states,
-            client_info=client_info,
-        )
-
-        # Reuse the existing object only when neither presence nor metadata changed.
+    def _reuse_existing_snapshot_if_unchanged(self, new_data: UnifiPresenceData) -> UnifiPresenceData:
+        """Return the existing data object when neither state nor metadata changed."""
         if self.data is not None and new_data == self.data:
             return self.data
 
         return new_data
+
+    async def _async_update_data(self) -> UnifiPresenceData:
+        """Fallback REST poll — fetch data from the UniFi controller."""
+        controller = await self._async_refresh_with_reauth()
+        _LOGGER.debug("Fallback poll for tracked device(s)")
+
+        new_data = self._build_snapshot(controller)
+        self._reschedule_heartbeat_check()
+        return self._reuse_existing_snapshot_if_unchanged(new_data)
+
+
+class _MessageClientView:
+    """Adapter exposing message payload fields through the ClientLike protocol."""
+
+    def __init__(self, raw: dict[str, object]) -> None:
+        """Initialize the message view."""
+        name_raw = raw.get("name")
+        hostname_raw = raw.get("hostname")
+        self.name = name_raw if isinstance(name_raw, str) else None
+        self.hostname = hostname_raw if isinstance(hostname_raw, str) else None
+        self.last_seen = None
