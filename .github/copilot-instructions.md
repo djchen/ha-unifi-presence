@@ -55,6 +55,10 @@
 - `custom_components/unifi_presence/device_tracker.py`: one `ScannerEntity` per tracked MAC. No device-registry devices are created.
 - `custom_components/unifi_presence/helpers.py`: shared MAC identity helpers, controller/session lifecycle helpers, and runtime summary helpers.
 
+## Python 3.14+ Exception Syntax (PEP 758)
+
+`except A, B:` is valid Python 3.14+ (PEP 758). Do **not** flag it as a syntax error. Parentheses are still required when binding with `as`: `except (A, B) as err:`.
+
 ## Change Guidance
 - Preserve the current behavior split: offline tracked clients are `not_home` but still `available`; only coordinator/controller failures make entities unavailable.
 - Preserve site-scoped identity.
