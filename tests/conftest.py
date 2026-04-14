@@ -213,6 +213,16 @@ def _bypass_setup(hass: HomeAssistant, enable_custom_integrations: None) -> Gene
 
 
 @pytest.fixture
+def coordinator_config_entry(hass: HomeAssistant) -> MagicMock:
+    """Create a mock config entry for coordinator tests."""
+    entry = MagicMock()
+    entry.entry_id = "test_entry_id"
+    entry.data = MOCK_CONFIG_DATA
+    entry.options = MOCK_OPTIONS
+    return entry
+
+
+@pytest.fixture
 def mock_coordinator_controller() -> Generator[MagicMock]:
     """Fixture to mock the aiounifi Controller for coordinator tests."""
     controller = _build_controller(
