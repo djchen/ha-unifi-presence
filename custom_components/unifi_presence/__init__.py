@@ -89,8 +89,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntr
     """Unload a config entry."""
     coordinator = entry.runtime_data
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+
     if coordinator.websocket is not None:
         await coordinator.websocket.stop_and_wait()
     await coordinator.async_shutdown()
 
-    return unload_ok
+    return True

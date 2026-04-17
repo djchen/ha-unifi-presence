@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_AWAY_SECONDS,
     DEFAULT_FALLBACK_POLL_INTERVAL,
     DEFAULT_PORT,
+    DEFAULT_SETUP_SSL_VERIFY,
     DEFAULT_SITE,
     DEFAULT_SSL_VERIFY,
     DOMAIN,
@@ -89,7 +90,7 @@ def _build_user_schema() -> vol.Schema:
             vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
             vol.Required(CONF_USERNAME): str,
             vol.Required(CONF_PASSWORD): str,
-            vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SSL_VERIFY): bool,
+            vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SETUP_SSL_VERIFY): bool,
         }
     )
 
@@ -260,7 +261,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._username: str = ""
         self._password: str = ""
         self._site: str = DEFAULT_SITE
-        self._ssl_verify: bool = DEFAULT_SSL_VERIFY
+        self._ssl_verify: bool = DEFAULT_SETUP_SSL_VERIFY
         self._site_id: str = ""
         self._site_title: str = ""
         self._available_sites: dict[str, SiteLike] = {}
@@ -279,13 +280,18 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             ssl_verify=self._ssl_verify,
         )
 
-    def _store_connection_input(self, user_input: Mapping[str, object]) -> None:
+    def _store_connection_input(
+        self,
+        user_input: Mapping[str, object],
+        *,
+        ssl_verify_default: bool,
+    ) -> None:
         """Persist connection settings from a submitted form."""
         self._host = str(user_input[CONF_HOST])
         self._port = _as_int(user_input[CONF_PORT])
         self._username = str(user_input[CONF_USERNAME])
         self._password = str(user_input[CONF_PASSWORD])
-        self._ssl_verify = bool(user_input.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
+        self._ssl_verify = bool(user_input.get(CONF_SSL_VERIFY, ssl_verify_default))
 
     def _set_selected_site(self, site: SiteLike) -> None:
         """Persist the currently selected site metadata on the flow."""
@@ -316,7 +322,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
-        except TimeoutError, aiounifi.AiounifiException:
+        except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
             return None, "cannot_connect"
         except Exception:
             _LOGGER.exception("Unexpected exception during %s", log_context)
@@ -479,7 +485,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._store_connection_input(user_input)
+            self._store_connection_input(user_input, ssl_verify_default=DEFAULT_SETUP_SSL_VERIFY)
             self._site_step_target = "user"
 
             error = await self._async_load_sites_for_current_connection(log_context="UniFi login")
@@ -572,9 +578,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         current_data = reconfigure_entry.data
 
         if user_input is not None:
-            self._store_connection_input(user_input)
-            self._ssl_verify = bool(
-                user_input.get(CONF_SSL_VERIFY, current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
+            self._store_connection_input(
+                user_input,
+                ssl_verify_default=bool(current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)),
             )
             self._site = str(current_data.get(CONF_SITE, DEFAULT_SITE))
             self._site_step_target = "reconfigure"

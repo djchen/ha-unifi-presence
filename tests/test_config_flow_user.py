@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import aiounifi
 import pytest
 from homeassistant import config_entries
@@ -101,6 +102,19 @@ async def test_user_step_cannot_connect(hass: HomeAssistant) -> None:
     assert result["errors"] == {"base": "cannot_connect"}
 
 
+async def test_user_step_client_error_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """Test that aiohttp transport errors show a connectivity error."""
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input=USER_STEP_INPUT,
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
 async def test_user_step_timeout_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that controller login timeouts show a connectivity error."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
@@ -165,6 +179,7 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
     selector = _get_tracked_device_selector(result)
     assert selector.config["multiple"] is True
     assert selector.config["mode"] == SelectSelectorMode.DROPDOWN
+    assert result["description_placeholders"] == {"client_count": "1"}
     assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
 
 
