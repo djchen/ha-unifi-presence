@@ -60,7 +60,7 @@ Auto-discovery of the controller is intentionally not included. The official int
    - **Port**: 443 by default, or 8443 for legacy controllers
    - **Username**: A local UniFi username
    - **Password**: The account password
-   - **Verify SSL certificate**: Turn this on only if your controller uses a trusted certificate
+   - **Verify SSL certificate**: Leave this on unless your controller uses a self-signed or otherwise untrusted certificate
 4. If the account can access more than one site, choose the site in the second step.
 5. Select the devices you want to track.
 6. Submit the form.

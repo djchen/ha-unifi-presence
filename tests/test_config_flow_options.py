@@ -418,3 +418,17 @@ def test_removed_translation_keys_stay_absent_and_aligned() -> None:
     assert "no_devices" not in english["options"]["error"]
     assert "entity" not in strings
     assert "entity" not in english
+
+
+def test_device_picker_copy_mentions_known_clients_and_secure_ssl_default() -> None:
+    """Test setup copy matches historical-client behavior and secure SSL defaults."""
+    strings = json.loads((TRANSLATIONS_ROOT / "strings.json").read_text())
+    english = json.loads((TRANSLATIONS_ROOT / "translations" / "en.json").read_text())
+
+    for doc in (strings, english):
+        assert doc["config"]["step"]["devices"]["data"]["tracked_devices"] == "Known devices"
+        assert "including previously seen devices" in doc["config"]["step"]["devices"]["description"]
+        assert (
+            "Leave enabled unless your controller uses a self-signed"
+            in doc["config"]["step"]["user"]["data_description"]["ssl_verify"]
+        )

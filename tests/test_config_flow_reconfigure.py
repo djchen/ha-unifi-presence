@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import aiounifi
 import pytest
 from homeassistant.core import HomeAssistant
@@ -210,6 +211,26 @@ async def test_reconfigure_flow_cannot_connect(hass: HomeAssistant) -> None:
     entry = _make_reconfigure_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.AiounifiException):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": MOCK_CONFIG_DATA["host"],
+                "port": MOCK_CONFIG_DATA["port"],
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reconfigure_flow_client_error_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """Test that aiohttp transport errors surface as cannot_connect."""
+    entry = _make_reconfigure_entry(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
         result = await entry.start_reconfigure_flow(hass)
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],

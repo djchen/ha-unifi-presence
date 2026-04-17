@@ -16,7 +16,7 @@
           "port": "Usually 443 or 8443.",
           "username": "A local user account on the UniFi controller.",
           "password": "Password for the UniFi user account.",
-          "ssl_verify": "Enable to verify the SSL certificate. Disable if your controller has a self-signed certificate."
+          "ssl_verify": "Leave enabled unless your controller uses a self-signed or otherwise untrusted certificate."
         }
       },
       "site": {
@@ -53,17 +53,17 @@
           "port": "Usually 443 or 8443.",
           "username": "A local user account on the UniFi controller.",
           "password": "Password for the UniFi user account.",
-          "ssl_verify": "Enable to verify the SSL certificate. Disable if your controller has a self-signed certificate."
+          "ssl_verify": "Leave enabled unless your controller uses a self-signed or otherwise untrusted certificate."
         }
       },
       "devices": {
         "title": "Select Devices to Track",
-        "description": "Found {client_count} clients on your UniFi network. Select devices to track for presence detection.",
+        "description": "Found {client_count} UniFi clients known to this site, including previously seen devices. Select devices to track for presence detection.",
         "data": {
-          "tracked_devices": "Discovered devices"
+          "tracked_devices": "Known devices"
         },
         "data_description": {
-          "tracked_devices": "Select one or more devices to track for presence detection."
+          "tracked_devices": "Select one or more UniFi clients to track for presence detection."
         }
       }
     },

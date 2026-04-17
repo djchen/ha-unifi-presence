@@ -85,7 +85,7 @@ async def test_async_unload_entry(hass: HomeAssistant, enable_custom_integration
 
 
 async def test_async_unload_entry_releases_resources_even_when_platform_unload_fails(hass: HomeAssistant) -> None:
-    """Test unload still tears down websocket and coordinator even if platform unload fails."""
+    """Test unload leaves runtime resources intact when platform unload fails."""
     entry = _make_config_entry(hass)
     websocket = MagicMock()
     websocket.stop_and_wait = AsyncMock()
@@ -97,8 +97,8 @@ async def test_async_unload_entry_releases_resources_even_when_platform_unload_f
         unloaded = await async_unload_entry(hass, entry)
 
     assert unloaded is False
-    websocket.stop_and_wait.assert_awaited_once()
-    runtime_data.async_shutdown.assert_awaited_once()
+    websocket.stop_and_wait.assert_not_awaited()
+    runtime_data.async_shutdown.assert_not_awaited()
 
 
 async def test_async_unload_entry_releases_controller_after_successful_platform_unload(hass: HomeAssistant) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import aiohttp
 import aiounifi
 import pytest
 from homeassistant import config_entries
@@ -133,6 +134,20 @@ async def test_reauth_cannot_connect(hass: HomeAssistant, config_entry: MockConf
     result = await config_entry.start_reauth_flow(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.AiounifiException("fail")):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"username": "admin", "password": "password"},
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reauth_client_error_shows_cannot_connect(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    """Test that aiohttp transport failures show a connectivity error in reauth."""
+    result = await config_entry.start_reauth_flow(hass)
+
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             user_input={"username": "admin", "password": "password"},
