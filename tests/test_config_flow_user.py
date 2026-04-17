@@ -417,6 +417,32 @@ async def test_site_selection_malformed_site_value_shows_user_error(hass: HomeAs
     assert result["errors"] == {"base": "invalid_site"}
 
 
+async def test_site_selection_without_available_sites_aborts(hass: HomeAssistant) -> None:
+    """Test the site step aborts when the available site list is empty."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+
+    result = await flow.async_step_site()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_sites_available"
+
+
+async def test_site_selection_reconfigure_target_uses_reconfigure_handler(hass: HomeAssistant) -> None:
+    """Test valid site submission uses the reconfigure completion path."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._site_step_target = "reconfigure"
+    flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
+    flow._async_finish_reconfigure_site_selection = AsyncMock(
+        return_value={"type": FlowResultType.ABORT, "reason": "reconfigure_successful"}
+    )
+
+    result = await flow.async_step_site({CONF_SITE: DEFAULT_SITE_ID})
+
+    assert result == {"type": FlowResultType.ABORT, "reason": "reconfigure_successful"}
+
+
 async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant) -> None:
     """Test setup stores the UniFi site short name but keys the entry by site_id."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
@@ -550,6 +576,17 @@ async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
     assert result["errors"] == {"base": "no_devices"}
 
 
+async def test_devices_step_without_available_clients_aborts(hass: HomeAssistant) -> None:
+    """Test the devices step aborts when no clients are loaded."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+
+    result = await flow.async_step_devices()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_clients_available"
+
+
 async def test_already_configured_abort(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     """Test that duplicate site setup aborts even with a different host alias."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
@@ -594,3 +631,106 @@ async def test_fetch_all_clients_active_wins_on_key_collision(hass: HomeAssistan
     options = _get_tracked_device_options(result)
     assert "aa:bb:cc:dd:ee:ff" in options
     assert "Current Name" in options["aa:bb:cc:dd:ee:ff"]
+
+
+async def test_finish_single_site_user_selection_keeps_retry_form_on_repeat_failure(hass: HomeAssistant) -> None:
+    """Test repeated single-site discovery failures keep the dedicated retry form."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
+    flow._site = "default"
+    flow._site_title = "Home"
+    flow._single_site_discovery_error = "cannot_discover_devices"
+    flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_discover_devices")
+
+    result = await flow._async_finish_single_site_user_selection()
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "single_site_retry"
+    assert result["errors"] == {"base": "cannot_discover_devices"}
+
+
+async def test_finish_multi_site_user_selection_returns_site_error(hass: HomeAssistant) -> None:
+    """Test multi-site client discovery errors return to the site form."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_sites = {
+        DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+        OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+    }
+    flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_connect")
+
+    result = await flow._async_finish_multi_site_user_selection()
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_finish_multi_site_user_selection_aborts_without_clients(hass: HomeAssistant) -> None:
+    """Test multi-site setup aborts when client discovery succeeds but finds nothing."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_clients = {}
+    flow._async_load_selected_site_clients = AsyncMock(return_value=None)
+
+    result = await flow._async_finish_multi_site_user_selection()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_clients_available"
+
+
+async def test_single_site_retry_without_sites_aborts(hass: HomeAssistant) -> None:
+    """Test single-site retry aborts when the flow no longer has site data."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+
+    result = await flow.async_step_single_site_retry({})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_sites_available"
+
+
+async def test_single_site_retry_with_multiple_sites_returns_site_step(hass: HomeAssistant) -> None:
+    """Test single-site retry falls back to the site step when multiple sites exist."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_sites = {
+        DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+        OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+    }
+
+    result = await flow.async_step_single_site_retry({})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "site"
+
+
+async def test_single_site_retry_without_input_shows_retry_form(hass: HomeAssistant) -> None:
+    """Test single-site retry shows the retry form before resubmission."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
+    flow._site = "default"
+    flow._site_title = "Home"
+
+    result = await flow.async_step_single_site_retry()
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "single_site_retry"
+
+
+async def test_single_site_retry_keeps_form_when_retry_fails(hass: HomeAssistant) -> None:
+    """Test single-site retry keeps the retry form when the next refresh still fails."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
+    flow._site = "default"
+    flow._site_title = "Home"
+    flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_discover_devices")
+
+    result = await flow.async_step_single_site_retry({})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "single_site_retry"
+    assert result["errors"] == {"base": "cannot_discover_devices"}

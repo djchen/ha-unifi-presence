@@ -13,6 +13,11 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence.config_flow import (
+    UnifiPresenceConfigFlow,
+    _async_migrate_tracker_unique_ids,
+    _find_reconfigure_site,
+)
 from custom_components.unifi_presence.const import (
     CONF_TRACKED_DEVICES,
     DOMAIN,
@@ -42,6 +47,20 @@ def _make_reconfigure_entry(hass: HomeAssistant) -> MockConfigEntry:
     )
     entry.add_to_hass(hass)
     return entry
+
+
+def test_find_reconfigure_site_returns_none_for_non_string_stored_site() -> None:
+    """Test reconfigure site lookup ignores malformed stored site values."""
+    sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
+
+    assert _find_reconfigure_site(sites, entry_unique_id=None, stored_site=123) is None
+
+
+def test_find_reconfigure_site_returns_none_when_current_site_is_missing() -> None:
+    """Test reconfigure site lookup returns None when the old site is no longer accessible."""
+    sites = {OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office")}
+
+    assert _find_reconfigure_site(sites, entry_unique_id=None, stored_site="default") is None
 
 
 # ── Reconfigure flow: success paths ──────────────────────────────────────
@@ -315,6 +334,27 @@ async def test_reconfigure_flow_uses_existing_site_without_showing_picker(hass: 
     assert entry.unique_id == DEFAULT_SITE_ID
 
 
+async def test_reconfigure_flow_aborts_when_existing_site_is_no_longer_accessible(hass: HomeAssistant) -> None:
+    """Test reconfigure aborts if the updated credentials cannot access the current site."""
+    entry = _make_reconfigure_entry(hass)
+    controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": MOCK_CONFIG_DATA["host"],
+                "port": MOCK_CONFIG_DATA["port"],
+                "username": "admin",
+                "password": "new-pass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "different_site_selected"
+
+
 async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that reconfigure returns an error if the site list cannot be loaded."""
     entry = _make_reconfigure_entry(hass)
@@ -417,6 +457,34 @@ async def test_reconfigure_flow_second_login_failure_returns_to_reconfigure_form
     assert result["errors"] == {"base": "invalid_auth"}
 
 
+async def test_finish_reconfigure_site_selection_rejects_different_site_directly(hass: HomeAssistant) -> None:
+    """Test the helper rejects a selected site that differs from the entry site."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._set_selected_site(_make_mock_site(OFFICE_SITE_ID, "office", "Office"))
+    flow._get_reconfigure_entry = lambda: MockConfigEntry(  # type: ignore[method-assign]
+        domain=DOMAIN,
+        title="Home",
+        data=MOCK_CONFIG_DATA,
+        unique_id=DEFAULT_SITE_ID,
+        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+    )
+
+    result = await flow._async_finish_reconfigure_site_selection(_make_mock_site(OFFICE_SITE_ID, "office", "Office"))
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "different_site_selected"
+
+
+async def test_load_selected_site_clients_returns_login_error(hass: HomeAssistant) -> None:
+    """Test selected-site refresh returns a login error without discovery."""
+    flow = UnifiPresenceConfigFlow()
+    flow.hass = hass
+    flow._async_validate_login = AsyncMock(return_value=(None, "cannot_connect"))
+
+    assert await flow._async_load_selected_site_clients(log_context="UniFi site client discovery") == "cannot_connect"
+
+
 # ── Reconfigure flow: legacy / migration ─────────────────────────────────
 
 
@@ -499,3 +567,27 @@ async def test_reconfigure_flow_migrates_legacy_tracker_entity_unique_ids(hass: 
         )
         is None
     )
+
+
+async def test_migrate_tracker_unique_ids_skips_non_matching_entities(hass: HomeAssistant) -> None:
+    """Test tracker migration leaves unrelated entity IDs unchanged."""
+    entry = _make_reconfigure_entry(hass)
+    entity_registry = er.async_get(hass)
+    entity = entity_registry.async_get_or_create(
+        "device_tracker",
+        DOMAIN,
+        f"{DEFAULT_SITE_ID}-11:22:33:44:55:66",
+        config_entry=entry,
+        suggested_object_id="other_phone",
+    )
+
+    _async_migrate_tracker_unique_ids(
+        hass,
+        entry,
+        old_site_id="192.168.1.1_default",
+        new_site_id=DEFAULT_SITE_ID,
+    )
+
+    unchanged = entity_registry.async_get(entity.entity_id)
+    assert unchanged is not None
+    assert unchanged.unique_id == f"{DEFAULT_SITE_ID}-11:22:33:44:55:66"
