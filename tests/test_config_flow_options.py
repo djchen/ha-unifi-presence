@@ -432,3 +432,8 @@ def test_device_picker_copy_mentions_known_clients_and_secure_ssl_default() -> N
             "Leave enabled unless your controller uses a self-signed"
             in doc["config"]["step"]["user"]["data_description"]["ssl_verify"]
         )
+        assert (
+            doc["options"]["error"]["cannot_discover_devices"]
+            == "Could not refresh the client list; previously tracked devices may still be available"
+        )
+        assert doc["system_health"]["info"]["devices_with_active_away_timers"] == "Devices within away timeout"

@@ -158,7 +158,8 @@ async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAs
         )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "site"
+    assert result["step_id"] == "single_site_retry"
+    assert result["description_placeholders"] == {"site": "Home"}
     assert result["errors"] == {"base": "cannot_discover_devices"}
 
 
@@ -255,12 +256,12 @@ async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: 
         )
 
         assert result["type"] is FlowResultType.FORM
-        assert result["step_id"] == "site"
+        assert result["step_id"] == "single_site_retry"
         assert result["errors"] == {"base": "cannot_discover_devices"}
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input={CONF_SITE: DEFAULT_SITE_ID},
+            user_input={},
         )
 
     assert result["type"] is FlowResultType.FORM

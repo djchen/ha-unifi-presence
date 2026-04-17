@@ -53,8 +53,28 @@ async def test_reauth_shows_form(hass: HomeAssistant, config_entry: MockConfigEn
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "reauth_confirm"
+    assert result["description_placeholders"]["site"] == "Home"
+    assert result["description_placeholders"]["host"] == MOCK_CONFIG_DATA["host"]
     assert "username" in result["data_schema"].schema
     assert "password" in result["data_schema"].schema
+
+
+async def test_reauth_shows_site_and_host_for_same_controller_different_site(hass: HomeAssistant) -> None:
+    """Test that reauth identifies the entry by both site and host."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Office (192.168.1.1)",
+        data={**MOCK_CONFIG_DATA, "site": "office"},
+        unique_id=OFFICE_SITE_ID,
+        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+    )
+    entry.add_to_hass(hass)
+
+    result = await entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["description_placeholders"]["site"] == "Office"
+    assert result["description_placeholders"]["host"] == MOCK_CONFIG_DATA["host"]
 
 
 async def test_reauth_success(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:

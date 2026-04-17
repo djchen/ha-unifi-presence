@@ -14,7 +14,6 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence.const import (
-    CONF_SITE,
     CONF_TRACKED_DEVICES,
     DOMAIN,
 )
@@ -289,8 +288,8 @@ async def test_reconfigure_flow_unknown_error(hass: HomeAssistant) -> None:
 # ── Reconfigure flow: site handling ──────────────────────────────────────
 
 
-async def test_reconfigure_flow_already_configured(hass: HomeAssistant) -> None:
-    """Test that reconfigure aborts when the selected site differs."""
+async def test_reconfigure_flow_uses_existing_site_without_showing_picker(hass: HomeAssistant) -> None:
+    """Test that reconfigure validates the existing site without exposing a picker."""
     entry = _make_reconfigure_entry(hass)
 
     controller = _mock_controller(
@@ -310,16 +309,10 @@ async def test_reconfigure_flow_already_configured(hass: HomeAssistant) -> None:
                 "password": "newpass",
             },
         )
-        assert result["type"] is FlowResultType.FORM
-        assert result["step_id"] == "site"
-
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={"site": OFFICE_SITE_ID},
-        )
 
     assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "different_site_selected"
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.unique_id == DEFAULT_SITE_ID
 
 
 async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
@@ -390,12 +383,12 @@ async def test_reconfigure_flow_same_site_requires_site_access(hass: HomeAssista
         )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "site"
+    assert result["step_id"] == "reconfigure"
     assert result["errors"] == {"base": "cannot_discover_devices"}
 
 
-async def test_reconfigure_flow_second_login_failure_after_site_selection(hass: HomeAssistant) -> None:
-    """Test reconfigure shows a site-step error when selected-site login fails."""
+async def test_reconfigure_flow_second_login_failure_returns_to_reconfigure_form(hass: HomeAssistant) -> None:
+    """Test reconfigure shows a form error when existing-site validation fails."""
     entry = _make_reconfigure_entry(hass)
     site_list_controller = _mock_controller(
         sites=[
@@ -418,16 +411,9 @@ async def test_reconfigure_flow_second_login_failure_after_site_selection(hass: 
                 "password": "new-pass",
             },
         )
-        assert result["type"] is FlowResultType.FORM
-        assert result["step_id"] == "site"
-
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={CONF_SITE: DEFAULT_SITE_ID},
-        )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "site"
+    assert result["step_id"] == "reconfigure"
     assert result["errors"] == {"base": "invalid_auth"}
 
 
