@@ -1,86 +1,30 @@
 # AGENTS.md
 
-## Project Overview
+## Repo
 
-**Domain**: `unifi_presence` · User-facing docs in **README.md** · Dev tooling in **pyproject.toml**
+- Home Assistant custom integration only; code lives in `custom_components/unifi_presence`. There is no standalone app entrypoint or dev server.
 
-## Project Structure
+## Setup And Verify
 
-```text
-ha-unifi-presence/
-├── custom_components/unifi_presence/
-│   ├── __init__.py        # Setup/unload, WS lifecycle
-│   ├── config_flow.py     # Credentials → optional site → device selection + options/reconfigure/reauth
-│   ├── const.py           # Constants and defaults
-│   ├── coordinator.py     # DataUpdateCoordinator — WS push + heartbeat expiry + REST poll fallback
-│   ├── device_tracker.py  # ScannerEntity per tracked MAC
-│   ├── diagnostics.py     # Redacted config + runtime state
-│   ├── helpers.py         # create_controller() factory
-│   ├── system_health.py   # HA system health summary
-│   ├── websocket.py       # WS connect, reconnect, health check
-│   ├── icons.json         # MDI icons
-│   ├── manifest.json      # HA/HACS manifest
-│   ├── strings.json       # Translatable UI strings
-│   └── translations/en.json
-├── tests/
-├── .github/workflows/validate.yml  # CI: ruff, pytest, mypy, HACS, hassfest
-├── .pre-commit-config.yaml         # ruff + mypy hooks
-├── pyproject.toml
-└── README.md
-```
+- Use Python `3.14.3` from `.python-version` and activate the repo venv first: `source .venv/bin/activate`
+- Install dev deps: `pip install ".[dev]" && pre-commit install`
+- Full local check: `pre-commit run --all-files`, `mypy --strict custom_components/unifi_presence/`, `PYTHONPATH=. pytest tests/ -v`
+- Focused tests still need `PYTHONPATH=.`: `PYTHONPATH=. pytest tests/test_coordinator_heartbeat.py -k expiry -v`
 
-## Architecture
+## Architecture Traps
 
-- **Config flow**: 2-3 step (credentials → optional site selection → device selection). Options via `OptionsFlowWithReload`. Reconfigure and reauth flows. Reconfigure matches the existing site by unique ID, falling back to the stored site value for legacy/unset entries. Aborts on no clients discovered.
-- **Coordinator**: WS primary (`process_message` for `sta:sync`), coordinator heartbeat expiry, REST poll fallback. Re-auths on session expiry. `frozenset` for O(1) MAC lookups. Skips entity writes when state unchanged.
-  - **Heartbeat expiry**: The coordinator keeps the newest trustworthy `last_seen` per tracked MAC and runs a small heartbeat-style sweep so devices transition to `not_home` when `away_seconds` elapses even if no second WebSocket event arrives.
-  - **Active + historical merge**: Each poll does a best-effort `clients_all.update()` (historical store, failure non-fatal) followed by a required `clients.update()` (active store). For each tracked MAC: active clients use live `last_seen`; recently offline clients can remain `home` until heartbeat expiry using cached `last_seen`; offline clients use `clients_all` metadata only when it provides a name/hostname, then fall back to prior coordinator data, then to the bare MAC address.
-  - **Availability**: Reflects coordinator/controller health only. An individual offline client is `not_home` + `available=True`. Entities become `unavailable` only when the coordinator itself cannot fetch data (e.g., controller unreachable, auth failure).
-- **WebSocket**: Auto-reconnect with backoff, health checks, `_stopped` guard. Stale startup detection reconnects if no message has been received since startup and the connection age exceeds `STALE_WEBSOCKET_INTERVAL`. Modeled after official HA UniFi integration.
-- **Device tracker**: `ScannerEntity` + `CoordinatorEntity`. No per-client device entries. `has_entity_name = True` to match the official HA UniFi integration, with the displayed name derived from coordinator `client_info`.
-- **Init**: Coordinator → WS start → platform forward.
+- Config-entry identity is UniFi `site_id`; tracker unique IDs are `{site_id}-{normalized_mac}`. `entry.data["site"]` stores the UniFi site short name used for controller requests, so do not key identity off host.
+- Reconfigure preserves site identity across host changes and migrates legacy tracker unique IDs when an older entry gains a real `site_id`.
+- `device_tracker` is the only platform: one entity per tracked MAC, entity-registry only, no device-registry devices.
+- Presence is push-first: WebSocket `sta:sync` updates + local heartbeat expiry + REST fallback polling. Heartbeat-only expiry must not reset refresh timers or flip `last_update_success` back to `True`.
+- Offline clients being `not_home` but still `available` is intentional; only coordinator/controller failures make entities unavailable.
+- When `ssl_verify` is `false`, `create_controller()` owns a dedicated aiohttp session; release it with `async_close_controller()` rather than tearing down Home Assistant's shared session.
+- Python 3.14 PEP 758 syntax is valid here: `except A, B:` is intentional; use parentheses only when binding with `as`.
 
-## Development
+## Tests And Edit Traps
 
-> Always activate venv first: `source .venv/bin/activate`
-
-- **Install**: `pip install ".[dev]" && pre-commit install`
-- **Test**: `PYTHONPATH=. pytest tests/ -v` (don't use editable install — py3.14 compat issue)
-- **Lint**: `ruff check . && ruff format --check .`
-- **Type check**: `mypy --strict custom_components/unifi_presence/`
-- **Coverage**: enforced at 98% via pytest-cov
-
-## Conventions
-
-Follow official HA developer guidelines. Project-specific notes:
-
-### Code Style
-- `from __future__ import annotations` in every file; full type hints
-- Lazy `%s` in log messages; never log credentials
-- Google-style docstrings; file-level docstrings describe purpose
-- **Python 3.14+ specific**: Embrace the latest syntax features seamlessly. [PEP 758](https://peps.python.org/pep-0758/) allows catching multiple exceptions without parentheses — do **not** confuse this with the legacy Python 2 `except Type, variable:` binding form.
-
-  ```python
-  # PEP 758 — catch multiple exceptions (Python 3.14+)
-  except ConnectionError, TimeoutError:
-      ...
-
-  # Binding the exception to a variable still requires `as` + parentheses
-  except (ConnectionError, TimeoutError) as err:
-      log(err)
-  ```
-
-  The old Python 2 form `except Exception, e:` (where `e` captured the exception) is **not** valid in Python 3 and looks deceptively similar — always use `as` for binding.
-
-### Testing
-- `pytest-homeassistant-custom-component`; `enable_custom_integrations` fixture for config flow tests
-- Mock `create_controller` via the module-local alias (e.g. `custom_components.unifi_presence.config_flow.create_controller` or `custom_components.unifi_presence.coordinator.create_controller`); use `MagicMock` for controller with explicit `AsyncMock()` for async methods
-- Controller mocks must include `messages.subscribe = MagicMock(return_value=MagicMock())` and `connectivity = MagicMock()`
-
-### CI Workflow
-- Follow the upstream action docs for CI refs in `.github/workflows/validate.yml`
-- Keep `hacs/action@main` and `home-assistant/actions/hassfest@master`; do not pin those two actions to version tags unless their own docs change
-
-### Error Handling
-- `ConfigEntryAuthFailed` for persistent auth failures; `UpdateFailed` for transient
-- On session expiry: re-auth once, then raise `ConfigEntryAuthFailed`
+- Patch `create_controller` at the module-local import used by the code under test (`config_flow.create_controller`, `coordinator.create_controller`, etc.); patching `helpers.create_controller` will miss those call sites.
+- Config-flow tests need `enable_custom_integrations`; many flow tests also use `_bypass_setup` so entry creation does not run real integration setup.
+- Controller mocks need async `login`/`clients.update`/`clients_all.update`, plus `messages.subscribe = MagicMock(return_value=MagicMock())` and `connectivity = MagicMock()`.
+- UI text or flow-error changes must keep `custom_components/unifi_presence/strings.json` and `custom_components/unifi_presence/translations/en.json` aligned; tests assert key parity.
+- Keep metadata in sync: `manifest.json` and `pyproject.toml` must agree on version, `aiounifi` is pinned in both, and `manifest.json` `quality_scale` is checked against `custom_components/unifi_presence/quality_scale.yaml` and `tests/test_project_metadata.py`.
