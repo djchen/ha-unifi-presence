@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine, Generator
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.selector import SelectSelector
 
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
@@ -167,11 +168,20 @@ def _site_arg_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     return str(args[1].site)
 
 
-def _get_tracked_device_options(result: dict[str, Any]) -> dict[str, str]:
-    """Return the tracked device selector options from a flow result."""
+def _get_tracked_device_selector(result: dict[str, Any]) -> SelectSelector:
+    """Return the tracked device selector from a flow result."""
     schema = result["data_schema"].schema
     tracked_key = next(key for key in schema if str(key) == CONF_TRACKED_DEVICES)
-    return schema[tracked_key].options
+    selector = schema[tracked_key]
+    assert isinstance(selector, SelectSelector)
+    return selector
+
+
+def _get_tracked_device_options(result: dict[str, Any]) -> dict[str, str]:
+    """Return the tracked device selector options from a flow result."""
+    selector = _get_tracked_device_selector(result)
+    options = cast(list[dict[str, str]], selector.config["options"])
+    return {option["value"]: option["label"] for option in options}
 
 
 # ── Shared coordinator helpers ───────────────────────────────────────────

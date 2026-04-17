@@ -22,6 +22,12 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .const import (
     CONF_AWAY_SECONDS,
@@ -126,8 +132,23 @@ def _build_device_selection_schema(
     """Build the tracked-device multi-select schema."""
     return vol.Schema(
         {
-            vol.Optional(CONF_TRACKED_DEVICES, default=default_selected or []): cv.multi_select(dict(client_options)),
+            vol.Optional(CONF_TRACKED_DEVICES, default=default_selected or []): _build_tracked_device_selector(
+                client_options
+            ),
         }
+    )
+
+
+def _build_tracked_device_selector(client_options: Mapping[str, str]) -> SelectSelector:
+    """Build a searchable selector for tracked-device choices."""
+    options = [SelectOptionDict(value=mac, label=label) for mac, label in client_options.items()]
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=options,
+            multiple=True,
+            custom_value=False,
+            mode=SelectSelectorMode.DROPDOWN,
+        )
     )
 
 
@@ -675,7 +696,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             return self.async_abort(reason="cannot_discover_devices" if discovery_failed else "no_devices_discovered")
 
         schema_fields: dict[object, object] = {
-            vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked): cv.multi_select(client_options),
+            vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked): _build_tracked_device_selector(client_options),
             vol.Optional(
                 CONF_AWAY_SECONDS,
                 default=current_options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS),
