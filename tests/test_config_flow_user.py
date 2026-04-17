@@ -11,6 +11,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.selector import SelectSelectorMode
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence.config_flow import UnifiPresenceConfigFlow
@@ -27,6 +28,7 @@ from .conftest import (
     PATCH_CREATE_CONTROLLER,
     USER_STEP_INPUT,
     _get_tracked_device_options,
+    _get_tracked_device_selector,
     _make_mock_client,
     _make_mock_site,
     _mock_controller,
@@ -160,6 +162,9 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
+    selector = _get_tracked_device_selector(result)
+    assert selector.config["multiple"] is True
+    assert selector.config["mode"] == SelectSelectorMode.DROPDOWN
     assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
 
 
@@ -570,8 +575,6 @@ async def test_fetch_all_clients_active_wins_on_key_collision(hass: HomeAssistan
     assert result["step_id"] == "devices"
 
     # The multi-select should show the active name, not the historical one
-    schema = result["data_schema"].schema
-    tracked_key = next(k for k in schema if str(k) == CONF_TRACKED_DEVICES)
-    options = schema[tracked_key].options
+    options = _get_tracked_device_options(result)
     assert "aa:bb:cc:dd:ee:ff" in options
     assert "Current Name" in options["aa:bb:cc:dd:ee:ff"]

@@ -11,6 +11,7 @@ import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.selector import SelectSelectorMode
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence.const import (
@@ -27,6 +28,7 @@ from .conftest import (
     OFFICE_SITE_ID,
     PATCH_CREATE_CONTROLLER,
     _get_tracked_device_options,
+    _get_tracked_device_selector,
     _make_mock_client,
     _make_mock_site,
     _mock_controller,
@@ -81,6 +83,9 @@ async def test_options_flow(hass: HomeAssistant, options_entry: MockConfigEntry)
     result = await hass.config_entries.options.async_init(options_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
+    selector = _get_tracked_device_selector(result)
+    assert selector.config["multiple"] is True
+    assert selector.config["mode"] == SelectSelectorMode.DROPDOWN
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
