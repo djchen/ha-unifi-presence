@@ -56,7 +56,7 @@ async def test_diagnostics_redacts_credentials(hass: HomeAssistant, loaded_entry
     assert "away_seconds" in result
     assert "fallback_poll_interval_seconds" in result
     assert "websocket_connected" in result
-    assert "heartbeat_expiry_count" in result
+    assert "devices_with_active_away_timers" in result
 
     # MAC addresses in options should be partially redacted
     tracked = result["config_entry"]["options"]["tracked_devices"]
@@ -95,7 +95,7 @@ async def test_diagnostics_without_runtime_data(hass: HomeAssistant) -> None:
     assert result["away_seconds"] == MOCK_OPTIONS["away_seconds"]
     assert result["fallback_poll_interval_seconds"] == MOCK_OPTIONS["fallback_poll_interval"]
     assert result["websocket_connected"] is False
-    assert result["heartbeat_expiry_count"] == 0
+    assert result["devices_with_active_away_timers"] == 0
 
 
 def test_partial_redact_mac_standard() -> None:
