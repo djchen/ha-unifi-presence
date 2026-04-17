@@ -26,9 +26,13 @@
           "site": "Site"
         }
       },
+      "single_site_retry": {
+        "title": "Retry Loading Devices",
+        "description": "UniFi Presence found the site {site}. Retry loading clients from this site."
+      },
       "reauth_confirm": {
         "title": "Re-authenticate UniFi Controller",
-        "description": "The credentials for {host} are no longer valid. Please enter updated credentials.",
+        "description": "The credentials for {site} on {host} are no longer valid. Please enter updated credentials.",
         "data": {
           "username": "Username",
           "password": "Password"
@@ -79,7 +83,7 @@
       "already_configured": "This UniFi controller and site are already configured",
       "no_clients_available": "No UniFi clients are available for this site. Ensure the client appears in UniFi Client Devices, then try again.",
       "no_sites_available": "No UniFi sites are available for this controller. Ensure the account can access a site, then try again.",
-      "different_site_selected": "Reconfiguration can only update connection details for the already configured UniFi site",
+      "different_site_selected": "The updated settings must still access the UniFi site already configured for this entry",
       "reauth_successful": "Re-authentication successful",
       "reconfigure_successful": "Configuration updated successfully"
     }
@@ -102,7 +106,7 @@
       }
     },
     "error": {
-      "cannot_discover_devices": "Could not refresh the client list; showing previously tracked devices",
+      "cannot_discover_devices": "Could not refresh the client list; previously tracked devices may still be available",
       "no_tracked_devices": "You must keep at least one tracked device selected"
     },
     "abort": {
@@ -116,6 +120,7 @@
       "loaded_entry_count": "Loaded entries",
       "coordinator_available_count": "Entries with successful polling",
       "websocket_connected_count": "Entries with connected WebSocket",
+      "devices_with_active_away_timers": "Devices within away timeout",
       "tracked_device_count": "Tracked devices",
       "controllers": "Configured controllers"
     }

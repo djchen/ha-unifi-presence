@@ -161,6 +161,26 @@ def _get_selected_site(available_sites: Mapping[str, SiteLike], selected_site: o
     return available_sites.get(selected_site)
 
 
+def _find_reconfigure_site(
+    available_sites: Mapping[str, SiteLike],
+    *,
+    entry_unique_id: str | None,
+    stored_site: object,
+) -> SiteLike | None:
+    """Return the already-configured site from the fetched site list."""
+    if isinstance(entry_unique_id, str) and (site := available_sites.get(entry_unique_id)) is not None:
+        return site
+
+    if not isinstance(stored_site, str):
+        return None
+
+    for site in available_sites.values():
+        if stored_site in {site.site_id, site.name}:
+            return site
+
+    return None
+
+
 @callback
 def _async_migrate_tracker_unique_ids(
     hass: HomeAssistant,
@@ -400,6 +420,44 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    def _show_single_site_retry_form(self, errors: dict[str, str] | None = None) -> ConfigFlowResult:
+        """Show the single-site retry form after client discovery fails."""
+        return self.async_show_form(
+            step_id="single_site_retry",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={"site": self._site_title or self._site},
+        )
+
+    def _show_reconfigure_form(self, errors: dict[str, str] | None = None) -> ConfigFlowResult:
+        """Show the reconfigure form using the latest submitted values when available."""
+        current_data = self._get_reconfigure_entry().data
+        schema_defaults: Mapping[str, object]
+        if self._host:
+            schema_defaults = {
+                CONF_HOST: self._host,
+                CONF_PORT: self._port,
+                CONF_USERNAME: self._username,
+                CONF_SSL_VERIFY: self._ssl_verify,
+            }
+        else:
+            schema_defaults = current_data
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_build_reconfigure_schema(schema_defaults),
+            errors=errors,
+        )
+
+    def _reauth_site_label(self) -> str:
+        """Return the user-facing site label for the reauth dialog."""
+        entry_title = self._get_reauth_entry().title
+        suffix = f" ({self._host})"
+        if entry_title.endswith(suffix):
+            return entry_title.removesuffix(suffix)
+
+        return entry_title or self._site
+
     async def _async_finish_reconfigure_site_selection(self, site: SiteLike) -> ConfigFlowResult:
         """Validate and save a selected site during reconfigure."""
         reconfigure_entry = self._get_reconfigure_entry()
@@ -415,12 +473,12 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             log_context="UniFi reconfigure site validation",
         )
         if error is not None:
-            return self._show_site_form(errors={"base": error})
+            return self._show_reconfigure_form(errors={"base": error})
 
         assert controller is not None
         try:
             if (client_error := await self._async_discover_clients_from_controller(controller)) is not None:
-                return self._show_site_form(errors={"base": client_error})
+                return self._show_reconfigure_form(errors={"base": client_error})
         finally:
             await async_close_controller(controller)
 
@@ -462,7 +520,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 log_context="UniFi site client discovery",
             )
             if self._single_site_discovery_error is not None:
-                return self._show_site_form(errors={"base": self._single_site_discovery_error})
+                return self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
 
         if not self._available_clients:
             return self.async_abort(reason="no_clients_available")
@@ -522,9 +580,28 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self._show_site_form()
 
         if self._single_site_discovery_error is not None:
-            return self._show_site_form(errors={"base": self._single_site_discovery_error})
+            return self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
 
         return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
+
+    async def async_step_single_site_retry(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
+        """Retry client discovery when only one site is available."""
+        if not self._available_sites:
+            return self.async_abort(reason="no_sites_available")
+
+        if len(self._available_sites) != 1:
+            return await self.async_step_site()
+
+        if user_input is None:
+            return self._show_single_site_retry_form()
+
+        self._single_site_discovery_error = await self._async_load_selected_site_clients(
+            log_context="UniFi site client discovery"
+        )
+        if self._single_site_discovery_error is not None:
+            return self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
+
+        return await self._async_finish_user_site_selection()
 
     async def async_step_reauth(self, entry_data: Mapping[str, object]) -> ConfigFlowResult:
         """Handle reauthentication triggered by ConfigEntryAuthFailed."""
@@ -567,7 +644,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=_build_reauth_schema(),
-            description_placeholders={"host": self._host},
+            description_placeholders={"site": self._reauth_site_label(), "host": self._host},
             errors=errors,
         )
 
@@ -591,13 +668,18 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             elif not self._available_sites:
                 return self.async_abort(reason="no_sites_available")
             else:
-                return await self.async_step_site()
+                current_site = _find_reconfigure_site(
+                    self._available_sites,
+                    entry_unique_id=reconfigure_entry.unique_id,
+                    stored_site=current_data.get(CONF_SITE),
+                )
+                if current_site is None:
+                    return self.async_abort(reason="different_site_selected")
 
-        return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=_build_reconfigure_schema(current_data),
-            errors=errors,
-        )
+                self._set_selected_site(current_site)
+                return await self._async_finish_reconfigure_site_selection(current_site)
+
+        return self._show_reconfigure_form(errors=errors)
 
     async def async_step_devices(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle device selection step."""

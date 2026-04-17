@@ -218,7 +218,7 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 | **"Unable to connect"** during setup | Check the host, port, and network path. Try 8443 for legacy controllers. |
 | **"Invalid username or password"** | Use a **local** UniFi account, not a cloud (SSO) account. |
 | **No devices discovered** | The controller returned no clients. Make sure the devices have connected before. |
-| **"Could not fetch clients"** during setup or options | Client discovery failed for this site. Verify read access and the site name. |
+| **"Could not fetch clients"** during setup or options | Client discovery failed for this site. Verify read access and that the account can access the selected site. |
 | **Device stuck as "home" or "away"** | Lower the away threshold and confirm the controller still sees the device. |
 | **WebSocket disconnecting frequently** | Check the network between Home Assistant and the controller. |
 | **Entities become unavailable** | The coordinator cannot reach the controller. The integration will reconnect automatically. |
@@ -238,7 +238,7 @@ Diagnostics include:
 - Tracked device count and states
 - Away threshold and poll interval settings
 - WebSocket connection status
-- Heartbeat expiry count for tracked clients still within the away window
+- Number of tracked devices still within the away timeout window
 
 ## System Health
 
@@ -247,7 +247,7 @@ The integration also adds a system health summary to Home Assistant. It reports:
 - Number of configured and loaded UniFi Presence entries
 - Number of entries with successful coordinator updates
 - Number of active WebSocket connections
-- Number of active heartbeat expiries currently being tracked
+- Number of devices still within the away timeout window
 - Total tracked device count
 - Configured controller host and site targets
 
