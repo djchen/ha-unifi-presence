@@ -142,11 +142,10 @@ async def test_websocket_becomes_available_after_runner_confirms_session(hass: H
 
     controller.start_websocket = AsyncMock(side_effect=_start_websocket)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0.01):
-        ws.start()
-        assert ws.available is False
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+    ws.start()
+    assert ws.available is False
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
     assert ws.available is True
 
@@ -159,11 +158,10 @@ async def test_websocket_startup_without_messages_stays_unavailable(hass: HomeAs
     hang = asyncio.Event()
     controller.start_websocket = AsyncMock(side_effect=hang.wait)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0.01):
-        ws.start()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0.02)
-        await asyncio.sleep(0)
+    ws.start()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0.02)
+    await asyncio.sleep(0)
 
     assert ws.available is False
 

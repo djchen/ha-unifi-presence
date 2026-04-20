@@ -26,7 +26,6 @@ RETRY_TIMER = 15
 RETRY_MAX = 300
 CHECK_WEBSOCKET_INTERVAL = timedelta(minutes=1)
 STALE_WEBSOCKET_INTERVAL = timedelta(minutes=5)
-WEBSOCKET_READY_TIMEOUT = 5.0
 
 
 class UnifiPresenceWebsocket:
@@ -183,7 +182,6 @@ class UnifiPresenceWebsocket:
         self._ws_started_at = datetime.now(UTC)
 
         try:
-            await asyncio.wait({websocket_task}, timeout=WEBSOCKET_READY_TIMEOUT)
             await websocket_task
         except aiohttp.ClientConnectorError as err:
             _LOGGER.error("WebSocket connector failed: %s", err)
