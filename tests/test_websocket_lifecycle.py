@@ -132,7 +132,29 @@ async def test_set_available_noop_when_value_unchanged(hass: HomeAssistant) -> N
 
 
 async def test_websocket_becomes_available_after_runner_confirms_session(hass: HomeAssistant) -> None:
-    """Test that availability flips only after the runner confirms a live session."""
+    """Test that availability flips only after the first inbound WebSocket frame."""
+    ws, controller, _ = make_websocket(hass)
+    hang = asyncio.Event()
+
+    async def _start_websocket() -> None:
+        controller.messages.new_data(b"frame")
+        await hang.wait()
+
+    controller.start_websocket = AsyncMock(side_effect=_start_websocket)
+
+    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0.01):
+        ws.start()
+        assert ws.available is False
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert ws.available is True
+
+    ws.stop()
+
+
+async def test_websocket_startup_without_messages_stays_unavailable(hass: HomeAssistant) -> None:
+    """Test that startup does not mark available until a frame is received."""
     ws, controller, _ = make_websocket(hass)
     hang = asyncio.Event()
     controller.start_websocket = AsyncMock(side_effect=hang.wait)
@@ -140,12 +162,10 @@ async def test_websocket_becomes_available_after_runner_confirms_session(hass: H
     with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0.01):
         ws.start()
         await asyncio.sleep(0)
-        assert ws.available is False
-
         await asyncio.sleep(0.02)
         await asyncio.sleep(0)
 
-    assert ws.available is True
+    assert ws.available is False
 
     ws.stop()
 

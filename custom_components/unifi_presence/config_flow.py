@@ -181,6 +181,11 @@ def _find_reconfigure_site(
     return None
 
 
+def _is_legacy_or_missing_site_identity(entry_unique_id: str | None) -> bool:
+    """Return whether an entry still lacks a stable site_id identity."""
+    return entry_unique_id is None or "_" in entry_unique_id
+
+
 @callback
 def _async_migrate_tracker_unique_ids(
     hass: HomeAssistant,
@@ -465,6 +470,13 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         same_site = self._site_id == reconfigure_entry.unique_id or (
             isinstance(stored_site, str) and stored_site in {self._site_id, self._site}
         )
+        if (
+            not same_site
+            and _is_legacy_or_missing_site_identity(reconfigure_entry.unique_id)
+            and len(self._available_sites) == 1
+        ):
+            same_site = next(iter(self._available_sites.values())).site_id == self._site_id
+
         if not same_site:
             return self.async_abort(reason="different_site_selected")
 
@@ -674,7 +686,13 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     stored_site=current_data.get(CONF_SITE),
                 )
                 if current_site is None:
-                    return self.async_abort(reason="different_site_selected")
+                    if (
+                        _is_legacy_or_missing_site_identity(reconfigure_entry.unique_id)
+                        and len(self._available_sites) == 1
+                    ):
+                        current_site = next(iter(self._available_sites.values()))
+                    else:
+                        return self.async_abort(reason="different_site_selected")
 
                 self._set_selected_site(current_site)
                 return await self._async_finish_reconfigure_site_selection(current_site)

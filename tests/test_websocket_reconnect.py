@@ -73,6 +73,7 @@ async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAs
         nonlocal call_count
         call_count += 1
         if call_count == 2:
+            controller.messages.new_data(b"frame")
             second_started.set()
         await hang_forever.wait()
 

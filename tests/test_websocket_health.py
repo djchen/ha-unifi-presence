@@ -70,7 +70,7 @@ async def test_health_check_reauths_on_stale_session(hass: HomeAssistant) -> Non
 async def test_health_check_reauths_on_stale_startup(hass: HomeAssistant) -> None:
     """Test that the health check reconnects when no message received since a stale startup."""
     ws, controller, _ = make_websocket(hass)
-    ws.available = True
+    ws.available = False
     ws.ws_task = MagicMock()
     ws.ws_task.done.return_value = False
     controller.connectivity.ws_message_received = None
