@@ -591,3 +591,72 @@ async def test_migrate_tracker_unique_ids_skips_non_matching_entities(hass: Home
     unchanged = entity_registry.async_get(entity.entity_id)
     assert unchanged is not None
     assert unchanged.unique_id == f"{DEFAULT_SITE_ID}-11:22:33:44:55:66"
+
+
+@pytest.mark.parametrize("initial_unique_id", [None, "192.168.1.1_default"])
+async def test_reconfigure_flow_recovers_legacy_site_identity_when_single_site_is_accessible(
+    hass: HomeAssistant, initial_unique_id: str | None
+) -> None:
+    """Test reconfigure recovers legacy entries when exactly one site is accessible."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Home",
+        data={**MOCK_CONFIG_DATA, "site": "stale-site-token"},
+        unique_id=initial_unique_id,
+        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+    )
+    entry.add_to_hass(hass)
+
+    controller = _mock_controller(sites=[_make_mock_site(DEFAULT_SITE_ID, "default", "Home")])
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": "10.0.0.1",
+                "port": 443,
+                "username": "newadmin",
+                "password": "newpass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.unique_id == DEFAULT_SITE_ID
+    assert entry.data["site"] == "default"
+
+
+@pytest.mark.parametrize("initial_unique_id", [None, "192.168.1.1_default"])
+async def test_reconfigure_flow_does_not_guess_legacy_site_identity_with_multiple_sites(
+    hass: HomeAssistant, initial_unique_id: str | None
+) -> None:
+    """Test reconfigure keeps aborting when multiple sites fit a legacy recovery."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Home",
+        data={**MOCK_CONFIG_DATA, "site": "stale-site-token"},
+        unique_id=initial_unique_id,
+        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+    )
+    entry.add_to_hass(hass)
+
+    controller = _mock_controller(
+        sites=[
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+        ]
+    )
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                "host": "10.0.0.1",
+                "port": 443,
+                "username": "newadmin",
+                "password": "newpass",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "different_site_selected"

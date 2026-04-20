@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.core import HomeAssistant
 
@@ -111,9 +111,8 @@ async def test_restart_with_current_controller_resubscribes_and_restarts(hass: H
     on_message = MagicMock()
     ws = UnifiPresenceWebsocket(hass, lambda: current["api"], on_message)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.start()
-        await asyncio.sleep(0)
+    ws.start()
+    await asyncio.sleep(0)
 
     first_task = ws.ws_task
 
@@ -127,10 +126,9 @@ async def test_restart_with_current_controller_resubscribes_and_restarts(hass: H
 
     current["api"] = new_controller
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.restart_with_current_controller()
-        for _ in range(5):
-            await asyncio.sleep(0)
+    ws.restart_with_current_controller()
+    for _ in range(5):
+        await asyncio.sleep(0)
 
     # Should have subscribed on the *new* controller and created a new task
     new_controller.messages.subscribe.assert_called_once()
@@ -162,19 +160,17 @@ async def test_restart_with_current_controller_cancels_inflight_reconnect_task(
     hang = asyncio.Event()
     controller.start_websocket = AsyncMock(side_effect=hang.wait)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.start()
-        await asyncio.sleep(0)
+    ws.start()
+    await asyncio.sleep(0)
 
     # Simulate an in-flight _reconnect_task (e.g. from a prior health-check reconnect)
     stale_task = MagicMock()
     stale_task.cancel = MagicMock()
     ws._reconnect_task = stale_task
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.restart_with_current_controller()
-        for _ in range(5):
-            await asyncio.sleep(0)
+    ws.restart_with_current_controller()
+    for _ in range(5):
+        await asyncio.sleep(0)
 
     # The stale _reconnect_task should have been cancelled and cleared
     stale_task.cancel.assert_called_once()
@@ -198,9 +194,8 @@ async def test_restart_with_current_controller_old_task_does_not_clear_new_recon
 
     controller.start_websocket = AsyncMock(side_effect=_block_restart)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.start()
-        await asyncio.sleep(0)
+    ws.start()
+    await asyncio.sleep(0)
 
     ws.restart_with_current_controller()
     first_task = ws._reconnect_task
@@ -236,9 +231,8 @@ async def test_schedule_reauth_and_restart_after_login_old_task_does_not_clear_n
 
     controller.start_websocket = AsyncMock(side_effect=_block_restart)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0):
-        ws.start()
-        await asyncio.sleep(0)
+    ws.start()
+    await asyncio.sleep(0)
 
     ws._schedule_reauth_and_restart()
     first_task = ws._reconnect_task

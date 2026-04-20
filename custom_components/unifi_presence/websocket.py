@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 import aiounifi
@@ -26,7 +26,6 @@ RETRY_TIMER = 15
 RETRY_MAX = 300
 CHECK_WEBSOCKET_INTERVAL = timedelta(minutes=1)
 STALE_WEBSOCKET_INTERVAL = timedelta(minutes=5)
-WEBSOCKET_READY_TIMEOUT = 5.0
 
 
 class UnifiPresenceWebsocket:
@@ -158,16 +157,31 @@ class UnifiPresenceWebsocket:
             _LOGGER.warning("No controller available for WebSocket")
             return
 
+        # Intercept messages.new_data to detect the first inbound WS frame.
+        #
+        # messages.subscribe() cannot be used here because aiounifi's
+        # MessageHandler.handler() drops frames whose MessageKey is not in
+        # _subscribed_messages before iterating subscribers.  The first frame
+        # after connect may carry any key (device:sync, events, etc.), so a
+        # subscriber filtering on CLIENT would miss it.
+        #
+        # connectivity.ws_message_received is never reset between reconnects,
+        # so polling it would require timestamp bookkeeping and adds latency
+        # vs. the synchronous inline call here.
+        #
+        # The patch is restored in the finally block below.
+        message_handler = api.messages
+        original_new_data = cast(Any, message_handler).new_data
+
+        def _handle_message(message: bytes) -> None:
+            self._mark_connected()
+            original_new_data(message)
+
+        cast(Any, message_handler).new_data = _handle_message
         websocket_task = asyncio.create_task(api.start_websocket())
         self._ws_started_at = datetime.now(UTC)
 
         try:
-            done, _ = await asyncio.wait({websocket_task}, timeout=WEBSOCKET_READY_TIMEOUT)
-            if not done and not self._stopped:
-                self._set_available(True)
-                self._retry_delay = RETRY_TIMER
-                self._clear_retry()
-
             await websocket_task
         except aiohttp.ClientConnectorError as err:
             _LOGGER.error("WebSocket connector failed: %s", err)
@@ -183,6 +197,7 @@ class UnifiPresenceWebsocket:
         except Exception:
             _LOGGER.exception("Unexpected WebSocket error")
         finally:
+            cast(Any, message_handler).new_data = original_new_data
             is_active_runner = self.ws_task is asyncio.current_task()
             if is_active_runner:
                 self.ws_task = None
@@ -218,6 +233,24 @@ class UnifiPresenceWebsocket:
         if self._cancel_retry is not None:
             self._cancel_retry()
             self._cancel_retry = None
+
+    @callback
+    def _mark_connected(self) -> None:
+        """Mark the WebSocket as healthy after the first inbound frame."""
+        if self._stopped or self.available:
+            return
+
+        self._set_available(True)
+        self._retry_delay = RETRY_TIMER
+        self._clear_retry()
+
+    def _is_stale_startup(self, ws_message_received: object) -> bool:
+        """Return True if the WS has been running long enough without any messages."""
+        return (
+            ws_message_received is None
+            and self._ws_started_at is not None
+            and datetime.now(UTC) - self._ws_started_at > STALE_WEBSOCKET_INTERVAL
+        )
 
     @callback
     def _set_available(self, available: bool, *, force_signal: bool = False) -> None:
@@ -311,12 +344,19 @@ class UnifiPresenceWebsocket:
             ws_message_received,
         )
 
-        if self._stopped or not self.available:
+        if self._stopped:
             return
 
         if self.ws_task is None or self.ws_task.done():
             _LOGGER.warning("WebSocket task ended unexpectedly, reconnecting")
             self._schedule_reauth_and_restart()
+            return
+
+        if not self.available:
+            if self._is_stale_startup(ws_message_received):
+                _LOGGER.warning("WebSocket never received a message since startup, reconnecting")
+                self._schedule_reauth_and_restart()
+
             return
 
         if (
@@ -327,10 +367,8 @@ class UnifiPresenceWebsocket:
             self._schedule_reauth_and_restart()
             return
 
-        if (
-            ws_message_received is None
-            and self._ws_started_at is not None
-            and datetime.now(UTC) - self._ws_started_at > STALE_WEBSOCKET_INTERVAL
-        ):
+        # Defensive: available should imply ws_message_received is set,
+        # but guard against edge cases where the controller was replaced.
+        if self._is_stale_startup(ws_message_received):
             _LOGGER.warning("WebSocket never received a message since startup, reconnecting")
             self._schedule_reauth_and_restart()

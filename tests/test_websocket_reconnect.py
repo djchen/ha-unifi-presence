@@ -64,29 +64,28 @@ async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAs
     """Test that _schedule_reauth_and_restart re-authenticates and restarts the WebSocket."""
     ws, controller, _ = make_websocket(hass)
     second_started = asyncio.Event()
-    call_count = 0
 
     # Make start_websocket block forever so the WS runner stays alive
     hang_forever = asyncio.Event()
+    expect_reconnect = False
 
     async def _block_forever() -> None:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
+        if expect_reconnect:
+            controller.messages.new_data(b"frame")
             second_started.set()
         await hang_forever.wait()
 
     controller.start_websocket = AsyncMock(side_effect=_block_forever)
 
-    with patch("custom_components.unifi_presence.websocket.WEBSOCKET_READY_TIMEOUT", 0.01):
-        ws.start()
-        # Simulate a reconnect
-        ws.available = False
-        ws._schedule_reauth_and_restart()
+    ws.start()
+    # Simulate a reconnect
+    ws.available = False
+    expect_reconnect = True
+    ws._schedule_reauth_and_restart()
 
-        await asyncio.wait_for(second_started.wait(), timeout=1)
-        await asyncio.sleep(0.02)
-        await asyncio.sleep(0)
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+    await asyncio.sleep(0.02)
+    await asyncio.sleep(0)
 
     controller.login.assert_awaited()
     # Should have restarted WS (available should be True again)
