@@ -95,3 +95,18 @@ async def test_health_check_skips_reauth_on_recent_startup(hass: HomeAssistant) 
         ws._async_watch_websocket(None)
 
     mock_schedule_reauth_and_restart.assert_not_called()
+
+
+async def test_health_check_reauths_on_stale_startup_when_available(hass: HomeAssistant) -> None:
+    """Test stale-startup reconnect fires even when available is True (defensive fallback)."""
+    ws, controller, _ = make_websocket(hass)
+    ws.available = True
+    ws.ws_task = MagicMock()
+    ws.ws_task.done.return_value = False
+    controller.connectivity.ws_message_received = None
+    ws._ws_started_at = datetime.now(UTC) - STALE_WEBSOCKET_INTERVAL - timedelta(seconds=1)
+
+    with patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart:
+        ws._async_watch_websocket(None)
+
+    mock_schedule_reauth_and_restart.assert_called_once()

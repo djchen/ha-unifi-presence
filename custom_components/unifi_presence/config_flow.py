@@ -182,7 +182,12 @@ def _find_reconfigure_site(
 
 
 def _is_legacy_or_missing_site_identity(entry_unique_id: str | None) -> bool:
-    """Return whether an entry still lacks a stable site_id identity."""
+    """Return whether an entry still lacks a stable site_id identity.
+
+    Legacy entries used ``{host}_{site_name}`` as unique_id which contains
+    underscores.  Modern entries use the bare UniFi site_id, a 24-character
+    hex string (MongoDB ObjectId) that never contains underscores.
+    """
     return entry_unique_id is None or "_" in entry_unique_id
 
 
