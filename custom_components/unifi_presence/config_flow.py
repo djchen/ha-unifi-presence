@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import replace
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
@@ -49,13 +48,14 @@ from .helpers import (
     SiteLike,
     async_close_controller,
     create_controller,
+    create_controller_with_resolved_site,
     format_config_entry_title,
     format_current_client_label,
     format_missing_client_label,
     format_site_config_entry_title,
     normalize_mac,
     normalize_macs,
-    resolve_controller_site,
+    should_resolve_controller_site,
     site_title,
     tracker_unique_id,
 )
@@ -338,18 +338,17 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> tuple[Controller | None, FlowErrorKey | None]:
         """Attempt controller login and return (controller, error_key)."""
         try:
-            resolved_site = params.site
-            if unique_id is not None:
-                resolved_site = await resolve_controller_site(
+            if unique_id is not None and should_resolve_controller_site(params, unique_id=unique_id):
+                controller, _ = await create_controller_with_resolved_site(
                     self.hass,
                     params,
                     unique_id=unique_id,
                 )
-
-            controller = await create_controller(
-                self.hass,
-                replace(params, site=resolved_site),
-            )
+            else:
+                controller = await create_controller(
+                    self.hass,
+                    params,
+                )
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             return None, "invalid_auth"
         except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
@@ -758,16 +757,17 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             if controller is None:
                 data = self.config_entry.data
                 params = ControllerConnectionParams.from_mapping(data)
-                resolved_site = await resolve_controller_site(
-                    self.hass,
-                    params,
-                    unique_id=self.config_entry.unique_id,
-                )
-                params = replace(params, site=resolved_site)
-                controller = await create_controller(
-                    self.hass,
-                    params,
-                )
+                if should_resolve_controller_site(params, unique_id=self.config_entry.unique_id):
+                    controller, _ = await create_controller_with_resolved_site(
+                        self.hass,
+                        params,
+                        unique_id=self.config_entry.unique_id,
+                    )
+                else:
+                    controller = await create_controller(
+                        self.hass,
+                        params,
+                    )
                 close_controller = True
 
             return await _fetch_all_clients(controller), False

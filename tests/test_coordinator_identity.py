@@ -108,32 +108,17 @@ async def test_ensure_controller_normalizes_legacy_stored_site_id(
     coordinator_config_entry.data = {**MOCK_CONFIG_DATA, CONF_SITE: "site-office-id"}
     coordinator_config_entry.unique_id = "192.168.1.1_office"
 
-    site_lookup_controller = MagicMock()
-    site_lookup_controller.sites = MagicMock()
-    site_lookup_controller.sites.update = AsyncMock()
-    site = MagicMock()
-    site.site_id = "site-office-id"
-    site.name = "office"
-    site_lookup_controller.sites.values.return_value = [site]
-
     runtime_controller = AsyncMock()
 
-    with (
-        patch(
-            "custom_components.unifi_presence.helpers.create_controller",
-            return_value=site_lookup_controller,
-        ) as lookup_create_controller,
-        patch(
-            "custom_components.unifi_presence.coordinator.create_controller",
-            return_value=runtime_controller,
-        ) as create_controller,
-    ):
+    with patch(
+        "custom_components.unifi_presence.coordinator.create_controller_with_resolved_site",
+        return_value=(runtime_controller, "office"),
+    ) as create_controller_with_resolved_site:
         coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
         controller = await coordinator._ensure_controller()
 
     assert controller is runtime_controller
-    assert lookup_create_controller.await_args.args[1].site == ""
-    assert create_controller.await_args.args[1].site == "office"
+    assert create_controller_with_resolved_site.await_args.args[1].site == "site-office-id"
 
 
 async def test_coordinator_async_shutdown_detaches_owned_runtime_session(

@@ -23,10 +23,13 @@ async def test_websocket_error_sets_unavailable_and_schedules_reauth_restart(
     """Test that a WebSocket error marks unavailable and schedules reconnect."""
     ws, _controller, _ = make_websocket(hass, start_websocket_side_effect=aiounifi.WebsocketError("disconnected"))
 
-    with patch(
-        "custom_components.unifi_presence.websocket.async_call_later",
-        return_value=MagicMock(),
-    ) as mock_call_later:
+    with (
+        patch("custom_components.unifi_presence.websocket.random.uniform", return_value=1.0),
+        patch(
+            "custom_components.unifi_presence.websocket.async_call_later",
+            return_value=MagicMock(),
+        ) as mock_call_later,
+    ):
         ws.start()
         await wait_for_task(ws.ws_task)
 
@@ -294,12 +297,31 @@ async def test_schedule_reauth_and_restart_schedules_retry_when_controller_none(
     on_message = MagicMock()
     ws = UnifiPresenceWebsocket(hass, lambda: None, on_message)
 
-    with patch(
-        "custom_components.unifi_presence.websocket.async_call_later",
-        return_value=MagicMock(),
-    ) as mock_call_later:
+    with (
+        patch("custom_components.unifi_presence.websocket.random.uniform", return_value=1.0),
+        patch(
+            "custom_components.unifi_presence.websocket.async_call_later",
+            return_value=MagicMock(),
+        ) as mock_call_later,
+    ):
         ws._schedule_reauth_and_restart()
         await wait_for_task(ws._reconnect_task)
 
     mock_call_later.assert_called_once()
     assert mock_call_later.call_args[0][1] == RETRY_TIMER
+
+
+async def test_schedule_retry_applies_jitter(hass: HomeAssistant) -> None:
+    """Test reconnect retries are jittered to avoid synchronized reconnects."""
+    ws, _, _ = make_websocket(hass)
+
+    with (
+        patch("custom_components.unifi_presence.websocket.random.uniform", return_value=1.2),
+        patch(
+            "custom_components.unifi_presence.websocket.async_call_later",
+            return_value=MagicMock(),
+        ) as mock_call_later,
+    ):
+        ws._schedule_retry()
+
+    assert mock_call_later.call_args[0][1] == RETRY_TIMER * 1.2

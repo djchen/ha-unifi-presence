@@ -22,7 +22,6 @@ from .conftest import (
     MOCK_CONFIG_DATA,
     OFFICE_SITE_ID,
     PATCH_CREATE_CONTROLLER,
-    _make_mock_site,
     _mock_controller,
     _site_arg_from_call,
 )
@@ -106,7 +105,6 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
         unique_id="192.168.1.1_office",
     )
 
-    site_lookup_controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
     reauth_controller = _mock_controller()
 
     result = await config_entry.start_reauth_flow(hass)
@@ -114,10 +112,9 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
 
     with (
         patch(
-            "custom_components.unifi_presence.helpers.create_controller",
-            return_value=site_lookup_controller,
-        ) as lookup_create_controller,
-        patch(PATCH_CREATE_CONTROLLER, return_value=reauth_controller) as create_controller,
+            "custom_components.unifi_presence.config_flow.create_controller_with_resolved_site",
+            return_value=(reauth_controller, "office"),
+        ) as create_controller_with_resolved_site,
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -127,9 +124,12 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     assert (
-        _site_arg_from_call(lookup_create_controller.await_args.args, lookup_create_controller.await_args.kwargs) == ""
+        _site_arg_from_call(
+            create_controller_with_resolved_site.await_args.args,
+            create_controller_with_resolved_site.await_args.kwargs,
+        )
+        == OFFICE_SITE_ID
     )
-    assert _site_arg_from_call(create_controller.await_args.args, create_controller.await_args.kwargs) == "office"
 
 
 # ── Reauth flow: error paths ────────────────────────────────────────────
