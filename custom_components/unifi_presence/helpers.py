@@ -140,10 +140,7 @@ async def resolve_controller_site(
     site's ``site_id``, return that site's short name. Otherwise return the
     stored value unchanged.
     """
-    if params.site == DEFAULT_SITE:
-        return params.site
-
-    if unique_id is not None and params.site != unique_id and "_" not in unique_id:
+    if not should_resolve_controller_site(params, unique_id=unique_id):
         return params.site
 
     controller = await create_controller(
@@ -151,15 +148,71 @@ async def resolve_controller_site(
         replace(params, site=""),
     )
     try:
-        await controller.sites.update()
-
-        for available_site in controller.sites.values():
-            if available_site.site_id in {params.site, unique_id}:
-                return str(available_site.name)
+        return await _resolve_controller_site_with_controller(
+            controller,
+            params,
+            unique_id=unique_id,
+        )
     finally:
         await async_close_controller(controller)
 
+
+def should_resolve_controller_site(
+    params: ControllerConnectionParams,
+    *,
+    unique_id: str | None,
+) -> bool:
+    """Return whether a stored site value needs legacy normalization."""
+    return params.site != DEFAULT_SITE and (unique_id is None or params.site == unique_id or "_" in unique_id)
+
+
+async def _resolve_controller_site_with_controller(
+    controller: Controller,
+    params: ControllerConnectionParams,
+    *,
+    unique_id: str | None,
+) -> str:
+    """Resolve the short UniFi site name using an existing controller."""
+    if not should_resolve_controller_site(params, unique_id=unique_id):
+        return params.site
+
+    async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
+        await controller.sites.update()
+
+    for available_site in controller.sites.values():
+        if available_site.site_id in {params.site, unique_id}:
+            return str(available_site.name)
+
     return params.site
+
+
+async def create_controller_with_resolved_site(
+    hass: HomeAssistant,
+    params: ControllerConnectionParams,
+    *,
+    unique_id: str | None,
+) -> tuple[Controller, str]:
+    """Create a controller and normalize any legacy stored site value in-place."""
+    controller = await create_controller(
+        hass,
+        replace(
+            params,
+            site="" if should_resolve_controller_site(params, unique_id=unique_id) else params.site,
+        ),
+    )
+
+    try:
+        resolved_site = await _resolve_controller_site_with_controller(
+            controller,
+            params,
+            unique_id=unique_id,
+        )
+    except Exception:
+        await async_close_controller(controller)
+        raise
+
+    controller.connectivity.config.site = resolved_site
+    return controller, resolved_site
 
 
 async def async_close_controller(controller: Controller) -> None:

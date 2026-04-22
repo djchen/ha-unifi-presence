@@ -133,23 +133,13 @@ def make_mock_controller(
     controller.login = AsyncMock(side_effect=login_side_effect)
     controller.sites = MagicMock()
     controller.sites.update = AsyncMock()
-    controller.sites.values.return_value = sites or []
+    controller.sites.values.return_value = (
+        sites if sites is not None else [_make_mock_site(DEFAULT_SITE_ID, "default", "Home")]
+    )
     return controller
 
 
-def _mock_controller(
-    login_side_effect: Exception | None = None,
-    clients_all_items: list[Any] | None = None,
-    clients_items: list[Any] | None = None,
-    sites: list[Any] | None = None,
-) -> MagicMock:
-    """Create a mock aiounifi Controller with a default site."""
-    return make_mock_controller(
-        login_side_effect=login_side_effect,
-        clients_all_items=clients_all_items,
-        clients_items=clients_items,
-        sites=sites if sites is not None else [_make_mock_site(DEFAULT_SITE_ID, "default", "Home")],
-    )
+_mock_controller = make_mock_controller
 
 
 # ── Shared config-flow helpers ───────────────────────────────────────────

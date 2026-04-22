@@ -30,7 +30,6 @@ from .conftest import (
     _get_tracked_device_options,
     _get_tracked_device_selector,
     _make_mock_client,
-    _make_mock_site,
     _mock_controller,
     _site_arg_from_call,
 )
@@ -224,26 +223,27 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
         unique_id="192.168.1.1_office",
     )
 
-    site_lookup_controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
     client_controller = _mock_controller(
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
     )
 
     with (
         patch(
-            "custom_components.unifi_presence.helpers.create_controller",
-            return_value=site_lookup_controller,
-        ) as lookup_create_controller,
-        patch(PATCH_CREATE_CONTROLLER, return_value=client_controller) as create_controller,
+            "custom_components.unifi_presence.config_flow.create_controller_with_resolved_site",
+            return_value=(client_controller, "office"),
+        ) as create_controller_with_resolved_site,
     ):
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
     assert (
-        _site_arg_from_call(lookup_create_controller.await_args.args, lookup_create_controller.await_args.kwargs) == ""
+        _site_arg_from_call(
+            create_controller_with_resolved_site.await_args.args,
+            create_controller_with_resolved_site.await_args.kwargs,
+        )
+        == OFFICE_SITE_ID
     )
-    assert _site_arg_from_call(create_controller.await_args.args, create_controller.await_args.kwargs) == "office"
 
 
 async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, options_entry: MockConfigEntry) -> None:

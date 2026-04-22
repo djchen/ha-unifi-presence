@@ -169,6 +169,28 @@ async def test_clients_all_name_takes_priority_over_previous_info(
     assert data.client_info[mac]["name"] == "Dan's iPhone"
 
 
+async def test_active_client_with_blank_metadata_preserves_previous_info(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test active clients keep prior metadata when UniFi omits names temporarily."""
+    now = dt_util.utcnow()
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
+
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    first_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(first_data)
+
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, last_seen=int(now.timestamp()))
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is True
+    assert data.client_info[mac]["name"] == "Dan Phone"
+
+
 async def test_coordinator_fallback_interval(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
 ) -> None:

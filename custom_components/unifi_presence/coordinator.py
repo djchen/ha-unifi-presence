@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, TypedDict, cast
@@ -33,9 +33,10 @@ from .helpers import (
     ControllerConnectionParams,
     async_close_controller,
     create_controller,
+    create_controller_with_resolved_site,
     normalize_mac,
     normalize_macs,
-    resolve_controller_site,
+    should_resolve_controller_site,
 )
 
 if TYPE_CHECKING:
@@ -385,16 +386,18 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         data = self.config_entry.data
         params = ControllerConnectionParams.from_mapping(data)
-        resolved_site = await resolve_controller_site(
-            self.hass,
-            params,
-            unique_id=self.config_entry.unique_id,
-        )
-        params = replace(params, site=resolved_site)
-        self._controller = await create_controller(
-            self.hass,
-            params,
-        )
+        if should_resolve_controller_site(params, unique_id=self.config_entry.unique_id):
+            self._controller, _ = await create_controller_with_resolved_site(
+                self.hass,
+                params,
+                unique_id=self.config_entry.unique_id,
+            )
+        else:
+            self._controller = await create_controller(
+                self.hass,
+                params,
+            )
+
         return self._controller
 
     def process_message(self, message: Message) -> None:
@@ -491,7 +494,11 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             if client is not None:
                 last_seen = client.last_seen or None
                 is_home = self._apply_presence_observation(mac, last_seen=last_seen)
-                client_info[mac] = self._build_client_info_from_client(mac, client)
+                client_info[mac] = self._build_client_info_from_client(
+                    mac,
+                    client,
+                    previous_info=previous_info.get(mac),
+                )
             else:
                 is_home = self._apply_presence_observation(mac, last_seen=None)
                 client_info[mac] = self._resolve_offline_client_info(mac, previous_info, clients_all)
