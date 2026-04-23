@@ -127,36 +127,6 @@ def format_missing_client_label(mac: str) -> str:
     return f"{normalized_mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})"
 
 
-async def resolve_controller_site(
-    hass: HomeAssistant,
-    params: ControllerConnectionParams,
-    *,
-    unique_id: str | None,
-) -> str:
-    """Resolve a config entry's stored site to the short UniFi site name.
-
-    Legacy entries may store a site ID instead of the short site name required by
-    site-scoped controller requests. If the stored value matches an accessible
-    site's ``site_id``, return that site's short name. Otherwise return the
-    stored value unchanged.
-    """
-    if not should_resolve_controller_site(params, unique_id=unique_id):
-        return params.site
-
-    controller = await create_controller(
-        hass,
-        replace(params, site=""),
-    )
-    try:
-        return await _resolve_controller_site_with_controller(
-            controller,
-            params,
-            unique_id=unique_id,
-        )
-    finally:
-        await async_close_controller(controller)
-
-
 def should_resolve_controller_site(
     params: ControllerConnectionParams,
     *,
@@ -164,26 +134,6 @@ def should_resolve_controller_site(
 ) -> bool:
     """Return whether a stored site value needs legacy normalization."""
     return params.site != DEFAULT_SITE and (unique_id is None or params.site == unique_id or "_" in unique_id)
-
-
-async def _resolve_controller_site_with_controller(
-    controller: Controller,
-    params: ControllerConnectionParams,
-    *,
-    unique_id: str | None,
-) -> str:
-    """Resolve the short UniFi site name using an existing controller."""
-    if not should_resolve_controller_site(params, unique_id=unique_id):
-        return params.site
-
-    async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
-        await controller.sites.update()
-
-    for available_site in controller.sites.values():
-        if available_site.site_id in {params.site, unique_id}:
-            return str(available_site.name)
-
-    return params.site
 
 
 async def create_controller_with_resolved_site(
@@ -202,11 +152,17 @@ async def create_controller_with_resolved_site(
     )
 
     try:
-        resolved_site = await _resolve_controller_site_with_controller(
-            controller,
-            params,
-            unique_id=unique_id,
-        )
+        if not should_resolve_controller_site(params, unique_id=unique_id):
+            resolved_site = params.site
+        else:
+            async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
+                await controller.sites.update()
+
+            resolved_site = params.site
+            for available_site in controller.sites.values():
+                if available_site.site_id in {params.site, unique_id}:
+                    resolved_site = str(available_site.name)
+                    break
     except Exception:
         await async_close_controller(controller)
         raise

@@ -57,19 +57,14 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         self._attr_has_entity_name = True
 
     @property
-    def _data(self) -> UnifiPresenceData | None:
-        """Return typed coordinator data."""
-        return cast(UnifiPresenceData | None, self.coordinator.data)
-
-    @property
     def name(self) -> str:
-        """Return the display name from coordinator client_info, falling back to MAC."""
-        data = self._data
+        """Return the display name from coordinator state, falling back to MAC."""
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
         if data is None:
             return self._mac
 
-        info = data.client_info.get(self._mac)
-        return info["name"] if info else self._mac
+        client = data.clients.get(self._mac)
+        return client.name if client else self._mac
 
     @property
     def unique_id(self) -> str | None:
@@ -79,16 +74,17 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     @property
     def is_connected(self) -> bool:
         """Return true if the device is connected (home)."""
-        data = self._data
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
         if data is None:
             return False
 
-        return data.device_states.get(self._mac, False)
+        client = data.clients.get(self._mac)
+        return client.is_home if client else False
 
     @property
     def available(self) -> bool:
         """Return whether the tracked client is currently available."""
-        data = self._data
+        data = cast(UnifiPresenceData | None, self.coordinator.data)
         return super().available and data is not None
 
     @property

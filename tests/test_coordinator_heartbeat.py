@@ -66,16 +66,17 @@ async def test_heartbeat_expiry_skips_client_when_newer_activity_arrives(
         )
     )
 
-    stale_expiry = dt_util.utcnow() - timedelta(seconds=1)
-    coordinator._heartbeat_expiry[mac] = stale_expiry
-    coordinator._last_seen_by_mac[mac] = int(now.timestamp())
+    stale_expiry = int((dt_util.utcnow() - timedelta(seconds=1)).timestamp())
+    coordinator.data.clients[mac].expiry_ts = stale_expiry
+    coordinator.data.clients[mac].last_seen_ts = int(now.timestamp())
 
     coordinator._async_check_heartbeat_expiry()
 
     assert coordinator.data.device_states[mac] is True
     assert coordinator.heartbeat_expiry_count == 1
     # Verify expiry was refreshed forward based on the newer last_seen
-    assert coordinator._heartbeat_expiry[mac] > stale_expiry
+    assert coordinator.data.clients[mac].expiry_ts is not None
+    assert coordinator.data.clients[mac].expiry_ts > stale_expiry
 
 
 async def test_async_shutdown_clears_heartbeat_tracking(
@@ -192,7 +193,7 @@ async def test_heartbeat_expiry_noop_when_already_away(
     assert coordinator.data.device_states[mac] is False
 
     # Re-inject a stale heartbeat entry for the already-away device
-    coordinator._heartbeat_expiry[mac] = dt_util.utcnow() - timedelta(seconds=1)
+    coordinator.data.clients[mac].expiry_ts = int((dt_util.utcnow() - timedelta(seconds=1)).timestamp())
     snapshot = coordinator.data
 
     coordinator._async_check_heartbeat_expiry()
@@ -259,6 +260,36 @@ async def test_reschedule_heartbeat_schedules_at_earliest_expiry(
     assert coordinator.heartbeat_expiry_count == 2
 
 
+async def test_reschedule_heartbeat_keeps_existing_timer_when_earliest_expiry_unchanged(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test later heartbeat updates do not churn the scheduled timer."""
+    now = dt_util.utcnow()
+    earlier_mac = "aa:bb:cc:dd:ee:ff"
+    later_mac = "11:22:33:44:55:66"
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+
+    coordinator.process_message(
+        MagicMock(data={"mac": earlier_mac, "name": "Dan Phone", "last_seen": int(now.timestamp())})
+    )
+    coordinator.process_message(
+        MagicMock(data={"mac": later_mac, "name": "Jane Phone", "last_seen": int(now.timestamp())})
+    )
+
+    initial_handle = coordinator._cancel_heartbeat_check
+    assert initial_handle is not None
+
+    freezer.tick(timedelta(seconds=5))
+    coordinator.process_message(
+        MagicMock(data={"mac": later_mac, "name": "Jane Phone", "last_seen": int(dt_util.utcnow().timestamp())})
+    )
+
+    assert coordinator._cancel_heartbeat_check is initial_handle
+
+
 async def test_reschedule_heartbeat_clears_when_no_expiries(
     hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
 ) -> None:
@@ -272,6 +303,17 @@ async def test_reschedule_heartbeat_clears_when_no_expiries(
     # Manually call reschedule — should remain None
     coordinator._reschedule_heartbeat_check()
     assert coordinator._cancel_heartbeat_check is None
+
+
+async def test_heartbeat_expiry_noop_without_tracked_state(
+    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+) -> None:
+    """Test heartbeat expiry checks return immediately with no tracked state."""
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+
+    coordinator._async_check_heartbeat_expiry()
+
+    assert coordinator.data is None
 
 
 async def test_heartbeat_fires_at_scheduled_time(

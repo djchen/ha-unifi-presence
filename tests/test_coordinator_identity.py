@@ -50,6 +50,13 @@ async def test_coordinator_uses_mac_when_name_and_hostname_missing(
     assert data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "aa:bb:cc:dd:ee:ff"
 
 
+async def test_client_name_parts_handles_none(hass: HomeAssistant, coordinator_config_entry: MagicMock) -> None:
+    """Test missing UniFi client objects yield empty name parts."""
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+
+    assert coordinator._client_name_parts(None) == ("", "")
+
+
 async def test_coordinator_normalizes_tracked_macs(hass: HomeAssistant, coordinator_config_entry: MagicMock) -> None:
     """Test tracked MAC options are trimmed, deduplicated, and lowercased."""
     coordinator_config_entry.options = {
@@ -277,7 +284,7 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     # initial_ts = now - 30, newer_but_expired = now - 65 → NOT newer
     # So let's use a scenario where the initial was even older
     old_ts = now - coordinator.away_seconds - 100
-    coordinator._last_seen_by_mac[mac] = old_ts  # simulate very old cache
+    coordinator.data.clients[mac].last_seen_ts = old_ts  # simulate very old cache
 
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=newer_but_expired)
     data = await coordinator._async_update_data()

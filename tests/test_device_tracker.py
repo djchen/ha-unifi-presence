@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from homeassistant.components.device_tracker import SourceType
 
-from custom_components.unifi_presence.coordinator import UnifiPresenceData
+from custom_components.unifi_presence.coordinator import TrackedClientState, UnifiPresenceData
 from custom_components.unifi_presence.device_tracker import (
     PARALLEL_UPDATES,
     UnifiPresenceTracker,
@@ -30,27 +30,25 @@ def _make_presence_data(
     away_macs: list[str] | None = None,
 ) -> UnifiPresenceData:
     """Create test presence data."""
-    states: dict[str, bool] = {}
-    info: dict[str, dict] = {}
+    clients: dict[str, TrackedClientState] = {}
 
     for mac in home_macs or []:
-        states[mac] = True
-        info[mac] = {
-            "name": f"Device {mac[:8]}",
-            "mac": mac,
-        }
+        clients[mac] = TrackedClientState(
+            is_home=True,
+            name=f"Device {mac[:8]}",
+            last_seen_ts=None,
+            expiry_ts=None,
+        )
 
     for mac in away_macs or []:
-        states[mac] = False
-        info[mac] = {
-            "name": mac,
-            "mac": mac,
-        }
+        clients[mac] = TrackedClientState(
+            is_home=False,
+            name=mac,
+            last_seen_ts=None,
+            expiry_ts=None,
+        )
 
-    return UnifiPresenceData(
-        device_states=states,
-        client_info=info,
-    )
+    return UnifiPresenceData(clients=clients)
 
 
 def test_tracker_is_connected_when_home() -> None:
@@ -133,12 +131,13 @@ def test_tracker_has_entity_name() -> None:
 def test_tracker_name_prefers_runtime_name() -> None:
     """Test that tracker name uses the resolved runtime name."""
     data = UnifiPresenceData(
-        device_states={"aa:bb:cc:dd:ee:ff": True},
-        client_info={
-            "aa:bb:cc:dd:ee:ff": {
-                "name": "Dan Phone",
-                "mac": "aa:bb:cc:dd:ee:ff",
-            }
+        clients={
+            "aa:bb:cc:dd:ee:ff": TrackedClientState(
+                is_home=True,
+                name="Dan Phone",
+                last_seen_ts=None,
+                expiry_ts=None,
+            )
         },
     )
     coordinator = _make_coordinator(data)
@@ -185,7 +184,7 @@ def test_tracker_available_true_when_offline() -> None:
     data = _make_presence_data(
         away_macs=["aa:bb:cc:dd:ee:ff"],
     )
-    data.client_info["aa:bb:cc:dd:ee:ff"]["name"] = "Dan Phone"
+    data.clients["aa:bb:cc:dd:ee:ff"].name = "Dan Phone"
     coordinator = _make_coordinator(data)
 
     tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")

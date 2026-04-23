@@ -20,7 +20,6 @@ from custom_components.unifi_presence.helpers import (
     format_missing_client_label,
     normalize_mac,
     normalize_macs,
-    resolve_controller_site,
     site_title,
     tracker_unique_id,
 )
@@ -246,40 +245,3 @@ async def test_create_controller_with_resolved_site_reuses_single_controller(has
     assert controller.connectivity.config.site == "office"
     assert create_ctrl.await_count == 1
     assert create_ctrl.await_args.args[1].site == ""
-
-
-async def test_resolve_controller_site_wraps_sites_update_in_timeout(hass: HomeAssistant) -> None:
-    """Test site resolution uses the integration timeout for the sites refresh."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="site-office-id",
-        ssl_verify=False,
-    )
-    controller = MagicMock()
-    controller.sites = MagicMock()
-    controller.sites.update = AsyncMock()
-    controller.sites.values.return_value = []
-
-    class _TimeoutContext:
-        async def __aenter__(self) -> None:
-            return None
-
-        async def __aexit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-    with (
-        patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
-        patch("custom_components.unifi_presence.helpers.async_close_controller", AsyncMock()),
-        patch("custom_components.unifi_presence.helpers.asyncio.timeout", return_value=_TimeoutContext()) as timeout,
-    ):
-        await resolve_controller_site(
-            hass,
-            params,
-            unique_id="192.168.1.1_office",
-        )
-
-    timeout.assert_called_once_with(10)
-    controller.sites.update.assert_awaited_once()
