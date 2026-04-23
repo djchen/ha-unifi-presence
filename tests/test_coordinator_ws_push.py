@@ -105,6 +105,37 @@ async def test_process_message_noop_for_equivalent_update(
     coordinator.async_update_listeners.assert_not_called()
 
 
+async def test_process_message_recovers_availability_after_poll_failure(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test that a valid push restores availability after a failed REST poll."""
+    now = dt_util.utcnow()
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
+
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    initial_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(initial_data)
+    coordinator.async_update_listeners = MagicMock()
+    coordinator.last_update_success = False
+
+    message = MagicMock()
+    message.data = {
+        "mac": mac,
+        "name": "Dan Phone",
+        "last_seen": int(now.timestamp()),
+    }
+
+    coordinator.process_message(message)
+
+    assert coordinator.last_update_success is True
+    assert coordinator.data is initial_data
+    coordinator.async_update_listeners.assert_called_once_with()
+
+
 async def test_process_message_preserves_metadata_when_offline_client_reappears(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,

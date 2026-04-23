@@ -76,7 +76,7 @@ async def test_coordinator_offline_client_falls_back_to_mac_without_cached_metad
 
     assert data.device_states[mac] is False
     assert data.client_info[mac]["name"] == mac
-    mock_coordinator_controller.clients_all.update_mock.assert_not_awaited()
+    mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
 
 async def test_fallback_poll_refreshes_only_active_clients(
@@ -85,7 +85,7 @@ async def test_fallback_poll_refreshes_only_active_clients(
     mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
-    """Test fallback polling refreshes only the active clients store."""
+    """Test fallback polling refreshes active and historical client stores."""
     now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
@@ -94,16 +94,16 @@ async def test_fallback_poll_refreshes_only_active_clients(
     await coordinator._async_update_data()
 
     mock_coordinator_controller.clients.update_mock.assert_awaited_once()
-    mock_coordinator_controller.clients_all.update_mock.assert_not_awaited()
+    mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
 
-async def test_offline_tracked_client_keeps_cached_metadata_without_clients_all_refresh(
+async def test_offline_tracked_client_uses_clients_all_name_when_available(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
-    """Test that offline tracked clients keep their last seen display name."""
+    """Test that offline tracked clients use refreshed historical UniFi metadata."""
     now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
@@ -118,8 +118,52 @@ async def test_offline_tracked_client_keeps_cached_metadata_without_clients_all_
     data = await coordinator._async_update_data()
 
     assert data.device_states[mac] is True
+    assert data.client_info[mac]["name"] == "Dan's Renamed Phone"
+    assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
+
+
+async def test_offline_tracked_client_keeps_cached_metadata_when_clients_all_stub_is_blank(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test that empty historical stubs do not overwrite richer cached metadata."""
+    now = dt_util.utcnow()
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=int(now.timestamp()))
+
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    first_data = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(first_data)
+
+    mock_coordinator_controller.clients.clear()
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac)
+
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is True
     assert data.client_info[mac]["name"] == "Dan Phone"
-    mock_coordinator_controller.clients_all.update_mock.assert_not_awaited()
+    assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
+
+
+async def test_offline_tracked_client_uses_clients_all_name_on_cold_start(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test that cold-start offline clients recover their UniFi display name."""
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients.clear()
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
+
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is False
+    assert data.client_info[mac]["name"] == "Dan Phone"
+    mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
 
 async def test_active_client_with_blank_metadata_preserves_previous_info(

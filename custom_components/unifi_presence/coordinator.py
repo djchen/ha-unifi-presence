@@ -323,6 +323,25 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         return previous_info["name"]
 
+    def _resolve_offline_client_name(
+        self,
+        mac: str,
+        previous_info: dict[str, ClientInfo],
+        clients_all: dict[str, ClientLike],
+    ) -> str:
+        """Resolve display metadata for an offline client."""
+        historical = clients_all.get(mac)
+        if historical is not None:
+            name, hostname = self._client_name_parts(historical)
+            if name or hostname:
+                return self._build_client_info(mac, name=name, hostname=hostname)["name"]
+
+        prior = previous_info.get(mac)
+        if prior is not None:
+            return prior["name"]
+
+        return self._build_client_info(mac)["name"]
+
     @callback
     def _update_single_device_state(
         self,
@@ -335,6 +354,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     ) -> None:
         """Publish a single-device state update when state or metadata changes."""
         previous = self._client_states.get(mac)
+        current_data = cast(UnifiPresenceData | None, self.data)
+        recovered = not self.last_update_success
         updated_state = TrackedClientState(
             is_home=is_home,
             name=name,
@@ -342,6 +363,15 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             expiry_ts=expiry_ts,
         )
         if previous == updated_state:
+            if current_data is None:
+                self.data = UnifiPresenceData(clients=self._client_states)
+            elif current_data.clients is not self._client_states:
+                current_data.clients = self._client_states
+            if not recovered:
+                return
+
+            self.last_update_success = True
+            self.async_update_listeners()
             return
 
         public_changed = previous is None or previous.is_home != is_home or previous.name != name
@@ -352,12 +382,12 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             previous.name = name
             previous.last_seen_ts = last_seen_ts
             previous.expiry_ts = expiry_ts
-        current_data = cast(UnifiPresenceData | None, self.data)
         if current_data is None:
             self.data = UnifiPresenceData(clients=self._client_states)
         elif current_data.clients is not self._client_states:
             current_data.clients = self._client_states
-        if not public_changed:
+        self.last_update_success = True
+        if not public_changed and not recovered:
             return
 
         _LOGGER.debug(
@@ -485,6 +515,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         """Refresh client stores, re-authenticating once on session expiry."""
         try:
             controller = await self._ensure_controller()
+            try:
+                await controller.clients_all.update()
+            except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
+                _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
             await controller.clients.update()
             return controller
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
@@ -492,6 +526,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             await self._async_close_runtime_controller()
             try:
                 controller = await self._ensure_controller()
+                try:
+                    await controller.clients_all.update()
+                except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
+                    _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
                 await controller.clients.update()
             except (aiounifi.LoginRequired, aiounifi.Unauthorized) as err:
                 raise ConfigEntryAuthFailed(
@@ -522,6 +560,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         _LOGGER.debug("Fallback poll for tracked device(s)")
 
         clients = cast(dict[str, ClientLike], controller.clients)
+        clients_all = cast(dict[str, ClientLike], controller.clients_all)
         previous_info = self.data.client_info if self.data is not None else {}
         new_states: dict[str, TrackedClientState] = {}
 
@@ -536,8 +575,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 )
             else:
                 last_seen = None
-                prior = previous_info.get(mac)
-                name = prior["name"] if prior is not None else self._build_client_info(mac)["name"]
+                name = self._resolve_offline_client_name(mac, previous_info, clients_all)
 
             is_home, effective_last_seen, expiry_ts = self._apply_presence_observation(mac, last_seen=last_seen)
             new_states[mac] = TrackedClientState(
