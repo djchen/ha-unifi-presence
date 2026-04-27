@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import (
     RETRY_TIMER,
+    STALE_WEBSOCKET_INTERVAL,
     UnifiPresenceWebsocket,
 )
 
@@ -34,8 +35,8 @@ async def test_websocket_error_sets_unavailable_and_schedules_reauth_restart(
         await wait_for_task(ws.ws_task)
 
     assert ws.available is False
-    mock_call_later.assert_called_once()
-    assert mock_call_later.call_args[0][1] == RETRY_TIMER
+    delays = [call.args[1] for call in mock_call_later.call_args_list]
+    assert delays == [STALE_WEBSOCKET_INTERVAL.total_seconds(), RETRY_TIMER]
 
 
 async def test_connector_error_sets_unavailable(hass: HomeAssistant) -> None:
@@ -143,19 +144,21 @@ async def test_stop_cancels_pending_retry(hass: HomeAssistant) -> None:
     """Test that stop() cancels a pending retry timer."""
     ws, _controller, _ = make_websocket(hass, start_websocket_side_effect=aiounifi.WebsocketError("disconnected"))
 
-    cancel_mock = MagicMock()
+    watchdog_cancel = MagicMock()
+    retry_cancel = MagicMock()
     with patch(
         "custom_components.unifi_presence.websocket.async_call_later",
-        return_value=cancel_mock,
+        side_effect=[watchdog_cancel, retry_cancel],
     ):
         ws.start()
         await wait_for_task(ws.ws_task)
 
-    assert ws._cancel_retry is cancel_mock
+    assert ws._cancel_retry is retry_cancel
 
     ws.stop()
 
-    cancel_mock.assert_called_once()
+    watchdog_cancel.assert_called_once()
+    retry_cancel.assert_called_once()
     assert ws._cancel_retry is None
 
 
@@ -212,8 +215,9 @@ async def test_websocket_runner_returns_when_stopped(hass: HomeAssistant) -> Non
         ws.start()
         await wait_for_task(ws.ws_task)
 
-    # No retry should be scheduled because _stopped was True when runner exited
-    mock_call_later.assert_not_called()
+    # The startup watchdog is armed, but no reconnect retry should be scheduled.
+    delays = [call.args[1] for call in mock_call_later.call_args_list]
+    assert delays == [STALE_WEBSOCKET_INTERVAL.total_seconds()]
 
 
 async def test_schedule_retry_clears_handle_when_callback_runs(hass: HomeAssistant) -> None:
@@ -264,7 +268,9 @@ async def test_handshake_error_sets_unavailable(hass: HomeAssistant) -> None:
         await wait_for_task(ws.ws_task)
 
     assert ws.available is False
-    mock_call_later.assert_called_once()
+    delays = [call.args[1] for call in mock_call_later.call_args_list]
+    assert delays[0] == STALE_WEBSOCKET_INTERVAL.total_seconds()
+    assert delays[1] >= 1.0
     logger.error.assert_any_call("WebSocket handshake failed with status %s: %s", 403, ANY)
 
     ws.stop()
@@ -287,7 +293,9 @@ async def test_unexpected_exception_sets_unavailable_and_schedules_reauth_restar
         await wait_for_task(ws.ws_task)
 
     assert ws.available is False
-    mock_call_later.assert_called_once()
+    delays = [call.args[1] for call in mock_call_later.call_args_list]
+    assert delays[0] == STALE_WEBSOCKET_INTERVAL.total_seconds()
+    assert delays[1] >= 1.0
 
     ws.stop()
 

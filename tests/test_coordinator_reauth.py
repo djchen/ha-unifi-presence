@@ -269,32 +269,38 @@ async def test_reauth_triggers_websocket_reconnect(
 
 
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_reauth_retry_calls_clients_all_and_preserves_prior_metadata(
+async def test_reauth_retry_refreshes_clients_all_and_preserves_prior_metadata(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     coordinator_config_entry: MagicMock,
     exception: type[Exception],
 ) -> None:
-    """Test reauth retry refreshes clients_all and offline metadata comes from prior data."""
+    """Test reauth retry refreshes clients_all and preserves prior metadata."""
     now = int(dt_util.utcnow().timestamp())
     mac = "aa:bb:cc:dd:ee:ff"
     client1 = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+    clients = {mac: client1}
 
     controller = AsyncMock()
     controller.clients = MagicMock()
-    controller.clients.get = MagicMock(return_value=client1)
+    controller.clients.get = MagicMock(side_effect=clients.get)
     controller.clients_all = MagicMock()
     controller.clients_all.update = AsyncMock()
     controller.clients_all.get = MagicMock(return_value=None)
     controller.login = AsyncMock()
-    controller.clients.update = AsyncMock(side_effect=make_reauth_side_effect(exception, recover=True))
+    controller.clients.update = AsyncMock()
 
     with patch(
         "custom_components.unifi_presence.coordinator.create_controller",
         return_value=controller,
     ):
         coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-        await coordinator._async_update_data()
+        first_data = await coordinator._async_update_data()
+        coordinator.async_set_updated_data(first_data)
 
-    # clients_all.update should have been called on both the initial and retry paths
-    assert controller.clients_all.update.await_count == 2
+        clients.clear()
+        controller.clients.update = AsyncMock(side_effect=make_reauth_side_effect(exception, recover=True))
+        second_data = await coordinator._async_update_data()
+
+    assert controller.clients_all.update.await_count == 3
+    assert second_data.client_info[mac]["name"] == "Dan Phone"

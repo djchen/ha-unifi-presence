@@ -108,16 +108,6 @@ def _build_reconfigure_schema(current_data: Mapping[str, object]) -> vol.Schema:
     )
 
 
-def _build_reauth_schema() -> vol.Schema:
-    """Build the credential form schema for reauthentication."""
-    return vol.Schema(
-        {
-            vol.Required(CONF_USERNAME): str,
-            vol.Required(CONF_PASSWORD): str,
-        }
-    )
-
-
 def _build_site_schema(available_sites: Mapping[str, SiteLike]) -> vol.Schema:
     """Build the site selection schema."""
     return vol.Schema(
@@ -458,15 +448,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    def _reauth_site_label(self) -> str:
-        """Return the user-facing site label for the reauth dialog."""
-        entry_title = self._get_reauth_entry().title
-        suffix = f" ({self._host})"
-        if entry_title.endswith(suffix):
-            return entry_title.removesuffix(suffix)
-
-        return entry_title or self._site
-
     async def _async_finish_reconfigure_site_selection(self, site: SiteLike) -> ConfigFlowResult:
         """Validate and save a selected site during reconfigure."""
         reconfigure_entry = self._get_reconfigure_entry()
@@ -578,7 +559,14 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_sites_available")
 
         if user_input is None:
-            return await self._async_handle_site_step_without_input()
+            result: ConfigFlowResult
+            if len(self._available_sites) != 1:
+                result = self._show_site_form()
+            elif self._single_site_discovery_error is not None:
+                result = self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
+            else:
+                result = await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
+            return result
 
         site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
         if site is None:
@@ -589,16 +577,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self._async_finish_reconfigure_site_selection(site)
 
         return await self._async_finish_user_site_selection()
-
-    async def _async_handle_site_step_without_input(self) -> ConfigFlowResult:
-        """Handle the site step when the user has not submitted a site yet."""
-        if len(self._available_sites) != 1:
-            return self._show_site_form()
-
-        if self._single_site_discovery_error is not None:
-            return self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
-
-        return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
 
     async def async_step_single_site_retry(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Retry client discovery when only one site is available."""
@@ -657,10 +635,19 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     },
                 )
 
+        entry_title = self._get_reauth_entry().title
+        suffix = f" ({self._host})"
+        site_label = entry_title.removesuffix(suffix) if entry_title.endswith(suffix) else entry_title or self._site
+
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=_build_reauth_schema(),
-            description_placeholders={"site": self._reauth_site_label(), "host": self._host},
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_USERNAME): str,
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
+            description_placeholders={"site": site_label, "host": self._host},
             errors=errors,
         )
 

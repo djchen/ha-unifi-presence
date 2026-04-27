@@ -51,24 +51,61 @@ class ClientInfo(TypedDict):
     """Typed dictionary describing a single UniFi client."""
 
     name: str
-    mac: str
 
 
 @dataclass(slots=True)
+class TrackedClientState:
+    """Unified runtime state for a tracked UniFi client."""
+
+    is_home: bool
+    name: str
+    last_seen_ts: int | None
+    expiry_ts: int | None
+
+
+@dataclass(eq=False, slots=True)
 class UnifiPresenceData:
     """Container for coordinator data."""
 
-    device_states: dict[str, bool]
-    client_info: dict[str, ClientInfo]
+    __hash__ = object.__hash__
+
+    clients: dict[str, TrackedClientState]
+
+    def __eq__(self, other: object) -> bool:
+        """Compare only externally visible state and metadata.
+
+        Heartbeat bookkeeping timestamps change frequently and should not cause
+        fallback polls to publish redundant entity updates.
+        """
+        if not isinstance(other, UnifiPresenceData):
+            return NotImplemented
+
+        if self.clients.keys() != other.clients.keys():
+            return False
+
+        return all(
+            state.is_home == other.clients[mac].is_home and state.name == other.clients[mac].name
+            for mac, state in self.clients.items()
+        )
+
+    @property
+    def device_states(self) -> dict[str, bool]:
+        """Return per-device presence state for diagnostics and tests."""
+        return {mac: client.is_home for mac, client in self.clients.items()}
+
+    @property
+    def client_info(self) -> dict[str, ClientInfo]:
+        """Return per-device metadata for diagnostics and tests."""
+        return {mac: {"name": client.name} for mac, client in self.clients.items()}
 
 
 class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     """Coordinator for UniFi client presence via WebSocket + fallback poll."""
 
     config_entry: ConfigEntry
-    _heartbeat_expiry: dict[str, datetime]
-    _last_seen_by_mac: dict[str, int]
+    _client_states: dict[str, TrackedClientState]
     _cancel_heartbeat_check: CALLBACK_TYPE | None
+    _scheduled_heartbeat_ts: int | None
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
@@ -78,9 +115,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._tracked_macs = normalize_macs(config_entry.options.get(CONF_TRACKED_DEVICES, []))
         self._tracked_set: frozenset[str] = frozenset(self._tracked_macs)
         self._away_seconds: int = config_entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS)
-        self._last_seen_by_mac = {}
-        self._heartbeat_expiry = {}
+        self._client_states = {}
         self._cancel_heartbeat_check = None
+        self._scheduled_heartbeat_ts = None
 
         fallback_interval = config_entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
 
@@ -130,9 +167,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         if self._cancel_heartbeat_check is not None:
             self._cancel_heartbeat_check()
             self._cancel_heartbeat_check = None
+        self._scheduled_heartbeat_ts = None
 
-        self._heartbeat_expiry.clear()
-        self._last_seen_by_mac.clear()
+        self._client_states.clear()
 
         await self._async_close_runtime_controller()
         await super().async_shutdown()
@@ -147,7 +184,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     @property
     def heartbeat_expiry_count(self) -> int:
         """Return the number of tracked heartbeat expiries."""
-        return len(self._heartbeat_expiry)
+        return sum(1 for state in self._client_states.values() if state.expiry_ts is not None)
 
     @callback
     def _set_last_seen(self, mac: str, last_seen: int | float) -> int:
@@ -158,22 +195,27 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         more recent WebSocket observation.
         """
         normalized = int(last_seen)
-        existing = self._last_seen_by_mac.get(mac)
-        if existing is not None and existing >= normalized:
-            return existing
+        existing = self._client_states.get(mac)
+        if existing is not None and existing.last_seen_ts is not None and existing.last_seen_ts >= normalized:
+            return existing.last_seen_ts
 
-        self._last_seen_by_mac[mac] = normalized
+        if existing is None:
+            self._client_states[mac] = TrackedClientState(
+                is_home=False,
+                name=mac,
+                last_seen_ts=normalized,
+                expiry_ts=None,
+            )
+        else:
+            existing.last_seen_ts = normalized
+
         return normalized
 
     @callback
     def _get_known_last_seen(self, mac: str) -> int | None:
         """Return the newest known last_seen for a client."""
-        return self._last_seen_by_mac.get(mac)
-
-    @callback
-    def _clear_heartbeat(self, mac: str) -> None:
-        """Forget any pending heartbeat expiry for a client."""
-        self._heartbeat_expiry.pop(mac, None)
+        state = self._client_states.get(mac)
+        return state.last_seen_ts if state is not None else None
 
     @callback
     def _reschedule_heartbeat_check(self) -> None:
@@ -183,31 +225,44 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         precisely when the first device should transition to ``not_home``,
         avoiding unnecessary periodic polling.
         """
-        if self._cancel_heartbeat_check is not None:
-            self._cancel_heartbeat_check()
-            self._cancel_heartbeat_check = None
+        earliest: int | None = None
+        for state in self._client_states.values():
+            expiry_ts = state.expiry_ts
+            if expiry_ts is None:
+                continue
+            if earliest is None or expiry_ts < earliest:
+                earliest = expiry_ts
 
-        if not self._heartbeat_expiry:
+        if earliest is None:
+            if self._cancel_heartbeat_check is not None:
+                self._cancel_heartbeat_check()
+                self._cancel_heartbeat_check = None
+            self._scheduled_heartbeat_ts = None
             return
 
-        earliest = min(self._heartbeat_expiry.values())
+        if self._scheduled_heartbeat_ts == earliest and self._cancel_heartbeat_check is not None:
+            return
+
+        if self._cancel_heartbeat_check is not None:
+            self._cancel_heartbeat_check()
+
+        self._scheduled_heartbeat_ts = earliest
         self._cancel_heartbeat_check = async_track_point_in_utc_time(
             self.hass,
             self._async_check_heartbeat_expiry,
-            earliest,
+            dt_util.utc_from_timestamp(earliest),
         )
 
     @callback
-    def _compute_presence_from_last_seen(self, last_seen: int | float) -> tuple[bool, datetime | None]:
+    def _compute_presence_from_last_seen(self, last_seen: int | float) -> tuple[bool, int | None]:
         """Return current presence and optional expiry from a last_seen timestamp."""
         normalized_last_seen = int(last_seen)
-        now = dt_util.utcnow()
-        last_seen_at = dt_util.utc_from_timestamp(normalized_last_seen)
-        expiry = last_seen_at + timedelta(seconds=self._away_seconds)
-        if now >= expiry:
+        now_ts = int(dt_util.utcnow().timestamp())
+        expiry_ts = normalized_last_seen + self._away_seconds
+        if now_ts >= expiry_ts:
             return False, None
 
-        return True, expiry
+        return True, expiry_ts
 
     @callback
     def _apply_presence_observation(
@@ -215,7 +270,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         mac: str,
         *,
         last_seen: int | float | None,
-    ) -> bool:
+    ) -> tuple[bool, int | None, int | None]:
         """Apply an observed presence update and maintain heartbeat expiry.
 
         Args:
@@ -225,22 +280,16 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 client during a poll).
 
         Returns:
-            ``True`` if the client is considered home, ``False`` otherwise.
+            Presence, effective last_seen, and optional expiry timestamp.
         """
         effective_last_seen = (
             self._set_last_seen(mac, last_seen) if last_seen is not None else self._get_known_last_seen(mac)
         )
         if effective_last_seen is None:
-            self._clear_heartbeat(mac)
-            return False
+            return False, None, None
 
-        is_home, expiry = self._compute_presence_from_last_seen(effective_last_seen)
-        if is_home and expiry is not None:
-            self._heartbeat_expiry[mac] = expiry
-        else:
-            self._clear_heartbeat(mac)
-
-        return is_home
+        is_home, expiry_ts = self._compute_presence_from_last_seen(effective_last_seen)
+        return is_home, effective_last_seen, expiry_ts if is_home else None
 
     @staticmethod
     def _build_client_info(
@@ -250,16 +299,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         hostname: str = "",
     ) -> ClientInfo:
         """Build a normalized client_info dict."""
-        return {"name": name or hostname or mac, "mac": mac}
-
-    @callback
-    def _get_current_info(self, mac: str) -> ClientInfo:
-        """Return the current client info for a device, falling back to bare MAC."""
-        current_data = self.data
-        if current_data is not None and (info := current_data.client_info.get(mac)) is not None:
-            return info
-
-        return self._build_client_info(mac)
+        return {"name": name or hostname or mac}
 
     @staticmethod
     def _client_name_parts(client: ClientLike | None) -> tuple[str, str]:
@@ -275,61 +315,93 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         client: ClientLike | None,
         *,
         previous_info: ClientInfo | None = None,
-    ) -> ClientInfo:
-        """Build client metadata from live or historical UniFi data."""
+    ) -> str:
+        """Build a display name from live UniFi data and cached metadata."""
         name, hostname = self._client_name_parts(client)
         if name or hostname or previous_info is None:
-            return self._build_client_info(mac, name=name, hostname=hostname)
+            return self._build_client_info(mac, name=name, hostname=hostname)["name"]
 
-        return previous_info
+        return previous_info["name"]
 
-    def _resolve_offline_client_info(
+    def _resolve_offline_client_name(
         self,
         mac: str,
         previous_info: dict[str, ClientInfo],
         clients_all: dict[str, ClientLike],
-    ) -> ClientInfo:
+    ) -> str:
         """Resolve display metadata for an offline client."""
         historical = clients_all.get(mac)
         if historical is not None:
             name, hostname = self._client_name_parts(historical)
             if name or hostname:
-                return self._build_client_info(mac, name=name, hostname=hostname)
+                return self._build_client_info(mac, name=name, hostname=hostname)["name"]
 
         prior = previous_info.get(mac)
         if prior is not None:
-            return prior
+            return prior["name"]
 
-        return self._build_client_info(mac)
+        return self._build_client_info(mac)["name"]
 
     @callback
-    def _update_single_device_state(self, mac: str, is_home: bool, info: ClientInfo) -> None:
+    def _update_single_device_state(
+        self,
+        mac: str,
+        *,
+        is_home: bool,
+        name: str,
+        last_seen_ts: int | None,
+        expiry_ts: int | None,
+    ) -> None:
         """Publish a single-device state update when state or metadata changes."""
-        current_data = self.data
-        previous_info = current_data.client_info.get(mac) if current_data is not None else None
-        previous_state = current_data.device_states.get(mac) if current_data is not None else None
+        previous = self._client_states.get(mac)
+        current_data = cast(UnifiPresenceData | None, self.data)
+        recovered = not self.last_update_success
+        updated_state = TrackedClientState(
+            is_home=is_home,
+            name=name,
+            last_seen_ts=last_seen_ts,
+            expiry_ts=expiry_ts,
+        )
+        if previous == updated_state:
+            if current_data is None:
+                self.data = UnifiPresenceData(clients=self._client_states)
+            elif current_data.clients is not self._client_states:
+                current_data.clients = self._client_states
+            if not recovered:
+                return
 
-        if previous_state == is_home and previous_info == info:
+            self.last_update_success = True
+            self.async_update_listeners()
             return
 
-        new_states = dict(current_data.device_states) if current_data is not None else {}
-        new_states[mac] = is_home
-
-        new_info = dict(current_data.client_info) if current_data is not None else {}
-        new_info[mac] = info
+        public_changed = previous is None or previous.is_home != is_home or previous.name != name
+        if previous is None:
+            self._client_states[mac] = updated_state
+        else:
+            previous.is_home = is_home
+            previous.name = name
+            previous.last_seen_ts = last_seen_ts
+            previous.expiry_ts = expiry_ts
+        if current_data is None:
+            self.data = UnifiPresenceData(clients=self._client_states)
+        elif current_data.clients is not self._client_states:
+            current_data.clients = self._client_states
+        self.last_update_success = True
+        if not public_changed and not recovered:
+            return
 
         _LOGGER.debug(
             "Device %s (%s) %s: %s",
-            info["name"],
+            name,
             mac,
-            "initial state" if current_data is None else "state changed",
+            "initial state" if previous is None else "state changed",
             "home" if is_home else "away",
         )
 
-        self.async_set_updated_data(UnifiPresenceData(device_states=new_states, client_info=new_info))
+        self.async_update_listeners()
 
     @callback
-    def _publish_local_state_change(self, new_data: UnifiPresenceData) -> None:
+    def _publish_local_state_change(self) -> None:
         """Publish local state changes without altering refresh success bookkeeping.
 
         Unlike ``async_set_updated_data()``, this does not reset the refresh
@@ -337,46 +409,45 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         matters for heartbeat-only transitions: a device going ``not_home``
         due to expiry should not look like a successful REST poll.
         """
-        self.data = new_data
+        current_data = cast(UnifiPresenceData | None, self.data)
+        if current_data is None:
+            self.data = UnifiPresenceData(clients=self._client_states)
+        elif current_data.clients is not self._client_states:
+            current_data.clients = self._client_states
         self.async_update_listeners()
 
     @callback
     def _async_check_heartbeat_expiry(self, *_: datetime) -> None:
         """Expire tracked clients whose away deadline has elapsed."""
-        if self.data is None or not self._heartbeat_expiry:
+        self._cancel_heartbeat_check = None
+        self._scheduled_heartbeat_ts = None
+        if not self._client_states:
             return
 
-        now = dt_util.utcnow()
-        current_states = self.data.device_states
-        current_info = self.data.client_info
+        now_ts = int(dt_util.utcnow().timestamp())
         changed_macs: list[str] = []
 
-        for mac, expiry in tuple(self._heartbeat_expiry.items()):
-            if now < expiry:
+        for mac, state in self._client_states.items():
+            expiry_ts = state.expiry_ts
+            if expiry_ts is None or now_ts < expiry_ts:
                 continue
 
-            effective_last_seen = self._get_known_last_seen(mac)
-            if effective_last_seen is not None:
-                is_home, refreshed_expiry = self._compute_presence_from_last_seen(effective_last_seen)
-                if is_home and refreshed_expiry is not None:
-                    self._heartbeat_expiry[mac] = refreshed_expiry
+            if state.last_seen_ts is not None:
+                is_home, refreshed_expiry_ts = self._compute_presence_from_last_seen(state.last_seen_ts)
+                if is_home and refreshed_expiry_ts is not None:
+                    state.expiry_ts = refreshed_expiry_ts
                     continue
 
-            self._heartbeat_expiry.pop(mac, None)
-            if current_states.get(mac, False):
+            state.expiry_ts = None
+            if state.is_home:
+                state.is_home = False
                 changed_macs.append(mac)
 
         if not changed_macs:
             self._reschedule_heartbeat_check()
             return
 
-        new_states = dict(current_states)
-        new_info = dict(current_info)
-        for mac in changed_macs:
-            new_states[mac] = False
-            new_info.setdefault(mac, self._get_current_info(mac))
-
-        self._publish_local_state_change(UnifiPresenceData(device_states=new_states, client_info=new_info))
+        self._publish_local_state_change()
         self._reschedule_heartbeat_check()
 
     async def _ensure_controller(self) -> Controller:
@@ -422,106 +493,107 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         else:
             last_seen = last_seen_raw
 
-        current_data = self.data
-        previous_info = current_data.client_info.get(mac) if current_data is not None else None
-        info = self._build_client_info_from_client(
+        previous_state = self._client_states.get(mac)
+        previous_info: ClientInfo | None = {"name": previous_state.name} if previous_state is not None else None
+        name = self._build_client_info_from_client(
             mac,
             cast(ClientLike, _MessageClientView(raw)),
             previous_info=previous_info,
         )
 
-        is_home = self._apply_presence_observation(mac, last_seen=last_seen)
-        self._update_single_device_state(mac, is_home, info)
-        self._reschedule_heartbeat_check()
-
-    def _connect_error(self) -> UpdateFailed:
-        """Build an UpdateFailed for connection errors."""
-        return UpdateFailed(
-            translation_domain=DOMAIN,
-            translation_key="cannot_connect",
-            translation_placeholders={"host": self.config_entry.data[CONF_HOST]},
+        is_home, effective_last_seen, expiry_ts = self._apply_presence_observation(mac, last_seen=last_seen)
+        self._update_single_device_state(
+            mac,
+            is_home=is_home,
+            name=name,
+            last_seen_ts=effective_last_seen,
+            expiry_ts=expiry_ts,
         )
-
-    async def _refresh_clients(self, controller: Controller) -> None:
-        """Best-effort refresh of historical clients, then required refresh of active clients."""
-        try:
-            await controller.clients_all.update()
-        except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
-            _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
-
-        await controller.clients.update()
+        self._reschedule_heartbeat_check()
 
     async def _async_refresh_with_reauth(self) -> Controller:
         """Refresh client stores, re-authenticating once on session expiry."""
         try:
             controller = await self._ensure_controller()
-            await self._refresh_clients(controller)
+            try:
+                await controller.clients_all.update()
+            except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
+                _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
+            await controller.clients.update()
             return controller
         except aiounifi.LoginRequired, aiounifi.Unauthorized:
             _LOGGER.info("UniFi session expired, re-authenticating")
             await self._async_close_runtime_controller()
             try:
                 controller = await self._ensure_controller()
-                await self._refresh_clients(controller)
+                try:
+                    await controller.clients_all.update()
+                except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
+                    _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
+                await controller.clients.update()
             except (aiounifi.LoginRequired, aiounifi.Unauthorized) as err:
                 raise ConfigEntryAuthFailed(
                     translation_domain=DOMAIN,
                     translation_key="credentials_rejected",
                 ) from err
-            except (TimeoutError, aiounifi.AiounifiException, JSONDecodeError) as err:
-                raise self._connect_error() from err
+            except (TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError) as err:
+                raise UpdateFailed(
+                    translation_domain=DOMAIN,
+                    translation_key="cannot_connect",
+                    translation_placeholders={"host": self.config_entry.data[CONF_HOST]},
+                ) from err
 
             if self.websocket is not None:
                 self.websocket.restart_with_current_controller()
 
             return controller
-        except (TimeoutError, aiounifi.AiounifiException, JSONDecodeError) as err:
-            raise self._connect_error() from err
-
-    def _build_snapshot(
-        self,
-        controller: Controller,
-    ) -> UnifiPresenceData:
-        """Build the current coordinator snapshot from controller client stores."""
-        clients = cast(dict[str, ClientLike], controller.clients)
-        clients_all = cast(dict[str, ClientLike], controller.clients_all)
-        device_states: dict[str, bool] = {}
-        client_info: dict[str, ClientInfo] = {}
-        previous_info = self.data.client_info if self.data is not None else {}
-
-        for mac in self._tracked_macs:
-            client = clients.get(mac)
-            if client is not None:
-                last_seen = client.last_seen or None
-                is_home = self._apply_presence_observation(mac, last_seen=last_seen)
-                client_info[mac] = self._build_client_info_from_client(
-                    mac,
-                    client,
-                    previous_info=previous_info.get(mac),
-                )
-            else:
-                is_home = self._apply_presence_observation(mac, last_seen=None)
-                client_info[mac] = self._resolve_offline_client_info(mac, previous_info, clients_all)
-
-            device_states[mac] = is_home
-
-        return UnifiPresenceData(device_states=device_states, client_info=client_info)
-
-    def _reuse_existing_snapshot_if_unchanged(self, new_data: UnifiPresenceData) -> UnifiPresenceData:
-        """Return the existing data object when neither state nor metadata changed."""
-        if self.data is not None and new_data == self.data:
-            return self.data
-
-        return new_data
+        except (TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError) as err:
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="cannot_connect",
+                translation_placeholders={"host": self.config_entry.data[CONF_HOST]},
+            ) from err
 
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
         controller = await self._async_refresh_with_reauth()
         _LOGGER.debug("Fallback poll for tracked device(s)")
 
-        new_data = self._build_snapshot(controller)
+        clients = cast(dict[str, ClientLike], controller.clients)
+        clients_all = cast(dict[str, ClientLike], controller.clients_all)
+        previous_info = self.data.client_info if self.data is not None else {}
+        new_states: dict[str, TrackedClientState] = {}
+
+        for mac in self._tracked_macs:
+            client = clients.get(mac)
+            if client is not None:
+                last_seen = client.last_seen or None
+                name = self._build_client_info_from_client(
+                    mac,
+                    client,
+                    previous_info=previous_info.get(mac),
+                )
+            else:
+                last_seen = None
+                name = self._resolve_offline_client_name(mac, previous_info, clients_all)
+
+            is_home, effective_last_seen, expiry_ts = self._apply_presence_observation(mac, last_seen=last_seen)
+            new_states[mac] = TrackedClientState(
+                is_home=is_home,
+                name=name,
+                last_seen_ts=effective_last_seen,
+                expiry_ts=expiry_ts,
+            )
+
+        self._client_states = new_states
+        new_data = UnifiPresenceData(clients=new_states)
         self._reschedule_heartbeat_check()
-        return self._reuse_existing_snapshot_if_unchanged(new_data)
+        if self.data is not None and new_data == self.data:
+            self.data.clients = new_data.clients
+            self._client_states = new_data.clients
+            return self.data
+
+        return new_data
 
 
 class _MessageClientView:

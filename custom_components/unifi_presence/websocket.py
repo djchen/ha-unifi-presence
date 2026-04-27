@@ -14,7 +14,7 @@ import aiohttp
 import aiounifi
 from aiounifi.models.message import Message, MessageKey
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.helpers.event import async_call_later, async_track_time_interval
+from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
 
@@ -26,7 +26,6 @@ _LOGGER = logging.getLogger(__name__)
 RETRY_TIMER = 15
 RETRY_MAX = 300
 RETRY_JITTER = 0.2
-CHECK_WEBSOCKET_INTERVAL = timedelta(minutes=1)
 STALE_WEBSOCKET_INTERVAL = timedelta(minutes=5)
 
 
@@ -46,11 +45,10 @@ class UnifiPresenceWebsocket:
 
         self.ws_task: asyncio.Task[None] | None = None
         self._cancel_retry: CALLBACK_TYPE | None = None
-        self._cancel_websocket_check: CALLBACK_TYPE | None = None
+        self._cancel_watchdog: CALLBACK_TYPE | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
         self._unsub_messages: Callable[[], None] | None = None
         self._ws_started_at: datetime | None = None
-
         self.available = False
         self._stopped = False
         self._retry_delay = RETRY_TIMER
@@ -60,12 +58,27 @@ class UnifiPresenceWebsocket:
         """Start WebSocket connection."""
         self._stopped = False
         self._replace_message_subscription()
-        self._cancel_websocket_check = async_track_time_interval(
-            self.hass,
-            self._async_watch_websocket,
-            CHECK_WEBSOCKET_INTERVAL,
-        )
         self._start_websocket_runner()
+
+    @callback
+    def _clear_watchdog(self) -> None:
+        """Cancel the active watchdog timer, if any."""
+        if self._cancel_watchdog is not None:
+            self._cancel_watchdog()
+            self._cancel_watchdog = None
+
+    @callback
+    def _arm_watchdog(self) -> None:
+        """Arm the stale-connection watchdog from now."""
+        if self._stopped:
+            return
+
+        self._clear_watchdog()
+        self._cancel_watchdog = async_call_later(
+            self.hass,
+            STALE_WEBSOCKET_INTERVAL.total_seconds(),
+            self._handle_watchdog_expiry,
+        )
 
     @callback
     def _replace_message_subscription(self) -> None:
@@ -89,12 +102,6 @@ class UnifiPresenceWebsocket:
             self._unsub_messages()
             self._unsub_messages = None
 
-    @callback
-    def _cancel_background_task(self, task: asyncio.Task[None] | None) -> None:
-        """Cancel a background task if it exists."""
-        if task is not None:
-            task.cancel()
-
     async def _async_cancel_and_wait(self, task: asyncio.Task[None] | None) -> None:
         """Cancel a task and wait for it unless it is the current task."""
         if task is None:
@@ -115,16 +122,16 @@ class UnifiPresenceWebsocket:
             self._cancel_retry()
             self._cancel_retry = None
 
-        if self._cancel_websocket_check is not None:
-            self._cancel_websocket_check()
-            self._cancel_websocket_check = None
+        self._clear_watchdog()
 
         self._clear_message_subscription()
         self._ws_started_at = None
 
-        self._cancel_background_task(self._reconnect_task)
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
         self._reconnect_task = None
-        self._cancel_background_task(self.ws_task)
+        if self.ws_task is not None:
+            self.ws_task.cancel()
         self.ws_task = None
 
     async def stop_and_wait(self) -> None:
@@ -177,11 +184,13 @@ class UnifiPresenceWebsocket:
 
         def _handle_message(message: bytes) -> None:
             self._mark_connected()
+            self._arm_watchdog()
             original_new_data(message)
 
         cast(Any, message_handler).new_data = _handle_message
         websocket_task = asyncio.create_task(api.start_websocket())
         self._ws_started_at = datetime.now(UTC)
+        self._arm_watchdog()
 
         try:
             await websocket_task
@@ -209,6 +218,7 @@ class UnifiPresenceWebsocket:
         if self._stopped:
             return
 
+        self._clear_watchdog()
         self._set_available(False, force_signal=True)
         self._schedule_retry()
 
@@ -251,14 +261,6 @@ class UnifiPresenceWebsocket:
         self._retry_delay = RETRY_TIMER
         self._clear_retry()
 
-    def _is_stale_startup(self, ws_message_received: object) -> bool:
-        """Return True if the WS has been running long enough without any messages."""
-        return (
-            ws_message_received is None
-            and self._ws_started_at is not None
-            and datetime.now(UTC) - self._ws_started_at > STALE_WEBSOCKET_INTERVAL
-        )
-
     @callback
     def _set_available(self, available: bool, *, force_signal: bool = False) -> None:
         """Update availability state."""
@@ -274,6 +276,7 @@ class UnifiPresenceWebsocket:
         if self._stopped:
             return
 
+        self._clear_watchdog()
         self._ws_started_at = None
         self._replace_message_subscription()
         self._start_websocket_runner()
@@ -281,7 +284,8 @@ class UnifiPresenceWebsocket:
     @callback
     def _start_reconnect_task(self, coro: Coroutine[object, object, None]) -> None:
         """Replace any existing reconnect task with a new one."""
-        self._cancel_background_task(self._reconnect_task)
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
         self._reconnect_task = self.hass.async_create_background_task(coro, name="unifi_presence_reconnect")
 
     @callback
@@ -341,16 +345,9 @@ class UnifiPresenceWebsocket:
         self._start_reconnect_task(_do_reconnect())
 
     @callback
-    def _async_watch_websocket(self, _now: object) -> None:
-        """Log WebSocket health and reconnect stale sessions."""
-        api = self._get_api()
-        ws_message_received = api.connectivity.ws_message_received if api is not None else None
-        _LOGGER.debug(
-            "WebSocket health check - available: %s, last message: %s",
-            self.available,
-            ws_message_received,
-        )
-
+    def _handle_watchdog_expiry(self, _now: object) -> None:
+        """Reconnect when the WebSocket goes stale or never produces traffic."""
+        self._cancel_watchdog = None
         if self._stopped:
             return
 
@@ -359,23 +356,10 @@ class UnifiPresenceWebsocket:
             self._schedule_reauth_and_restart()
             return
 
-        if not self.available:
-            if self._is_stale_startup(ws_message_received):
-                _LOGGER.warning("WebSocket never received a message since startup, reconnecting")
-                self._schedule_reauth_and_restart()
-
-            return
-
-        if (
-            isinstance(ws_message_received, datetime)
-            and datetime.now(UTC) - ws_message_received > STALE_WEBSOCKET_INTERVAL
-        ):
+        if self.available:
             _LOGGER.warning("WebSocket stale, reconnecting")
             self._schedule_reauth_and_restart()
             return
 
-        # Defensive: available should imply ws_message_received is set,
-        # but guard against edge cases where the controller was replaced.
-        if self._is_stale_startup(ws_message_received):
-            _LOGGER.warning("WebSocket never received a message since startup, reconnecting")
-            self._schedule_reauth_and_restart()
+        _LOGGER.warning("WebSocket never received a message since startup, reconnecting")
+        self._schedule_reauth_and_restart()
