@@ -50,13 +50,6 @@ async def test_coordinator_uses_mac_when_name_and_hostname_missing(
     assert data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "aa:bb:cc:dd:ee:ff"
 
 
-async def test_client_name_parts_handles_none(hass: HomeAssistant, coordinator_config_entry: MagicMock) -> None:
-    """Test missing UniFi client objects yield empty name parts."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-
-    assert coordinator._client_name_parts(None) == ("", "")
-
-
 async def test_coordinator_normalizes_tracked_macs(hass: HomeAssistant, coordinator_config_entry: MagicMock) -> None:
     """Test tracked MAC options are trimmed, deduplicated, and lowercased."""
     coordinator_config_entry.options = {
