@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 import aiohttp
 import aiounifi
 from aiounifi.models.message import Message, MessageKey
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
 
@@ -52,6 +53,7 @@ class UnifiPresenceWebsocket:
         self.available = False
         self._stopped = False
         self._retry_delay = RETRY_TIMER
+        self._cancel_hass_stop = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self.stop)
 
     @callback
     def start(self) -> None:
@@ -113,8 +115,9 @@ class UnifiPresenceWebsocket:
                 await task
 
     @callback
-    def stop(self) -> None:
+    def stop(self, *_: object) -> None:
         """Stop WebSocket connection."""
+        self._cancel_hass_stop()
         self._stopped = True
         self.available = False
 
