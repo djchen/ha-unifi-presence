@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
-from .websocket_helpers import make_websocket, wait_for_task
+from .websocket_helpers import make_websocket, wait_for_task, wait_for_websocket_start
 
 
 async def test_restart_with_current_controller_waits_for_previous_runner_cleanup(
@@ -19,6 +19,7 @@ async def test_restart_with_current_controller_waits_for_previous_runner_cleanup
     """Test restart_with_current_controller() serializes replacement startup behind runner cancellation."""
     ws, controller, _ = make_websocket(hass)
     first_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
     second_started = asyncio.Event()
     call_count = 0
@@ -31,6 +32,7 @@ async def test_restart_with_current_controller_waits_for_previous_runner_cleanup
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
+                cleanup_started.set()
                 await release_cleanup.wait()
                 raise
 
@@ -43,8 +45,7 @@ async def test_restart_with_current_controller_waits_for_previous_runner_cleanup
     await first_started.wait()
 
     ws.restart_with_current_controller()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
 
     assert second_started.is_set() is False
 
@@ -60,6 +61,7 @@ async def test_schedule_reauth_and_restart_after_login_waits_for_runner_cleanup(
     """Test _schedule_reauth_and_restart() waits for the old runner to finish before restarting."""
     ws, controller, _ = make_websocket(hass)
     first_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
     second_started = asyncio.Event()
     call_count = 0
@@ -72,6 +74,7 @@ async def test_schedule_reauth_and_restart_after_login_waits_for_runner_cleanup(
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
+                cleanup_started.set()
                 await release_cleanup.wait()
                 raise
 
@@ -84,8 +87,7 @@ async def test_schedule_reauth_and_restart_after_login_waits_for_runner_cleanup(
     await first_started.wait()
 
     ws._schedule_reauth_and_restart()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
 
     assert second_started.is_set() is False
 
@@ -112,7 +114,7 @@ async def test_restart_with_current_controller_resubscribes_and_restarts(hass: H
     ws = UnifiPresenceWebsocket(hass, lambda: current["api"], on_message)
 
     ws.start()
-    await asyncio.sleep(0)
+    await wait_for_websocket_start(old_controller)
 
     first_task = ws.ws_task
 
@@ -127,8 +129,7 @@ async def test_restart_with_current_controller_resubscribes_and_restarts(hass: H
     current["api"] = new_controller
 
     ws.restart_with_current_controller()
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await wait_for_websocket_start(new_controller)
 
     # Should have subscribed on the *new* controller and created a new task
     new_controller.messages.subscribe.assert_called_once()
@@ -161,7 +162,7 @@ async def test_restart_with_current_controller_cancels_inflight_reconnect_task(
     controller.start_websocket = AsyncMock(side_effect=hang.wait)
 
     ws.start()
-    await asyncio.sleep(0)
+    await wait_for_websocket_start(controller)
 
     # Simulate an in-flight _reconnect_task (e.g. from a prior health-check reconnect)
     stale_task = MagicMock()
@@ -169,8 +170,7 @@ async def test_restart_with_current_controller_cancels_inflight_reconnect_task(
     ws._reconnect_task = stale_task
 
     ws.restart_with_current_controller()
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await wait_for_websocket_start(controller, count=2)
 
     # The stale _reconnect_task should have been cancelled and cleared
     stale_task.cancel.assert_called_once()
@@ -195,7 +195,7 @@ async def test_restart_with_current_controller_old_task_does_not_clear_new_recon
     controller.start_websocket = AsyncMock(side_effect=_block_restart)
 
     ws.start()
-    await asyncio.sleep(0)
+    await wait_for_websocket_start(controller)
 
     ws.restart_with_current_controller()
     first_task = ws._reconnect_task
@@ -232,7 +232,7 @@ async def test_schedule_reauth_and_restart_after_login_old_task_does_not_clear_n
     controller.start_websocket = AsyncMock(side_effect=_block_restart)
 
     ws.start()
-    await asyncio.sleep(0)
+    await wait_for_websocket_start(controller)
 
     ws._schedule_reauth_and_restart()
     first_task = ws._reconnect_task
@@ -252,3 +252,29 @@ async def test_schedule_reauth_and_restart_after_login_old_task_does_not_clear_n
         await replacement_task
 
     await ws.stop_and_wait()
+
+
+async def test_runner_ignores_cleanup_from_stale_task_reference(hass: HomeAssistant) -> None:
+    """Test a stale runner finishing does not affect a newer ws_task reference."""
+    ws, controller, _ = make_websocket(hass)
+    release_runner = asyncio.Event()
+
+    async def _start_websocket() -> None:
+        await release_runner.wait()
+
+    controller.start_websocket = AsyncMock(side_effect=_start_websocket)
+
+    ws.start()
+    old_task = ws.ws_task
+    assert old_task is not None
+    replacement_task = hass.async_create_background_task(asyncio.sleep(3600), name="replacement_ws_task")
+    ws.ws_task = replacement_task
+
+    release_runner.set()
+    await wait_for_task(old_task)
+
+    assert ws.ws_task is replacement_task
+
+    replacement_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await replacement_task

@@ -24,7 +24,6 @@ from custom_components.unifi_presence.const import (
 
 from .conftest import (
     DEFAULT_SITE_ID,
-    MOCK_CONFIG_DATA,
     OFFICE_SITE_ID,
     PATCH_CREATE_CONTROLLER,
     USER_STEP_INPUT,
@@ -34,6 +33,9 @@ from .conftest import (
     _make_mock_site,
     _mock_controller,
     _site_arg_from_call,
+    add_mock_config_entry,
+    async_configure_flow_step,
+    async_run_user_step,
 )
 
 pytestmark = pytest.mark.usefixtures("_bypass_setup")
@@ -42,15 +44,7 @@ pytestmark = pytest.mark.usefixtures("_bypass_setup")
 @pytest.fixture
 def config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Standard config entry added to hass."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
-    )
-    entry.add_to_hass(hass)
-    return entry
+    return add_mock_config_entry(hass)
 
 
 # ── User step: authentication errors ─────────────────────────────────────
@@ -66,11 +60,7 @@ async def test_user_step_shows_form(hass: HomeAssistant) -> None:
 async def test_user_step_invalid_auth(hass: HomeAssistant) -> None:
     """Test that invalid credentials show an error."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.LoginRequired):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
@@ -79,11 +69,7 @@ async def test_user_step_invalid_auth(hass: HomeAssistant) -> None:
 async def test_user_step_unauthorized(hass: HomeAssistant) -> None:
     """Test that Unauthorized (api.err.Invalid) shows an auth error."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.Unauthorized):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
@@ -92,11 +78,7 @@ async def test_user_step_unauthorized(hass: HomeAssistant) -> None:
 async def test_user_step_cannot_connect(hass: HomeAssistant) -> None:
     """Test that connection errors show an error."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.AiounifiException):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
@@ -105,11 +87,7 @@ async def test_user_step_cannot_connect(hass: HomeAssistant) -> None:
 async def test_user_step_client_error_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that aiohttp transport errors show a connectivity error."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
@@ -118,11 +96,7 @@ async def test_user_step_client_error_shows_cannot_connect(hass: HomeAssistant) 
 async def test_user_step_timeout_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that controller login timeouts show a connectivity error."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
@@ -131,11 +105,7 @@ async def test_user_step_timeout_shows_cannot_connect(hass: HomeAssistant) -> No
 async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
     """Test that unexpected errors surface as unknown."""
     with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("boom")):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "unknown"}
@@ -151,11 +121,7 @@ async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAs
     controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "single_site_retry"
@@ -169,11 +135,7 @@ async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
@@ -193,11 +155,7 @@ async def test_user_step_historical_client_failure_uses_active_clients(
     controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical clients unavailable"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
@@ -212,11 +170,7 @@ async def test_user_step_active_client_refresh_failure_uses_historical_clients(
     controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active clients unavailable"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
@@ -228,11 +182,7 @@ async def test_user_step_single_site_reuses_site_fetch_for_client_discovery(hass
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller:
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
@@ -249,20 +199,13 @@ async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: 
     retry_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=[controller, retry_controller]) as create_controller:
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
         assert result["type"] is FlowResultType.FORM
         assert result["step_id"] == "single_site_retry"
         assert result["errors"] == {"base": "cannot_discover_devices"}
 
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={},
-        )
+        result = await async_configure_flow_step(hass, result, {})
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
@@ -274,11 +217,7 @@ async def test_user_step_no_clients_available_aborts(hass: HomeAssistant) -> Non
     controller = _mock_controller(clients_all_items=[])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_clients_available"
@@ -290,11 +229,7 @@ async def test_user_step_site_fetch_failure_shows_cannot_connect(hass: HomeAssis
     controller.sites.update = AsyncMock(side_effect=aiounifi.AiounifiException)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
@@ -306,11 +241,7 @@ async def test_user_step_no_sites_available_aborts(hass: HomeAssistant) -> None:
     controller = _mock_controller(sites=[])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_sites_available"
@@ -324,11 +255,7 @@ async def test_user_step_both_updates_fail_but_cached_data_proceeds(hass: HomeAs
     controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
@@ -347,8 +274,7 @@ async def test_user_step_multiple_sites_shows_friendly_selector(hass: HomeAssist
     )
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
@@ -375,8 +301,7 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
         return controller
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=_create_controller_side_effect) as mock_create_controller:
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
@@ -455,12 +380,9 @@ async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant)
     )
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={"site": OFFICE_SITE_ID})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]}
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
+        result = await async_configure_flow_step(hass, result, {"site": OFFICE_SITE_ID})
+        result = await async_configure_flow_step(hass, result, {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Office (192.168.1.1)"
@@ -477,11 +399,8 @@ async def test_devices_step_uses_site_name_when_description_missing(hass: HomeAs
     )
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input=USER_STEP_INPUT)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]}
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
+        result = await async_configure_flow_step(hass, result, {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "office (192.168.1.1)"
@@ -498,17 +417,8 @@ async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
-            },
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
+        result = await async_configure_flow_step(hass, result, {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Home (192.168.1.1)"
@@ -538,17 +448,8 @@ async def test_devices_step_creates_entry_host_variants(
     config_data = {**USER_STEP_INPUT, CONF_HOST: host}
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=config_data,
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
-            },
-        )
+        result = await async_run_user_step(hass, config_data)
+        result = await async_configure_flow_step(hass, result, {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == f"Home ({host})"
@@ -562,15 +463,8 @@ async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={},
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
+        result = await async_configure_flow_step(hass, result, {})
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "no_devices"}
@@ -594,11 +488,7 @@ async def test_already_configured_abort(hass: HomeAssistant, config_entry: MockC
     alias_config = {**USER_STEP_INPUT, CONF_HOST: "controller.example.com"}
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=alias_config,
-        )
+        result = await async_run_user_step(hass, alias_config)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
@@ -618,11 +508,7 @@ async def test_fetch_all_clients_active_wins_on_key_collision(hass: HomeAssistan
     )
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=USER_STEP_INPUT,
-        )
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"

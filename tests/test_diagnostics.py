@@ -8,7 +8,6 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.unifi_presence.const import DOMAIN
 from custom_components.unifi_presence.coordinator import TrackedClientState
 from custom_components.unifi_presence.diagnostics import (
     _partial_redact_mac,
@@ -17,7 +16,7 @@ from custom_components.unifi_presence.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
+from .conftest import MOCK_OPTIONS, add_mock_config_entry
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller"
 
@@ -25,14 +24,12 @@ PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_c
 @pytest.fixture
 async def loaded_entry(hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock) -> MockConfigEntry:
     """Config entry fully set up in hass for diagnostics tests."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
+    entry = add_mock_config_entry(
+        hass,
         title="UniFi Presence (192.168.1.1)",
-        data=MOCK_CONFIG_DATA,
         unique_id="192.168.1.1_default",
         options=MOCK_OPTIONS,
     )
-    entry.add_to_hass(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
         await hass.config_entries.async_setup(entry.entry_id)
@@ -80,14 +77,12 @@ async def test_diagnostics_websocket_none(hass: HomeAssistant, loaded_entry: Moc
 
 async def test_diagnostics_without_runtime_data(hass: HomeAssistant) -> None:
     """Test that diagnostics falls back to config entry data when runtime_data is unavailable."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
+    entry = add_mock_config_entry(
+        hass,
         title="UniFi Presence (192.168.1.1)",
-        data=MOCK_CONFIG_DATA,
         unique_id="192.168.1.1_default",
         options=MOCK_OPTIONS,
     )
-    entry.add_to_hass(hass)
 
     result = await async_get_config_entry_diagnostics(hass, entry)
 

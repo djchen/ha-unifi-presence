@@ -18,12 +18,14 @@ from custom_components.unifi_presence.const import (
 )
 
 from .conftest import (
-    DEFAULT_SITE_ID,
     MOCK_CONFIG_DATA,
     OFFICE_SITE_ID,
     PATCH_CREATE_CONTROLLER,
     _mock_controller,
     _site_arg_from_call,
+    add_mock_config_entry,
+    async_run_reauth_confirm_step,
+    make_reauth_confirm_input,
 )
 
 pytestmark = pytest.mark.usefixtures("_bypass_setup")
@@ -32,15 +34,7 @@ pytestmark = pytest.mark.usefixtures("_bypass_setup")
 @pytest.fixture
 def config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Standard config entry added to hass."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
-    )
-    entry.add_to_hass(hass)
-    return entry
+    return add_mock_config_entry(hass)
 
 
 # ── Reauth flow ──────────────────────────────────────────────────────────
@@ -80,13 +74,11 @@ async def test_reauth_success(hass: HomeAssistant, config_entry: MockConfigEntry
     """Test successful reauthentication updates credentials and reloads."""
     controller = _mock_controller()
 
-    result = await config_entry.start_reauth_flow(hass)
-    assert result["type"] is FlowResultType.FORM
-
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={"username": "new_admin", "password": "new_pass"},
+        result = await async_run_reauth_confirm_step(
+            hass,
+            config_entry,
+            make_reauth_confirm_input(username="new_admin", password="new_pass"),
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -107,18 +99,16 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
 
     reauth_controller = _mock_controller()
 
-    result = await config_entry.start_reauth_flow(hass)
-    assert result["type"] is FlowResultType.FORM
-
     with (
         patch(
             "custom_components.unifi_presence.config_flow.create_controller_with_resolved_site",
             return_value=(reauth_controller, "office"),
         ) as create_controller_with_resolved_site,
     ):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={"username": "new_admin", "password": "new_pass"},
+        result = await async_run_reauth_confirm_step(
+            hass,
+            config_entry,
+            make_reauth_confirm_input(username="new_admin", password="new_pass"),
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -137,12 +127,11 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
 
 async def test_reauth_invalid_auth(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     """Test that invalid credentials show an error in the reauth form."""
-    result = await config_entry.start_reauth_flow(hass)
-
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.LoginRequired("bad")):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={"username": "admin", "password": "wrong"},
+        result = await async_run_reauth_confirm_step(
+            hass,
+            config_entry,
+            make_reauth_confirm_input(username="admin", password="wrong"),
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -151,13 +140,8 @@ async def test_reauth_invalid_auth(hass: HomeAssistant, config_entry: MockConfig
 
 async def test_reauth_cannot_connect(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     """Test that connection failure shows an error in the reauth form."""
-    result = await config_entry.start_reauth_flow(hass)
-
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.AiounifiException("fail")):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={"username": "admin", "password": "password"},
-        )
+        result = await async_run_reauth_confirm_step(hass, config_entry, make_reauth_confirm_input())
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
@@ -165,13 +149,8 @@ async def test_reauth_cannot_connect(hass: HomeAssistant, config_entry: MockConf
 
 async def test_reauth_client_error_shows_cannot_connect(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     """Test that aiohttp transport failures show a connectivity error in reauth."""
-    result = await config_entry.start_reauth_flow(hass)
-
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={"username": "admin", "password": "password"},
-        )
+        result = await async_run_reauth_confirm_step(hass, config_entry, make_reauth_confirm_input())
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
@@ -179,13 +158,8 @@ async def test_reauth_client_error_shows_cannot_connect(hass: HomeAssistant, con
 
 async def test_reauth_unknown_error(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     """Test that an unexpected error shows an error in the reauth form."""
-    result = await config_entry.start_reauth_flow(hass)
-
     with patch(PATCH_CREATE_CONTROLLER, side_effect=RuntimeError("boom")):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={"username": "admin", "password": "password"},
-        )
+        result = await async_run_reauth_confirm_step(hass, config_entry, make_reauth_confirm_input())
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "unknown"}

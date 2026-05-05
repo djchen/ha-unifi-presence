@@ -7,9 +7,11 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.selector import SelectSelector
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
@@ -17,6 +19,7 @@ from custom_components.unifi_presence.const import (
     CONF_SITE,
     CONF_SSL_VERIFY,
     CONF_TRACKED_DEVICES,
+    DOMAIN,
 )
 
 # ── Shared constants ─────────────────────────────────────────────────────
@@ -40,6 +43,16 @@ PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.config_flow.create_c
 DEFAULT_SITE_ID = "site-default-id"
 OFFICE_SITE_ID = "site-office-id"
 USER_STEP_INPUT = {k: v for k, v in MOCK_CONFIG_DATA.items() if k != CONF_SITE}
+RECONFIGURE_STEP_INPUT = {
+    CONF_HOST: MOCK_CONFIG_DATA[CONF_HOST],
+    CONF_PORT: MOCK_CONFIG_DATA[CONF_PORT],
+    CONF_USERNAME: "admin",
+    CONF_PASSWORD: "new-pass",
+}
+REAUTH_CONFIRM_INPUT = {
+    CONF_USERNAME: "admin",
+    CONF_PASSWORD: "password",
+}
 
 
 # ── Shared mock factories ────────────────────────────────────────────────
@@ -172,6 +185,85 @@ def _get_tracked_device_options(result: dict[str, Any]) -> dict[str, str]:
     selector = _get_tracked_device_selector(result)
     options = cast(list[dict[str, str]], selector.config["options"])
     return {option["value"]: option["label"] for option in options}
+
+
+def make_reconfigure_input(**overrides: object) -> dict[str, object]:
+    """Return a standard reconfigure payload with optional overrides."""
+    return {**RECONFIGURE_STEP_INPUT, **overrides}
+
+
+def make_reauth_confirm_input(**overrides: object) -> dict[str, object]:
+    """Return a standard reauth-confirm payload with optional overrides."""
+    return {**REAUTH_CONFIRM_INPUT, **overrides}
+
+
+async def async_configure_flow_step(
+    hass: HomeAssistant,
+    result: dict[str, Any],
+    user_input: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    """Submit user input to the current config flow step."""
+    return cast(
+        dict[str, Any],
+        await hass.config_entries.flow.async_configure(result["flow_id"], user_input=user_input),
+    )
+
+
+async def async_start_user_flow(hass: HomeAssistant) -> dict[str, Any]:
+    """Start the integration's user config flow."""
+    return cast(
+        dict[str, Any],
+        await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER}),
+    )
+
+
+async def async_run_user_step(
+    hass: HomeAssistant,
+    user_input: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    """Start the user flow and submit the first credential step."""
+    return await async_configure_flow_step(hass, await async_start_user_flow(hass), user_input)
+
+
+async def async_run_reconfigure_step(
+    hass: HomeAssistant,
+    entry: Any,
+    user_input: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    """Start a reconfigure flow and submit the credentials step."""
+    return await async_configure_flow_step(hass, await entry.start_reconfigure_flow(hass), user_input)
+
+
+async def async_run_reauth_confirm_step(
+    hass: HomeAssistant,
+    entry: Any,
+    user_input: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    """Start a reauth flow and submit the confirmation step."""
+    return await async_configure_flow_step(hass, await entry.start_reauth_flow(hass), user_input)
+
+
+def add_mock_config_entry(
+    hass: HomeAssistant,
+    *,
+    title: str = "Home",
+    data: dict[str, object] | None = None,
+    unique_id: str | None = DEFAULT_SITE_ID,
+    options: dict[str, object] | None = None,
+) -> MockConfigEntry:
+    """Create and add a standard mock config entry to Home Assistant."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=title,
+        data=cast(dict[str, Any], MOCK_CONFIG_DATA if data is None else data),
+        unique_id=unique_id,
+        options=cast(
+            dict[str, Any],
+            {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]} if options is None else options,
+        ),
+    )
+    entry.add_to_hass(hass)
+    return entry
 
 
 # ── Shared coordinator helpers ───────────────────────────────────────────

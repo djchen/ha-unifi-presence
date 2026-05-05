@@ -20,6 +20,7 @@ from custom_components.unifi_presence.helpers import (
     format_missing_client_label,
     normalize_mac,
     normalize_macs,
+    should_resolve_controller_site,
     site_title,
     tracker_unique_id,
 )
@@ -245,3 +246,80 @@ async def test_create_controller_with_resolved_site_reuses_single_controller(has
     assert controller.connectivity.config.site == "office"
     assert create_ctrl.await_count == 1
     assert create_ctrl.await_args.args[1].site == ""
+
+
+def test_should_resolve_controller_site_false_for_default_site() -> None:
+    """Test default-site configs skip legacy normalization."""
+    assert (
+        should_resolve_controller_site(
+            ControllerConnectionParams(
+                host="192.168.1.1",
+                port=443,
+                username="admin",
+                password="password",
+                site="default",
+                ssl_verify=False,
+            ),
+            unique_id=None,
+        )
+        is False
+    )
+
+
+async def test_create_controller_with_resolved_site_keeps_modern_site_name_without_refresh(hass: HomeAssistant) -> None:
+    """Test modern site names bypass extra site resolution work."""
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="office",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+    controller.connectivity = SimpleNamespace(config=SimpleNamespace(site=""))
+    controller.sites = MagicMock()
+    controller.sites.update = AsyncMock()
+
+    with patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller):
+        result_controller, resolved_site = await create_controller_with_resolved_site(
+            hass,
+            params,
+            unique_id="site-office-id",
+        )
+
+    assert result_controller is controller
+    assert resolved_site == "office"
+    assert controller.connectivity.config.site == "office"
+    controller.sites.update.assert_not_awaited()
+
+
+async def test_create_controller_with_resolved_site_closes_controller_on_resolution_failure(
+    hass: HomeAssistant,
+) -> None:
+    """Test site-resolution failures close the already-created controller."""
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="site-office-id",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+    controller.connectivity = SimpleNamespace(config=SimpleNamespace(site=""))
+    controller.sites = MagicMock()
+    controller.sites.update = AsyncMock(side_effect=RuntimeError("boom"))
+
+    with (
+        patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
+        patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        await create_controller_with_resolved_site(
+            hass,
+            params,
+            unique_id="192.168.1.1_office",
+        )
+
+    async_close.assert_awaited_once_with(controller)

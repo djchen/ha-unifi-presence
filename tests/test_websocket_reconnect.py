@@ -88,8 +88,6 @@ async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAs
     ws._schedule_reauth_and_restart()
 
     await asyncio.wait_for(second_started.wait(), timeout=1)
-    await asyncio.sleep(0.02)
-    await asyncio.sleep(0)
 
     controller.login.assert_awaited()
     # Should have restarted WS (available should be True again)
@@ -133,7 +131,6 @@ async def test_schedule_reauth_and_restart_blocked_after_stop(hass: HomeAssistan
         return_value=MagicMock(),
     ) as mock_call_later:
         ws._schedule_reauth_and_restart()
-        await asyncio.sleep(0)
 
     # No reconnect should have been scheduled
     mock_call_later.assert_not_called()

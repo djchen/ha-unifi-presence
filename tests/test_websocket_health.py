@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.core import HomeAssistant
 
-from .websocket_helpers import make_websocket
+from .websocket_helpers import make_websocket, wait_for_websocket_start
 
 
 async def test_watchdog_reauths_when_task_done_while_available(hass: HomeAssistant) -> None:
@@ -60,6 +60,17 @@ async def test_arm_watchdog_skips_when_stopped(hass: HomeAssistant) -> None:
     assert ws._cancel_watchdog is None
 
 
+async def test_watchdog_expiry_noop_when_stopped(hass: HomeAssistant) -> None:
+    """Test watchdog expiry does nothing after shutdown."""
+    ws, _controller, _ = make_websocket(hass)
+    ws._stopped = True
+
+    with patch.object(ws, "_schedule_reauth_and_restart") as reconnect:
+        ws._handle_watchdog_expiry(None)
+
+    reconnect.assert_not_called()
+
+
 async def test_inbound_frame_resets_watchdog_deadline(hass: HomeAssistant) -> None:
     """Test each inbound frame replaces the watchdog timer and marks the socket healthy."""
     ws, controller, _ = make_websocket(hass)
@@ -67,12 +78,11 @@ async def test_inbound_frame_resets_watchdog_deadline(hass: HomeAssistant) -> No
     controller.start_websocket = AsyncMock(side_effect=hang.wait)
 
     ws.start()
-    await asyncio.sleep(0)
+    await wait_for_websocket_start(controller)
     initial_handle = ws._cancel_watchdog
     assert initial_handle is not None
 
     controller.messages.new_data(b"frame")
-    await asyncio.sleep(0)
 
     assert ws.available is True
     assert ws._cancel_watchdog is not None
