@@ -121,10 +121,7 @@ class UnifiPresenceWebsocket:
         self._stopped = True
         self.available = False
 
-        if self._cancel_retry is not None:
-            self._cancel_retry()
-            self._cancel_retry = None
-
+        self._clear_retry()
         self._clear_watchdog()
 
         self._clear_message_subscription()
