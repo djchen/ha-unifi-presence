@@ -32,6 +32,7 @@ from .conftest import (
     _make_mock_client,
     _mock_controller,
     _site_arg_from_call,
+    add_mock_config_entry,
 )
 
 TRANSLATIONS_ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "unifi_presence"
@@ -42,29 +43,13 @@ pytestmark = pytest.mark.usefixtures("_bypass_setup")
 @pytest.fixture
 def config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Standard config entry added to hass."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
-    )
-    entry.add_to_hass(hass)
-    return entry
+    return add_mock_config_entry(hass)
 
 
 @pytest.fixture
 def options_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Config entry with full options added to hass."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
-        options=MOCK_OPTIONS,
-    )
-    entry.add_to_hass(hass)
-    return entry
+    return add_mock_config_entry(hass, options=MOCK_OPTIONS)
 
 
 # ── Options flow ─────────────────────────────────────────────────────────

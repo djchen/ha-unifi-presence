@@ -12,7 +12,7 @@ import aiohttp
 import aiounifi
 from aiounifi.models.message import Message
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST
+from homeassistant.const import CONF_HOST, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -105,6 +105,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     config_entry: ConfigEntry
     _client_states: dict[str, TrackedClientState]
     _cancel_heartbeat_check: CALLBACK_TYPE | None
+    _cancel_hass_stop: CALLBACK_TYPE
     _scheduled_heartbeat_ts: int | None
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
@@ -118,6 +119,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._client_states = {}
         self._cancel_heartbeat_check = None
         self._scheduled_heartbeat_ts = None
+        self._cancel_hass_stop = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP,
+            self._clear_heartbeat_check,
+        )
 
         fallback_interval = config_entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
 
@@ -162,12 +167,18 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         """Return the cached controller, if available."""
         return self._controller
 
-    async def async_shutdown(self) -> None:
-        """Release the current controller session, if owned by this integration."""
+    @callback
+    def _clear_heartbeat_check(self, *_: object) -> None:
+        """Cancel pending local heartbeat expiry callbacks."""
         if self._cancel_heartbeat_check is not None:
             self._cancel_heartbeat_check()
             self._cancel_heartbeat_check = None
         self._scheduled_heartbeat_ts = None
+
+    async def async_shutdown(self) -> None:
+        """Release the current controller session, if owned by this integration."""
+        self._cancel_hass_stop()
+        self._clear_heartbeat_check()
 
         self._client_states.clear()
 
@@ -391,8 +402,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     @callback
     def _async_check_heartbeat_expiry(self, *_: datetime) -> None:
         """Expire tracked clients whose away deadline has elapsed."""
-        self._cancel_heartbeat_check = None
-        self._scheduled_heartbeat_ts = None
+        self._clear_heartbeat_check()
         if not self._client_states:
             return
 

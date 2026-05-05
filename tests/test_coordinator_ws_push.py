@@ -308,6 +308,26 @@ async def test_process_message_when_data_is_none(
     assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
 
 
+async def test_process_message_inserts_initial_runtime_state_into_client_cache(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test the first push creates cached runtime state for a newly seen device."""
+    now = dt_util.utcnow()
+    mac = "aa:bb:cc:dd:ee:ff"
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
+
+    state = coordinator.data.clients[mac]
+    assert state.is_home is True
+    assert state.name == "Dan Phone"
+    assert state.last_seen_ts == int(now.timestamp())
+    assert state.expiry_ts is not None
+
+
 async def test_process_message_case_insensitive_mac(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,

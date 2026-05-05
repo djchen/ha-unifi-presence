@@ -85,6 +85,18 @@ async def test_coordinator_site_id_uses_entry_id_when_unique_id_missing(
     assert coordinator.site_id == "test_entry_id"
 
 
+async def test_coordinator_site_id_falls_back_to_default_site_when_identity_missing(
+    hass: HomeAssistant, coordinator_config_entry: MagicMock
+) -> None:
+    """Test tracker IDs fall back to the default site when no identity exists."""
+    coordinator_config_entry.unique_id = None
+    coordinator_config_entry.entry_id = None
+
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+
+    assert coordinator.site_id == "default"
+
+
 async def test_ensure_controller_reuses_existing_controller(
     hass: HomeAssistant, coordinator_config_entry: MagicMock
 ) -> None:
@@ -137,6 +149,29 @@ async def test_coordinator_async_shutdown_detaches_owned_runtime_session(
 
     assert coordinator.controller is None
     owned_session.detach.assert_called_once_with()
+
+
+async def test_update_single_device_state_adds_new_runtime_state_and_notifies_on_first_public_state(
+    hass: HomeAssistant,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test first-time cache insertion publishes the new public device state."""
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    coordinator.last_update_success = False
+    coordinator.async_update_listeners = MagicMock()
+
+    coordinator._update_single_device_state(
+        "aa:bb:cc:dd:ee:ff",
+        is_home=False,
+        name="Dan Phone",
+        last_seen_ts=None,
+        expiry_ts=None,
+    )
+
+    assert coordinator.data is not None
+    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+    assert coordinator.last_update_success is True
+    coordinator.async_update_listeners.assert_called_once_with()
 
 
 async def test_controller_property(hass: HomeAssistant, coordinator_config_entry: MagicMock) -> None:

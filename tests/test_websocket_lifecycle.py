@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
-from .websocket_helpers import make_websocket, wait_for_task
+from .websocket_helpers import make_websocket, wait_for_task, wait_for_websocket_start
 
 
 async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
@@ -40,7 +40,7 @@ async def test_start_websocket_is_idempotent_while_runner_active(hass: HomeAssis
     first_task = ws.ws_task
 
     ws._start_websocket_runner()
-    await asyncio.sleep(0)
+    await wait_for_websocket_start(controller)
 
     assert ws.ws_task is first_task
     controller.start_websocket.assert_awaited_once()
@@ -135,17 +135,18 @@ async def test_websocket_becomes_available_after_runner_confirms_session(hass: H
     """Test that availability flips only after the first inbound WebSocket frame."""
     ws, controller, _ = make_websocket(hass)
     hang = asyncio.Event()
+    frame_received = asyncio.Event()
 
     async def _start_websocket() -> None:
         controller.messages.new_data(b"frame")
+        frame_received.set()
         await hang.wait()
 
     controller.start_websocket = AsyncMock(side_effect=_start_websocket)
 
     ws.start()
     assert ws.available is False
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.wait_for(frame_received.wait(), timeout=1)
 
     assert ws.available is True
 
@@ -159,9 +160,8 @@ async def test_websocket_startup_without_messages_stays_unavailable(hass: HomeAs
     controller.start_websocket = AsyncMock(side_effect=hang.wait)
 
     ws.start()
-    await asyncio.sleep(0)
+    await wait_for_websocket_start(controller)
     await asyncio.sleep(0.02)
-    await asyncio.sleep(0)
 
     assert ws.available is False
 
@@ -195,3 +195,79 @@ async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant
 
     # Should not schedule a retry — just returns
     mock_call_later.assert_not_called()
+
+
+async def test_start_websocket_runner_skips_when_stopped(hass: HomeAssistant) -> None:
+    """Test the runner is not created after the manager has stopped."""
+    ws, controller, _ = make_websocket(hass)
+    ws._stopped = True
+
+    ws._start_websocket_runner()
+
+    assert ws.ws_task is None
+    controller.start_websocket.assert_not_called()
+
+
+async def test_async_cancel_and_wait_ignores_none_task(hass: HomeAssistant) -> None:
+    """Test task cancellation helper handles a missing task."""
+    ws, _, _ = make_websocket(hass)
+
+    await ws._async_cancel_and_wait(None)
+
+
+async def test_async_cancel_and_wait_skips_awaiting_current_task(hass: HomeAssistant) -> None:
+    """Test self-cancellation does not await the current task."""
+    ws, _, _ = make_websocket(hass)
+    current_task = MagicMock()
+
+    with patch("custom_components.unifi_presence.websocket.asyncio.current_task", return_value=current_task):
+        await ws._async_cancel_and_wait(current_task)
+
+    current_task.cancel.assert_called_once_with()
+
+
+async def test_schedule_retry_noop_when_retry_already_pending(hass: HomeAssistant) -> None:
+    """Test duplicate retry scheduling is ignored while a handle exists."""
+    ws, _, _ = make_websocket(hass)
+    existing_handle = MagicMock()
+    ws._cancel_retry = existing_handle
+
+    with patch("custom_components.unifi_presence.websocket.async_call_later") as async_call_later:
+        ws._schedule_retry()
+
+    async_call_later.assert_not_called()
+    assert ws._cancel_retry is existing_handle
+
+
+async def test_mark_connected_noop_when_already_available(hass: HomeAssistant) -> None:
+    """Test repeated health marks do not churn retry state."""
+    ws, _, _ = make_websocket(hass)
+    ws.available = True
+    ws._retry_delay = 99
+    ws._cancel_retry = MagicMock()
+
+    ws._mark_connected()
+
+    assert ws.available is True
+    assert ws._retry_delay == 99
+
+
+async def test_async_restart_runner_noop_when_stop_occurs_after_cancel(hass: HomeAssistant) -> None:
+    """Test restart does not resubscribe after stopping during cancellation."""
+    ws, _, _ = make_websocket(hass)
+
+    async def _cancel_and_stop(_task: asyncio.Task[None] | None) -> None:
+        ws._stopped = True
+
+    ws.ws_task = hass.async_create_task(asyncio.sleep(0))
+
+    with (
+        patch.object(ws, "_async_cancel_and_wait", side_effect=_cancel_and_stop) as cancel_and_wait,
+        patch.object(ws, "_replace_message_subscription") as replace_subscription,
+        patch.object(ws, "_start_websocket_runner") as start_runner,
+    ):
+        await ws._async_restart_runner()
+
+    cancel_and_wait.assert_awaited_once()
+    replace_subscription.assert_not_called()
+    start_runner.assert_not_called()

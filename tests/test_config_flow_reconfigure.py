@@ -31,6 +31,9 @@ from .conftest import (
     _make_mock_site,
     _mock_controller,
     _site_arg_from_call,
+    add_mock_config_entry,
+    async_run_reconfigure_step,
+    make_reconfigure_input,
 )
 
 pytestmark = pytest.mark.usefixtures("_bypass_setup")
@@ -38,15 +41,7 @@ pytestmark = pytest.mark.usefixtures("_bypass_setup")
 
 def _make_reconfigure_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Create and add a standard entry for reconfigure flow tests."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
-    )
-    entry.add_to_hass(hass)
-    return entry
+    return add_mock_config_entry(hass)
 
 
 def test_find_reconfigure_site_returns_none_for_non_string_stored_site() -> None:
@@ -80,14 +75,7 @@ async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
 
     controller = _mock_controller()
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await entry.start_reconfigure_flow(hass)
-        assert result["type"] is FlowResultType.FORM
-        assert result["step_id"] == "reconfigure"
-
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input=new_data,
-        )
+        result = await async_run_reconfigure_step(hass, entry, new_data)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
@@ -122,15 +110,10 @@ async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass:
         return controller
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=_create_controller_side_effect) as mock_create_controller:
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": "10.0.0.1",
-                "port": 8443,
-                "username": "officeadmin",
-                "password": "newpass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(host="10.0.0.1", port=8443, username="officeadmin", password="newpass"),
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -159,15 +142,10 @@ async def test_reconfigure_flow_success_host_variants(
 
     controller = _mock_controller()
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": new_host,
-                "port": 8443,
-                "username": "newadmin",
-                "password": "newpass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(host=new_host, port=8443, username="newadmin", password="newpass"),
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -183,15 +161,10 @@ async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAss
 
     controller = _mock_controller()
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": "192.168.1.1",
-                "port": 443,
-                "username": "newadmin",
-                "password": "newpass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(host="192.168.1.1", port=443, username="newadmin", password="newpass"),
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -209,15 +182,10 @@ async def test_reconfigure_flow_invalid_auth(hass: HomeAssistant) -> None:
     entry = _make_reconfigure_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.LoginRequired):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": MOCK_CONFIG_DATA["host"],
-                "port": MOCK_CONFIG_DATA["port"],
-                "username": "bad-user",
-                "password": "bad-pass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(username="bad-user", password="bad-pass"),
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -229,15 +197,10 @@ async def test_reconfigure_flow_cannot_connect(hass: HomeAssistant) -> None:
     entry = _make_reconfigure_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.AiounifiException):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": MOCK_CONFIG_DATA["host"],
-                "port": MOCK_CONFIG_DATA["port"],
-                "username": "admin",
-                "password": "new-pass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(),
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -249,15 +212,10 @@ async def test_reconfigure_flow_client_error_shows_cannot_connect(hass: HomeAssi
     entry = _make_reconfigure_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": MOCK_CONFIG_DATA["host"],
-                "port": MOCK_CONFIG_DATA["port"],
-                "username": "admin",
-                "password": "new-pass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(),
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -269,15 +227,10 @@ async def test_reconfigure_flow_timeout_shows_cannot_connect(hass: HomeAssistant
     entry = _make_reconfigure_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": MOCK_CONFIG_DATA["host"],
-                "port": MOCK_CONFIG_DATA["port"],
-                "username": "admin",
-                "password": "new-pass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(),
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -289,15 +242,10 @@ async def test_reconfigure_flow_unknown_error(hass: HomeAssistant) -> None:
     entry = _make_reconfigure_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("boom")):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": MOCK_CONFIG_DATA["host"],
-                "port": MOCK_CONFIG_DATA["port"],
-                "username": "admin",
-                "password": "new-pass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(),
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -318,15 +266,10 @@ async def test_reconfigure_flow_uses_existing_site_without_showing_picker(hass: 
         ]
     )
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": "10.0.0.1",
-                "port": MOCK_CONFIG_DATA["port"],
-                "username": "newadmin",
-                "password": "newpass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(host="10.0.0.1", username="newadmin", password="newpass"),
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -340,15 +283,10 @@ async def test_reconfigure_flow_aborts_when_existing_site_is_no_longer_accessibl
     controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await entry.start_reconfigure_flow(hass)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            user_input={
-                "host": MOCK_CONFIG_DATA["host"],
-                "port": MOCK_CONFIG_DATA["port"],
-                "username": "admin",
-                "password": "new-pass",
-            },
+        result = await async_run_reconfigure_step(
+            hass,
+            entry,
+            make_reconfigure_input(),
         )
 
     assert result["type"] is FlowResultType.ABORT

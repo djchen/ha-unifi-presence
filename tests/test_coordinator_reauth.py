@@ -66,6 +66,25 @@ async def test_coordinator_invalid_json_raises_update_failed(
         await coordinator._async_update_data()
 
 
+async def test_coordinator_best_effort_clients_all_refresh_failure_uses_cached_data(
+    hass: HomeAssistant,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+) -> None:
+    """Test clients_all refresh failures stay best-effort during polling."""
+    now = int(dt_util.utcnow().timestamp())
+    mac = "aa:bb:cc:dd:ee:ff"
+    mock_coordinator_controller.clients.update_mock = AsyncMock()
+    mock_coordinator_controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("historical down")
+    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=now)
+
+    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    data = await coordinator._async_update_data()
+
+    assert data.device_states[mac] is True
+    mock_coordinator_controller.clients.update_mock.assert_awaited_once()
+
+
 async def test_coordinator_initial_timeout_raises_update_failed(
     hass: HomeAssistant,
     coordinator_config_entry: MagicMock,
