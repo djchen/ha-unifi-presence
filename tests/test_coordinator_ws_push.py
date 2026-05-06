@@ -46,7 +46,7 @@ async def test_process_message_updates_state(
 
     # State should now be home
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
     assert coordinator.heartbeat_expiry_count == 1
 
 
@@ -72,7 +72,7 @@ async def test_process_message_updates_offline_client(
     coordinator.process_message(message)
 
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
     assert coordinator.heartbeat_expiry_count == 1
 
 
@@ -162,7 +162,7 @@ async def test_process_message_preserves_metadata_when_offline_client_reappears(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.client_info[mac]["name"] == "Dan Phone"
+    assert coordinator.data.clients[mac].name == "Dan Phone"
 
 
 async def test_process_message_uses_hostname_when_name_missing(
@@ -184,7 +184,7 @@ async def test_process_message_uses_hostname_when_name_missing(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "dan-phone"
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "dan-phone"
 
 
 async def test_process_message_ignores_untracked_mac(
@@ -238,7 +238,7 @@ async def test_process_message_metadata_only_update_notifies_listeners(
     coordinator.process_message(message)
 
     assert coordinator.data is original_data
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone Updated"
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone Updated"
     coordinator.async_update_listeners.assert_called_once_with()
 
 
@@ -276,9 +276,9 @@ async def test_process_message_for_one_mac_preserves_unrelated_tracked_device_st
     coordinator.process_message(message)
 
     assert coordinator.data.device_states[home_mac] is True
-    assert coordinator.data.client_info[home_mac]["name"] == "Dan Phone Updated"
+    assert coordinator.data.clients[home_mac].name == "Dan Phone Updated"
     assert coordinator.data.device_states[away_mac] is False
-    assert coordinator.data.client_info[away_mac]["name"] == "Jane Phone"
+    assert coordinator.data.clients[away_mac].name == "Jane Phone"
 
 
 async def test_process_message_when_data_is_none(
@@ -305,7 +305,7 @@ async def test_process_message_when_data_is_none(
     # Should have created data with the device home
     assert coordinator.data is not None
     assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
 
 
 async def test_process_message_inserts_initial_runtime_state_into_client_cache(

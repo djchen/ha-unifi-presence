@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
@@ -211,8 +211,11 @@ def _async_migrate_tracker_unique_ids(
             )
 
 
-def _build_options_client_labels(available_clients: Mapping[str, str], current_tracked: list[str]) -> dict[str, str]:
-    """Build ordered option labels for tracked client selection."""
+def _build_client_options(
+    available_clients: Mapping[str, str],
+    current_tracked: Iterable[str] = (),
+) -> dict[str, str]:
+    """Build ordered client labels for tracked client selection."""
     normalized_available = {normalize_mac(mac): label for mac, label in available_clients.items()}
     normalized_tracked = list(normalize_macs(current_tracked))
 
@@ -719,7 +722,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         if not self._available_clients:
             return self.async_abort(reason="no_clients_available")
 
-        client_options = dict(sorted(self._available_clients.items(), key=lambda item: item[1].lower()))
+        client_options = _build_client_options(self._available_clients)
         return self.async_show_form(
             step_id="devices",
             data_schema=_build_device_selection_schema(client_options),
@@ -788,7 +791,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                 )
 
         available_clients, discovery_failed = await self._async_fetch_available_clients()
-        client_options = _build_options_client_labels(available_clients, current_tracked)
+        client_options = _build_client_options(available_clients, current_tracked)
 
         if not client_options:
             return self.async_abort(reason="cannot_discover_devices" if discovery_failed else "no_devices_discovered")

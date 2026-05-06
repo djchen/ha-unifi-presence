@@ -30,7 +30,7 @@ async def test_coordinator_uses_hostname_when_name_missing(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "dan-phone"
+    assert data.clients["aa:bb:cc:dd:ee:ff"].name == "dan-phone"
 
 
 async def test_coordinator_uses_mac_when_name_and_hostname_missing(
@@ -47,7 +47,7 @@ async def test_coordinator_uses_mac_when_name_and_hostname_missing(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "aa:bb:cc:dd:ee:ff"
+    assert data.clients["aa:bb:cc:dd:ee:ff"].name == "aa:bb:cc:dd:ee:ff"
 
 
 async def test_coordinator_normalizes_tracked_macs(hass: HomeAssistant, coordinator_config_entry: MagicMock) -> None:
@@ -169,7 +169,7 @@ async def test_update_single_device_state_adds_new_runtime_state_and_notifies_on
     )
 
     assert coordinator.data is not None
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone"
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
     assert coordinator.last_update_success is True
     coordinator.async_update_listeners.assert_called_once_with()
 
