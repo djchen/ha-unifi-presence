@@ -75,7 +75,7 @@ async def test_coordinator_offline_client_falls_back_to_mac_without_cached_metad
     data = await coordinator._async_update_data()
 
     assert data.device_states[mac] is False
-    assert data.client_info[mac]["name"] == mac
+    assert data.clients[mac].name == mac
     mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
 
@@ -118,7 +118,7 @@ async def test_offline_tracked_client_uses_clients_all_name_when_available(
     data = await coordinator._async_update_data()
 
     assert data.device_states[mac] is True
-    assert data.client_info[mac]["name"] == "Dan's Renamed Phone"
+    assert data.clients[mac].name == "Dan's Renamed Phone"
     assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
 
 
@@ -143,7 +143,7 @@ async def test_offline_tracked_client_keeps_cached_metadata_when_clients_all_stu
     data = await coordinator._async_update_data()
 
     assert data.device_states[mac] is True
-    assert data.client_info[mac]["name"] == "Dan Phone"
+    assert data.clients[mac].name == "Dan Phone"
     assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
 
 
@@ -162,7 +162,7 @@ async def test_offline_tracked_client_uses_clients_all_name_on_cold_start(
     data = await coordinator._async_update_data()
 
     assert data.device_states[mac] is False
-    assert data.client_info[mac]["name"] == "Dan Phone"
+    assert data.clients[mac].name == "Dan Phone"
     mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
 
@@ -185,7 +185,7 @@ async def test_active_client_with_blank_metadata_preserves_previous_info(
     data = await coordinator._async_update_data()
 
     assert data.device_states[mac] is True
-    assert data.client_info[mac]["name"] == "Dan Phone"
+    assert data.clients[mac].name == "Dan Phone"
 
 
 async def test_coordinator_fallback_interval(
@@ -291,7 +291,7 @@ async def test_async_refresh_notifies_listeners_on_metadata_only_change(
     await coordinator.async_refresh()
 
     assert coordinator.async_update_listeners.call_count == 2
-    assert coordinator.data.client_info["aa:bb:cc:dd:ee:ff"]["name"] == "Dan Phone Updated"
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone Updated"
 
 
 async def test_fallback_poll_returns_new_data_on_state_change(

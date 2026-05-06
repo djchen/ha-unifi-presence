@@ -322,4 +322,4 @@ async def test_reauth_retry_refreshes_clients_all_and_preserves_prior_metadata(
         second_data = await coordinator._async_update_data()
 
     assert controller.clients_all.update.await_count == 3
-    assert second_data.client_info[mac]["name"] == "Dan Phone"
+    assert second_data.clients[mac].name == "Dan Phone"

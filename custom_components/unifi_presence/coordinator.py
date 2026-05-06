@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from json import JSONDecodeError
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING, cast
 
 import aiohttp
 import aiounifi
@@ -45,12 +45,6 @@ if TYPE_CHECKING:
     from .websocket import UnifiPresenceWebsocket
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class ClientInfo(TypedDict):
-    """Typed dictionary describing a single UniFi client."""
-
-    name: str
 
 
 @dataclass(slots=True)
@@ -92,11 +86,6 @@ class UnifiPresenceData:
     def device_states(self) -> dict[str, bool]:
         """Return per-device presence state for diagnostics and tests."""
         return {mac: client.is_home for mac, client in self.clients.items()}
-
-    @property
-    def client_info(self) -> dict[str, ClientInfo]:
-        """Return per-device metadata for diagnostics and tests."""
-        return {mac: {"name": client.name} for mac, client in self.clients.items()}
 
 
 class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
@@ -543,12 +532,11 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         clients = cast(dict[str, ClientLike], controller.clients)
         clients_all = cast(dict[str, ClientLike], controller.clients_all)
-        previous_info = self.data.client_info if self.data is not None else {}
         new_states: dict[str, TrackedClientState] = {}
 
         for mac in self._tracked_macs:
-            prior_info = previous_info.get(mac)
-            previous_name = prior_info["name"] if prior_info is not None else None
+            previous_state = self._client_states.get(mac)
+            previous_name = previous_state.name if previous_state is not None else None
             client = clients.get(mac)
             if client is not None:
                 last_seen = client.last_seen or None
