@@ -82,11 +82,6 @@ class UnifiPresenceData:
             for mac, state in self.clients.items()
         )
 
-    @property
-    def device_states(self) -> dict[str, bool]:
-        """Return per-device presence state for diagnostics and tests."""
-        return {mac: client.is_home for mac, client in self.clients.items()}
-
 
 class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     """Coordinator for UniFi client presence via WebSocket + fallback poll."""

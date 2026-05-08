@@ -34,14 +34,14 @@ async def test_heartbeat_expiry_marks_recently_offline_client_away(
         )
     )
 
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
     assert coordinator.heartbeat_expiry_count == 1
 
     freezer.tick(timedelta(seconds=coordinator.away_seconds + 1))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
 
-    assert coordinator.data.device_states[mac] is False
+    assert coordinator.data.clients[mac].is_home is False
     assert coordinator.heartbeat_expiry_count == 0
 
 
@@ -72,7 +72,7 @@ async def test_heartbeat_expiry_skips_client_when_newer_activity_arrives(
 
     coordinator._async_check_heartbeat_expiry()
 
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
     assert coordinator.heartbeat_expiry_count == 1
     # Verify expiry was refreshed forward based on the newer last_seen
     assert coordinator.data.clients[mac].expiry_ts is not None
@@ -127,7 +127,7 @@ async def test_heartbeat_expiry_preserves_last_update_success_false(
 
     # Establish device as home via WS
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
     assert coordinator.last_update_success is True
 
     # Simulate a controller failure
@@ -139,7 +139,7 @@ async def test_heartbeat_expiry_preserves_last_update_success_false(
     await hass.async_block_till_done()
 
     # Device should transition to away, but last_update_success must stay False
-    assert coordinator.data.device_states[mac] is False
+    assert coordinator.data.clients[mac].is_home is False
     assert coordinator.last_update_success is False
 
 
@@ -184,13 +184,13 @@ async def test_heartbeat_expiry_noop_when_already_away(
 
     # Device starts home
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
 
     # Expire it normally
     freezer.tick(timedelta(seconds=coordinator.away_seconds + 1))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert coordinator.data.device_states[mac] is False
+    assert coordinator.data.clients[mac].is_home is False
 
     # Re-inject a stale heartbeat entry for the already-away device
     coordinator.data.clients[mac].expiry_ts = int((dt_util.utcnow() - timedelta(seconds=1)).timestamp())
@@ -218,8 +218,8 @@ async def test_heartbeat_expiry_mixed_devices(
     # Both devices home
     coordinator.process_message(MagicMock(data={"mac": mac1, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
     coordinator.process_message(MagicMock(data={"mac": mac2, "name": "Jane Phone", "last_seen": int(now.timestamp())}))
-    assert coordinator.data.device_states[mac1] is True
-    assert coordinator.data.device_states[mac2] is True
+    assert coordinator.data.clients[mac1].is_home is True
+    assert coordinator.data.clients[mac2].is_home is True
     assert coordinator.heartbeat_expiry_count == 2
 
     # Expire mac1 only; mac2 gets a fresh websocket message first.
@@ -231,8 +231,8 @@ async def test_heartbeat_expiry_mixed_devices(
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
 
-    assert coordinator.data.device_states[mac1] is False
-    assert coordinator.data.device_states[mac2] is True
+    assert coordinator.data.clients[mac1].is_home is False
+    assert coordinator.data.clients[mac2].is_home is True
     # mac1 expired and removed, mac2 still tracked
     assert coordinator.heartbeat_expiry_count == 1
 
@@ -329,7 +329,7 @@ async def test_heartbeat_fires_at_scheduled_time(
 
     # Device comes home via WS
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
     assert coordinator._cancel_heartbeat_check is not None
 
     # Advance time and fire the scheduled callback.
@@ -337,6 +337,6 @@ async def test_heartbeat_fires_at_scheduled_time(
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
 
-    assert coordinator.data.device_states[mac] is False
+    assert coordinator.data.clients[mac].is_home is False
     # No more expiries — timer should be cleared
     assert coordinator._cancel_heartbeat_check is None

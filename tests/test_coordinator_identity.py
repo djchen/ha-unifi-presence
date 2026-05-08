@@ -227,7 +227,7 @@ async def test_out_of_order_ws_does_not_regress_presence(
 
     # First WS message: device seen now -> home
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
     assert coordinator._get_known_last_seen(mac) == now
 
     # Delayed/reordered WS message: stale timestamp from before the away threshold
@@ -235,7 +235,7 @@ async def test_out_of_order_ws_does_not_regress_presence(
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": stale}))
 
     # Should still be home — the stale timestamp must not overwrite the newer one
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
     assert coordinator._get_known_last_seen(mac) == now
 
 
@@ -253,7 +253,7 @@ async def test_stale_poll_does_not_regress_ws_last_seen(
 
     # WS message: device seen now
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
 
     # REST poll returns an older last_seen (e.g. stale cache on controller)
     stale = now - 10
@@ -261,7 +261,7 @@ async def test_stale_poll_does_not_regress_ws_last_seen(
     data = await coordinator._async_update_data()
 
     # The newer WS timestamp must be preserved
-    assert data.device_states[mac] is True
+    assert data.clients[mac].is_home is True
     assert coordinator._get_known_last_seen(mac) == now
 
 
@@ -279,14 +279,14 @@ async def test_poll_with_missing_last_seen_uses_cached(
 
     # WS message: device seen now
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
 
     # REST poll returns last_seen=0 (missing/null from controller)
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=0)
     data = await coordinator._async_update_data()
 
     # Should still be home — 0 is treated as None and the cached timestamp is used
-    assert data.device_states[mac] is True
+    assert data.clients[mac].is_home is True
     assert coordinator._get_known_last_seen(mac) == now
 
 
@@ -304,7 +304,7 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     # WS message: device seen a while ago but within threshold
     initial_ts = now - 30
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": initial_ts}))
-    assert coordinator.data.device_states[mac] is True
+    assert coordinator.data.clients[mac].is_home is True
 
     # REST poll returns a newer timestamp, but it's past the away threshold
     newer_but_expired = now - coordinator.away_seconds - 5
@@ -320,4 +320,4 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     # The newer timestamp should be accepted (it's > old_ts)
     assert coordinator._get_known_last_seen(mac) == newer_but_expired
     # But it's still past the away threshold, so device is away
-    assert data.device_states[mac] is False
+    assert data.clients[mac].is_home is False

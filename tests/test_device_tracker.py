@@ -18,7 +18,7 @@ def _make_coordinator(data: UnifiPresenceData | None = None) -> MagicMock:
     coordinator = MagicMock()
     coordinator.data = data
     coordinator.last_update_success = True
-    coordinator.tracked_devices = list(data.device_states.keys()) if data else []
+    coordinator.tracked_devices = list(data.clients.keys()) if data else []
     coordinator.config_entry = MagicMock()
     coordinator.config_entry.entry_id = "test_entry_id"
     coordinator.site_id = "default"
@@ -170,7 +170,7 @@ def test_parallel_updates_is_zero() -> None:
 
 
 def test_tracker_is_connected_missing_mac() -> None:
-    """Test that is_connected returns False when MAC is not in device_states."""
+    """Test that is_connected returns False when MAC is not in clients."""
     # Data exists but does not contain the tracker's MAC
     data = _make_presence_data(home_macs=["11:22:33:44:55:66"])
     coordinator = _make_coordinator(data)

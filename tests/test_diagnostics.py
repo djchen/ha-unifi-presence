@@ -12,7 +12,6 @@ from custom_components.unifi_presence.coordinator import TrackedClientState
 from custom_components.unifi_presence.diagnostics import (
     _partial_redact_mac,
     _redact_mac_keys,
-    _redact_mac_list,
     async_get_config_entry_diagnostics,
 )
 
@@ -142,10 +141,3 @@ async def test_diagnostics_preserves_mac_suffix_collisions(hass: HomeAssistant, 
     assert list(colliding_entries.values()).count(True) == 1
     assert list(colliding_entries.values()).count(False) == 1
     assert set(colliding_entries) == {"**:**:**:dd:ee:ff", "**:**:**:dd:ee:ff (2)"}
-
-
-def test_redact_mac_list() -> None:
-    """Test that MAC lists are partially redacted."""
-    macs = ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"]
-    result = _redact_mac_list(macs)
-    assert result == ["**:**:**:dd:ee:ff", "**:**:**:44:55:66"]

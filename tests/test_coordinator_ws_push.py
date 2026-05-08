@@ -33,7 +33,7 @@ async def test_process_message_updates_state(
 
     # First do a fallback poll to populate initial data (device away)
     data = await coordinator._async_update_data()
-    assert data.device_states["aa:bb:cc:dd:ee:ff"] is False
+    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is False
 
     # Simulate a WS message that brings the device home
     message = MagicMock()
@@ -45,7 +45,7 @@ async def test_process_message_updates_state(
     coordinator.process_message(message)
 
     # State should now be home
-    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
     assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
     assert coordinator.heartbeat_expiry_count == 1
 
@@ -61,7 +61,7 @@ async def test_process_message_updates_offline_client(
     initial_data = await coordinator._async_update_data()
     coordinator.async_set_updated_data(initial_data)
 
-    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is False
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is False
 
     message = MagicMock()
     message.data = {
@@ -71,7 +71,7 @@ async def test_process_message_updates_offline_client(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
     assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
     assert coordinator.heartbeat_expiry_count == 1
 
@@ -224,7 +224,7 @@ async def test_process_message_metadata_only_update_notifies_listeners(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     await coordinator.async_refresh()
 
-    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
     original_data = coordinator.data
     coordinator.async_update_listeners = MagicMock()
 
@@ -275,9 +275,9 @@ async def test_process_message_for_one_mac_preserves_unrelated_tracked_device_st
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.device_states[home_mac] is True
+    assert coordinator.data.clients[home_mac].is_home is True
     assert coordinator.data.clients[home_mac].name == "Dan Phone Updated"
-    assert coordinator.data.device_states[away_mac] is False
+    assert coordinator.data.clients[away_mac].is_home is False
     assert coordinator.data.clients[away_mac].name == "Jane Phone"
 
 
@@ -304,7 +304,7 @@ async def test_process_message_when_data_is_none(
 
     # Should have created data with the device home
     assert coordinator.data is not None
-    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
     assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
 
 
@@ -348,7 +348,7 @@ async def test_process_message_case_insensitive_mac(
     coordinator.process_message(message)
 
     # Should match after lowercasing
-    assert coordinator.data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
 
 
 # ── Malformed message tests ──────────────────────────────────────────────

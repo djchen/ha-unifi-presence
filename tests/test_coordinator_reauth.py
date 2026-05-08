@@ -36,7 +36,7 @@ async def test_coordinator_reauth_on_session_error(
     data = await coordinator._async_update_data()
 
     # Should have re-authenticated (reset _controller, called create_controller again) and succeeded
-    assert data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
     assert coordinator._controller is not None
 
 
@@ -81,7 +81,7 @@ async def test_coordinator_best_effort_clients_all_refresh_failure_uses_cached_d
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is True
+    assert data.clients[mac].is_home is True
     mock_coordinator_controller.clients.update_mock.assert_awaited_once()
 
 
@@ -129,7 +129,7 @@ async def test_coordinator_reauth_detaches_replaced_runtime_controller(
     ):
         data = await coordinator._async_update_data()
 
-    assert data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
     assert coordinator.controller is replacement_controller
     owned_session.detach.assert_called_once_with()
 
