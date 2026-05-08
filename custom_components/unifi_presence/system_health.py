@@ -30,7 +30,6 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
     coordinator_available = 0
     tracked_devices = 0
     websocket_connected = 0
-    devices_with_active_away_timers = 0
 
     for entry in config_entries:
         site = entry.data.get(CONF_SITE, DEFAULT_SITE)
@@ -49,14 +48,11 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
         if coordinator.websocket is not None and coordinator.websocket.available:
             websocket_connected += 1
 
-        devices_with_active_away_timers += coordinator.heartbeat_expiry_count
-
     return {
         "config_entry_count": len(config_entries),
         "loaded_entry_count": loaded_entries,
         "coordinator_available_count": coordinator_available,
         "websocket_connected_count": websocket_connected,
-        "devices_with_active_away_timers": devices_with_active_away_timers,
         "tracked_device_count": tracked_devices,
         "controllers": ", ".join(controller_targets) if controller_targets else "none",
     }

@@ -247,7 +247,6 @@ The integration also adds a system health summary to Home Assistant. It reports:
 - Number of configured and loaded UniFi Presence entries
 - Number of entries with successful coordinator updates
 - Number of active WebSocket connections
-- Number of devices still within the away timeout window
 - Total tracked device count
 - Configured controller host and site targets
 

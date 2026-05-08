@@ -120,7 +120,6 @@
       "loaded_entry_count": "Loaded entries",
       "coordinator_available_count": "Entries with successful polling",
       "websocket_connected_count": "Entries with connected WebSocket",
-      "devices_with_active_away_timers": "Devices within away timeout",
       "tracked_device_count": "Tracked devices",
       "controllers": "Configured controllers"
     }

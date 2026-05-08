@@ -415,4 +415,3 @@ def test_device_picker_translation_keys_exist_and_stay_aligned() -> None:
         assert "description" in doc["config"]["step"]["devices"]
         assert "ssl_verify" in doc["config"]["step"]["user"]["data_description"]
         assert "cannot_discover_devices" in doc["options"]["error"]
-        assert "devices_with_active_away_timers" in doc["system_health"]["info"]
