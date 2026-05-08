@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
@@ -21,6 +21,11 @@ from .websocket import UnifiPresenceWebsocket
 type UnifiPresenceConfigEntry = ConfigEntry[UnifiPresenceCoordinator]
 
 PLATFORMS: list[Platform] = [Platform.DEVICE_TRACKER]
+
+
+def _is_hass_stopping(hass: HomeAssistant) -> bool:
+    """Return whether Home Assistant is stopping."""
+    return hass.is_stopping
 
 
 @callback
@@ -67,39 +72,57 @@ async def _async_handle_entry_update(hass: HomeAssistant, entry: UnifiPresenceCo
 async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry) -> bool:
     """Set up UniFi Presence from a config entry."""
     coordinator = UnifiPresenceCoordinator(hass, entry)
+    shutdown_unsub: CALLBACK_TYPE | None = None
+    shutdown_handled = False
     try:
         await coordinator.async_config_entry_first_refresh()
 
         # Start WebSocket for real-time presence updates
-        if coordinator.controller is not None:
-            websocket = UnifiPresenceWebsocket(
-                hass,
-                lambda: coordinator.controller,
-                coordinator.process_message,
-            )
-            coordinator.websocket = websocket
+        coordinator.websocket = UnifiPresenceWebsocket(
+            hass,
+            lambda: coordinator.controller,
+            coordinator.process_message,
+        )
 
         entry.runtime_data = coordinator
 
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-        entry.async_on_unload(entry.add_update_listener(_async_handle_entry_update))
+        if _is_hass_stopping(hass):
+            coordinator.websocket.stop()
+            await coordinator.async_shutdown()
+            return False
 
         @callback
         def _async_shutdown(_event: object) -> None:
             """Stop runtime listeners and release owned sessions on shutdown."""
+            nonlocal shutdown_handled
+            shutdown_handled = True
             if coordinator.websocket is not None:
                 coordinator.websocket.stop()
             hass.async_create_task(coordinator.async_shutdown())
 
-        entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown))
+        shutdown_unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown)
 
-        if coordinator.websocket is not None:
-            coordinator.websocket.start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+        if _is_hass_stopping(hass):
+            if not shutdown_handled:
+                shutdown_unsub()
+                if coordinator.websocket is not None:
+                    coordinator.websocket.stop()
+                await coordinator.async_shutdown()
+            await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            return False
+
+        entry.async_on_unload(shutdown_unsub)
+        entry.async_on_unload(entry.add_update_listener(_async_handle_entry_update))
+        coordinator.websocket.start()
     except Exception:
-        if coordinator.websocket is not None:
-            coordinator.websocket.stop()
-        await coordinator.async_shutdown()
+        if shutdown_unsub is not None and not shutdown_handled:
+            shutdown_unsub()
+        if not shutdown_handled:
+            if coordinator.websocket is not None:
+                coordinator.websocket.stop()
+            await coordinator.async_shutdown()
         raise
 
     return True
