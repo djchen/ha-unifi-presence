@@ -94,8 +94,8 @@ async def test_async_unload_entry_releases_resources_even_when_platform_unload_f
     runtime_data.async_shutdown.assert_not_awaited()
 
 
-async def test_async_unload_entry_releases_controller_after_successful_platform_unload(hass: HomeAssistant) -> None:
-    """Test unload releases the runtime controller after platform unload succeeds."""
+async def test_async_unload_entry_leaves_coordinator_shutdown_to_entry_unload_callback(hass: HomeAssistant) -> None:
+    """Test direct unload only stops websocket; HA invokes coordinator unload callbacks."""
     entry = _make_config_entry(hass)
     websocket = MagicMock()
     websocket.stop_and_wait = AsyncMock()
@@ -108,7 +108,7 @@ async def test_async_unload_entry_releases_controller_after_successful_platform_
 
     assert unloaded is True
     websocket.stop_and_wait.assert_awaited_once()
-    runtime_data.async_shutdown.assert_awaited_once()
+    runtime_data.async_shutdown.assert_not_awaited()
 
 
 async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
@@ -181,22 +181,25 @@ async def test_unload_unregisters_shutdown_listener(
     ws = coordinator.websocket
     assert ws is not None
     ws.stop = MagicMock(wraps=ws.stop)
-    coordinator.async_shutdown = AsyncMock(wraps=coordinator.async_shutdown)
+    owned_session = MagicMock()
+    owned_session.closed = False
+    owned_session.detach = MagicMock()
+    mock_controller._unifi_presence_owned_session = owned_session
 
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
     assert ws.stop.call_count == 1
-    coordinator.async_shutdown.assert_awaited_once()
+    owned_session.detach.assert_called_once_with()
 
     ws.stop.reset_mock()
-    coordinator.async_shutdown.reset_mock()
+    owned_session.detach.reset_mock()
 
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
 
     ws.stop.assert_not_called()
-    coordinator.async_shutdown.assert_not_awaited()
+    owned_session.detach.assert_not_called()
 
 
 async def test_websocket_starts_after_shutdown_registration(

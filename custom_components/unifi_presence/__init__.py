@@ -137,6 +137,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntr
 
     if coordinator.websocket is not None:
         await coordinator.websocket.stop_and_wait()
-    await coordinator.async_shutdown()
 
     return True
