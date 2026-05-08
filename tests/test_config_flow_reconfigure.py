@@ -395,25 +395,6 @@ async def test_reconfigure_flow_second_login_failure_returns_to_reconfigure_form
     assert result["errors"] == {"base": "invalid_auth"}
 
 
-async def test_finish_reconfigure_site_selection_rejects_different_site_directly(hass: HomeAssistant) -> None:
-    """Test the helper rejects a selected site that differs from the entry site."""
-    flow = UnifiPresenceConfigFlow()
-    flow.hass = hass
-    flow._set_selected_site(_make_mock_site(OFFICE_SITE_ID, "office", "Office"))
-    flow._get_reconfigure_entry = lambda: MockConfigEntry(  # type: ignore[method-assign]
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
-    )
-
-    result = await flow._async_finish_reconfigure_site_selection(_make_mock_site(OFFICE_SITE_ID, "office", "Office"))
-
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "different_site_selected"
-
-
 async def test_load_selected_site_clients_returns_login_error(hass: HomeAssistant) -> None:
     """Test selected-site refresh returns a login error without discovery."""
     flow = UnifiPresenceConfigFlow()

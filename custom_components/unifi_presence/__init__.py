@@ -7,7 +7,13 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
-from .const import CONF_TRACKED_DEVICES
+from .const import (
+    CONF_AWAY_SECONDS,
+    CONF_FALLBACK_POLL_INTERVAL,
+    CONF_TRACKED_DEVICES,
+    DEFAULT_AWAY_SECONDS,
+    DEFAULT_FALLBACK_POLL_INTERVAL,
+)
 from .coordinator import UnifiPresenceCoordinator
 from .helpers import normalize_macs, tracker_unique_id
 from .websocket import UnifiPresenceWebsocket
@@ -36,12 +42,26 @@ def _async_remove_deselected_entities(
 
 
 async def _async_handle_entry_update(hass: HomeAssistant, entry: UnifiPresenceConfigEntry) -> None:
-    """Clean up deselected entities before Home Assistant reloads the entry."""
+    """Clean up deselected entities and reload after options changes."""
     coordinator = entry.runtime_data
-    removed_macs = set(normalize_macs(coordinator.tracked_devices)) - set(
-        normalize_macs(entry.options.get(CONF_TRACKED_DEVICES, []))
-    )
+    tracked_devices = normalize_macs(entry.options.get(CONF_TRACKED_DEVICES, []))
+    removed_macs = set(normalize_macs(coordinator.tracked_devices)) - set(tracked_devices)
     _async_remove_deselected_entities(hass, entry, removed_macs)
+
+    fallback_interval = entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
+    runtime_interval = (
+        int(coordinator.update_interval.total_seconds())
+        if coordinator.update_interval is not None
+        else DEFAULT_FALLBACK_POLL_INTERVAL
+    )
+    if (
+        tracked_devices == coordinator.tracked_devices
+        and entry.options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS) == coordinator.away_seconds
+        and fallback_interval == runtime_interval
+    ):
+        return
+
+    hass.config_entries.async_schedule_reload(entry.entry_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry) -> bool:
