@@ -69,7 +69,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
 
     @property
     def unique_id(self) -> str | None:
-        """Return the site-scoped unique ID for this tracker."""
+        """Return the site-scoped ID instead of ScannerEntity's MAC-only ID."""
         return self._attr_unique_id
 
     @property

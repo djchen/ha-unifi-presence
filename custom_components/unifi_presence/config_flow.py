@@ -52,7 +52,6 @@ from .helpers import (
     format_config_entry_title,
     format_current_client_label,
     format_missing_client_label,
-    format_site_config_entry_title,
     normalize_mac,
     normalize_macs,
     should_resolve_controller_site,
@@ -492,7 +491,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_update_reload_and_abort(
             reconfigure_entry,
             unique_id=self._site_id,
-            title=format_site_config_entry_title(site, self._host),
+            title=format_config_entry_title(site_title(site), self._host),
             data_updates={
                 CONF_HOST: self._host,
                 CONF_PORT: self._port,

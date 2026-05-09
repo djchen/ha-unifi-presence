@@ -110,11 +110,6 @@ def format_config_entry_title(site_title_value: str, host: str) -> str:
     return f"{site_title_value} ({host})"
 
 
-def format_site_config_entry_title(site: SiteLike, host: str) -> str:
-    """Return the Home Assistant config entry title for a site object."""
-    return format_config_entry_title(site_title(site), host)
-
-
 def format_current_client_label(name: str, mac: str) -> str:
     """Return the user-facing label for a current UniFi client."""
     normalized_mac = normalize_mac(mac)
