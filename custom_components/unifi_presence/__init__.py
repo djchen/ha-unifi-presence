@@ -14,11 +14,6 @@ type UnifiPresenceConfigEntry = ConfigEntry[UnifiPresenceCoordinator]
 PLATFORMS: list[Platform] = [Platform.DEVICE_TRACKER]
 
 
-def _is_hass_stopping(hass: HomeAssistant) -> bool:
-    """Return whether Home Assistant is stopping."""
-    return hass.is_stopping
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry) -> bool:
     """Set up UniFi Presence from a config entry."""
     coordinator = UnifiPresenceCoordinator(hass, entry)
@@ -36,7 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
 
         entry.runtime_data = coordinator
 
-        if _is_hass_stopping(hass):
+        if bool(hass.is_stopping):
             coordinator.websocket.stop()
             await coordinator.async_shutdown()
             return False
@@ -54,7 +49,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-        if _is_hass_stopping(hass):
+        if bool(hass.is_stopping):
             if not shutdown_handled:
                 shutdown_unsub()
                 if coordinator.websocket is not None:
