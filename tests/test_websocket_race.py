@@ -278,3 +278,5 @@ async def test_runner_ignores_cleanup_from_stale_task_reference(hass: HomeAssist
     replacement_task.cancel()
     with suppress(asyncio.CancelledError):
         await replacement_task
+
+    ws.stop()

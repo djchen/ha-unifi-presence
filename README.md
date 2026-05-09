@@ -25,7 +25,7 @@ Auto-discovery of the controller is intentionally not included. The official int
 ## Requirements
 
 - Home Assistant 2026.3.0 or later
-- Python 3.14.3 or later
+- Python 3.14.4 or later
 - A UniFi Network controller, either UniFi OS or legacy
 - A local UniFi user account with permission to read clients
 
@@ -247,7 +247,6 @@ The integration also adds a system health summary to Home Assistant. It reports:
 - Number of configured and loaded UniFi Presence entries
 - Number of entries with successful coordinator updates
 - Number of active WebSocket connections
-- Number of devices still within the away timeout window
 - Total tracked device count
 - Configured controller host and site targets
 

@@ -47,12 +47,12 @@ from .helpers import (
     ControllerConnectionParams,
     SiteLike,
     async_close_controller,
+    config_entry_site_id,
     create_controller,
     create_controller_with_resolved_site,
     format_config_entry_title,
     format_current_client_label,
     format_missing_client_label,
-    format_site_config_entry_title,
     normalize_mac,
     normalize_macs,
     should_resolve_controller_site,
@@ -65,14 +65,10 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-type SiteStepTarget = Literal["user", "reconfigure"]
 type FlowErrorKey = Literal[
     "invalid_auth",
     "cannot_connect",
     "cannot_discover_devices",
-    "invalid_site",
-    "no_devices",
-    "no_tracked_devices",
     "unknown",
 ]
 
@@ -182,6 +178,25 @@ def _is_legacy_or_missing_site_identity(entry_unique_id: str | None) -> bool:
 
 
 @callback
+def _async_remove_deselected_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    removed_macs: set[str],
+) -> None:
+    """Remove entity registry entries for explicitly deselected tracked clients."""
+    if not removed_macs:
+        return
+
+    entity_registry = er.async_get(hass)
+    site_id = config_entry_site_id(entry)
+    removed_unique_ids = {tracker_unique_id(site_id, mac) for mac in removed_macs}
+
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if registry_entry.unique_id in removed_unique_ids:
+            entity_registry.async_remove(registry_entry.entity_id)
+
+
+@callback
 def _async_migrate_tracker_unique_ids(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -194,21 +209,20 @@ def _async_migrate_tracker_unique_ids(
         return
 
     entity_registry = er.async_get(hass)
+    legacy_prefix = f"{old_site_id}-"
 
     for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
-        # Extract the MAC from the last segment of "{site_id}-{mac}".
-        # rsplit with maxsplit=1 handles site IDs containing dashes.
-        # Entities whose unique_id lacks a dash are safely skipped because
-        # the reconstructed legacy_unique_id will never match.
-        for mac in normalize_macs([registry_entry.unique_id.rsplit("-", maxsplit=1)[-1]]):
-            legacy_unique_id = tracker_unique_id(old_site_id, mac)
-            if registry_entry.unique_id != legacy_unique_id:
-                continue
+        if not registry_entry.unique_id.startswith(legacy_prefix):
+            continue
 
-            entity_registry.async_update_entity(
-                registry_entry.entity_id,
-                new_unique_id=tracker_unique_id(new_site_id, mac),
-            )
+        mac = normalize_mac(registry_entry.unique_id.removeprefix(legacy_prefix))
+        if not mac:
+            continue
+
+        entity_registry.async_update_entity(
+            registry_entry.entity_id,
+            new_unique_id=tracker_unique_id(new_site_id, mac),
+        )
 
 
 def _build_client_options(
@@ -289,8 +303,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._site_title: str = ""
         self._available_sites: dict[str, SiteLike] = {}
         self._available_clients: dict[str, str] = {}
-        self._site_step_target: SiteStepTarget = "user"
-        self._single_site_discovery_error: FlowErrorKey | None = None
 
     def _current_connection_params(self, *, site: str | None = None) -> ControllerConnectionParams:
         """Return the current flow connection parameters."""
@@ -363,10 +375,10 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return None
 
-    async def _async_load_sites_for_current_connection(self, *, log_context: str) -> FlowErrorKey | None:
+    async def _async_load_sites_for_current_connection(self, *, log_context: str, site: str) -> FlowErrorKey | None:
         """Validate credentials and populate accessible sites."""
         controller, error = await self._async_validate_login(
-            params=self._current_connection_params(site="" if self._site_step_target == "user" else self._site),
+            params=self._current_connection_params(site=site),
             log_context=log_context,
         )
         if error is not None:
@@ -377,12 +389,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             self._available_sites = await _fetch_sites(controller)
             self._available_clients = {}
-            self._single_site_discovery_error = None
-
-            if self._site_step_target == "user" and len(self._available_sites) == 1:
-                site = next(iter(self._available_sites.values()))
-                self._set_selected_site(site)
-                self._single_site_discovery_error = await self._async_discover_clients_from_controller(controller)
         except Exception:
             _LOGGER.exception("Failed to fetch site list")
             return "cannot_connect"
@@ -451,23 +457,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def _async_finish_reconfigure_site_selection(self, site: SiteLike) -> ConfigFlowResult:
-        """Validate and save a selected site during reconfigure."""
+    async def _async_finish_reconfigure(self, site: SiteLike) -> ConfigFlowResult:
+        """Validate and save the already-configured site during reconfigure."""
         reconfigure_entry = self._get_reconfigure_entry()
-        stored_site = reconfigure_entry.data.get(CONF_SITE)
-        same_site = self._site_id == reconfigure_entry.unique_id or (
-            isinstance(stored_site, str) and stored_site in {self._site_id, self._site}
-        )
-        if (
-            not same_site
-            and _is_legacy_or_missing_site_identity(reconfigure_entry.unique_id)
-            and len(self._available_sites) == 1
-        ):
-            same_site = next(iter(self._available_sites.values())).site_id == self._site_id
-
-        if not same_site:
-            return self.async_abort(reason="different_site_selected")
-
         controller, error = await self._async_validate_login(
             params=self._current_connection_params(),
             log_context="UniFi reconfigure site validation",
@@ -492,7 +484,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_update_reload_and_abort(
             reconfigure_entry,
             unique_id=self._site_id,
-            title=format_site_config_entry_title(site, self._host),
+            title=format_config_entry_title(site_title(site), self._host),
             data_updates={
                 CONF_HOST: self._host,
                 CONF_PORT: self._port,
@@ -515,12 +507,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_finish_single_site_user_selection(self) -> ConfigFlowResult:
         """Complete user setup when only one site is available."""
-        if self._single_site_discovery_error is not None:
-            self._single_site_discovery_error = await self._async_load_selected_site_clients(
-                log_context="UniFi site client discovery",
-            )
-            if self._single_site_discovery_error is not None:
-                return self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
+        error = await self._async_load_selected_site_clients(log_context="UniFi site client discovery")
+        if error is not None:
+            return self._show_single_site_retry_form(errors={"base": error})
 
         if not self._available_clients:
             return self.async_abort(reason="no_clients_available")
@@ -544,9 +533,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             self._store_connection_input(user_input, ssl_verify_default=DEFAULT_SETUP_SSL_VERIFY)
-            self._site_step_target = "user"
 
-            error = await self._async_load_sites_for_current_connection(log_context="UniFi login")
+            error = await self._async_load_sites_for_current_connection(log_context="UniFi login", site="")
             if error is not None:
                 errors["base"] = error
             elif not self._available_sites:
@@ -562,23 +550,15 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_sites_available")
 
         if user_input is None:
-            result: ConfigFlowResult
             if len(self._available_sites) != 1:
-                result = self._show_site_form()
-            elif self._single_site_discovery_error is not None:
-                result = self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
-            else:
-                result = await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
-            return result
+                return self._show_site_form()
+            return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
 
         site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
         if site is None:
             return self._show_site_form(errors={"base": "invalid_site"})
 
         self._set_selected_site(site)
-        if self._site_step_target == "reconfigure":
-            return await self._async_finish_reconfigure_site_selection(site)
-
         return await self._async_finish_user_site_selection()
 
     async def async_step_single_site_retry(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
@@ -591,12 +571,6 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is None:
             return self._show_single_site_retry_form()
-
-        self._single_site_discovery_error = await self._async_load_selected_site_clients(
-            log_context="UniFi site client discovery"
-        )
-        if self._single_site_discovery_error is not None:
-            return self._show_single_site_retry_form(errors={"base": self._single_site_discovery_error})
 
         return await self._async_finish_user_site_selection()
 
@@ -666,9 +640,10 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 ssl_verify_default=bool(current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)),
             )
             self._site = str(current_data.get(CONF_SITE, DEFAULT_SITE))
-            self._site_step_target = "reconfigure"
 
-            error = await self._async_load_sites_for_current_connection(log_context="UniFi reconfigure")
+            error = await self._async_load_sites_for_current_connection(
+                log_context="UniFi reconfigure", site=self._site
+            )
             if error is not None:
                 errors["base"] = error
             elif not self._available_sites:
@@ -689,7 +664,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                         return self.async_abort(reason="different_site_selected")
 
                 self._set_selected_site(current_site)
-                return await self._async_finish_reconfigure_site_selection(current_site)
+                return await self._async_finish_reconfigure(current_site)
 
         return self._show_reconfigure_form(errors=errors)
 
@@ -779,6 +754,8 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             if not tracked:
                 errors["base"] = "no_tracked_devices"
             else:
+                removed_macs = set(current_tracked) - set(tracked)
+                _async_remove_deselected_entities(self.hass, self.config_entry, removed_macs)
                 return self.async_create_entry(
                     title="",
                     data={

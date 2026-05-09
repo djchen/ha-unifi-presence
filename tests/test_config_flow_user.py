@@ -116,11 +116,12 @@ async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
 
 async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAssistant) -> None:
     """Test that setup shows a discovery error if both client sources fail after login."""
-    controller = _mock_controller(clients_all_items=[])
-    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical fetch failed"))
-    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
+    site_controller = _mock_controller(clients_all_items=[])
+    client_controller = _mock_controller(clients_all_items=[])
+    client_controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical fetch failed"))
+    client_controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
 
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
@@ -176,29 +177,52 @@ async def test_user_step_active_client_refresh_failure_uses_historical_clients(
     assert result["step_id"] == "devices"
 
 
-async def test_user_step_single_site_reuses_site_fetch_for_client_discovery(hass: HomeAssistant) -> None:
-    """Test single-site setup does not perform a second controller login."""
+async def test_user_step_single_site_fetches_clients_with_selected_site(hass: HomeAssistant) -> None:
+    """Test single-site setup fetches clients with the selected UniFi site."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
-    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    site_controller = _mock_controller()
+    client_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller:
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]) as create_controller:
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
-    create_controller.assert_called_once()
+    assert create_controller.await_count == 2
+    assert (
+        _site_arg_from_call(
+            create_controller.await_args_list[0].args,
+            create_controller.await_args_list[0].kwargs,
+        )
+        == ""
+    )
+    assert (
+        _site_arg_from_call(
+            create_controller.await_args_list[1].args,
+            create_controller.await_args_list[1].kwargs,
+        )
+        == "default"
+    )
 
 
 async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: HomeAssistant) -> None:
     """Test single-site client discovery errors are retried on the next submit."""
-    controller = _mock_controller(clients_all_items=[])
-    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical clients unavailable"))
-    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active clients unavailable"))
+    site_controller = _mock_controller(clients_all_items=[])
+    failed_client_controller = _mock_controller(clients_all_items=[])
+    failed_client_controller.clients_all.update = AsyncMock(
+        side_effect=aiounifi.AiounifiException("historical clients unavailable")
+    )
+    failed_client_controller.clients.update = AsyncMock(
+        side_effect=aiounifi.AiounifiException("active clients unavailable")
+    )
 
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     retry_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
 
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=[controller, retry_controller]) as create_controller:
+    with patch(
+        PATCH_CREATE_CONTROLLER,
+        side_effect=[site_controller, failed_client_controller, retry_controller],
+    ) as create_controller:
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
         assert result["type"] is FlowResultType.FORM
@@ -209,14 +233,15 @@ async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: 
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
-    assert create_controller.await_count == 2
+    assert create_controller.await_count == 3
 
 
 async def test_user_step_no_clients_available_aborts(hass: HomeAssistant) -> None:
     """Test that setup aborts with the clearer no-clients reason."""
-    controller = _mock_controller(clients_all_items=[])
+    site_controller = _mock_controller()
+    client_controller = _mock_controller(clients_all_items=[])
 
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.ABORT
@@ -351,21 +376,6 @@ async def test_site_selection_without_available_sites_aborts(hass: HomeAssistant
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_sites_available"
-
-
-async def test_site_selection_reconfigure_target_uses_reconfigure_handler(hass: HomeAssistant) -> None:
-    """Test valid site submission uses the reconfigure completion path."""
-    flow = UnifiPresenceConfigFlow()
-    flow.hass = hass
-    flow._site_step_target = "reconfigure"
-    flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
-    flow._async_finish_reconfigure_site_selection = AsyncMock(
-        return_value={"type": FlowResultType.ABORT, "reason": "reconfigure_successful"}
-    )
-
-    result = await flow.async_step_site({CONF_SITE: DEFAULT_SITE_ID})
-
-    assert result == {"type": FlowResultType.ABORT, "reason": "reconfigure_successful"}
 
 
 async def test_site_selection_stores_short_name_and_site_id(hass: HomeAssistant) -> None:
@@ -526,7 +536,6 @@ async def test_finish_single_site_user_selection_keeps_retry_form_on_repeat_fail
     flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
     flow._site = "default"
     flow._site_title = "Home"
-    flow._single_site_discovery_error = "cannot_discover_devices"
     flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_discover_devices")
 
     result = await flow._async_finish_single_site_user_selection()
@@ -614,6 +623,8 @@ async def test_single_site_retry_keeps_form_when_retry_fails(hass: HomeAssistant
     flow._site = "default"
     flow._site_title = "Home"
     flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_discover_devices")
+    flow.context = {}
+    flow._site_id = DEFAULT_SITE_ID
 
     result = await flow.async_step_single_site_retry({})
 

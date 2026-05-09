@@ -7,13 +7,12 @@ import logging
 import random
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 import aiounifi
 from aiounifi.models.message import Message, MessageKey
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
 
@@ -49,11 +48,9 @@ class UnifiPresenceWebsocket:
         self._cancel_watchdog: CALLBACK_TYPE | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
         self._unsub_messages: Callable[[], None] | None = None
-        self._ws_started_at: datetime | None = None
         self.available = False
         self._stopped = False
         self._retry_delay = RETRY_TIMER
-        self._cancel_hass_stop = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self.stop)
 
     @callback
     def start(self) -> None:
@@ -117,7 +114,6 @@ class UnifiPresenceWebsocket:
     @callback
     def stop(self, *_: object) -> None:
         """Stop WebSocket connection."""
-        self._cancel_hass_stop()
         self._stopped = True
         self.available = False
 
@@ -125,7 +121,6 @@ class UnifiPresenceWebsocket:
         self._clear_watchdog()
 
         self._clear_message_subscription()
-        self._ws_started_at = None
 
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
@@ -189,7 +184,6 @@ class UnifiPresenceWebsocket:
 
         cast(Any, message_handler).new_data = _handle_message
         websocket_task = asyncio.create_task(api.start_websocket())
-        self._ws_started_at = datetime.now(UTC)
         self._arm_watchdog()
 
         try:
@@ -219,7 +213,7 @@ class UnifiPresenceWebsocket:
             return
 
         self._clear_watchdog()
-        self._set_available(False, force_signal=True)
+        self._set_available(False)
         self._schedule_retry()
 
     @callback
@@ -262,9 +256,9 @@ class UnifiPresenceWebsocket:
         self._clear_retry()
 
     @callback
-    def _set_available(self, available: bool, *, force_signal: bool = False) -> None:
+    def _set_available(self, available: bool) -> None:
         """Update availability state."""
-        if self.available == available and not force_signal:
+        if self.available == available:
             return
 
         self.available = available
@@ -277,7 +271,6 @@ class UnifiPresenceWebsocket:
             return
 
         self._clear_watchdog()
-        self._ws_started_at = None
         self._replace_message_subscription()
         self._start_websocket_runner()
 
@@ -295,7 +288,7 @@ class UnifiPresenceWebsocket:
             return
 
         self._clear_retry()
-        self._set_available(False, force_signal=True)
+        self._set_available(False)
 
         async def _do_restart() -> None:
             current_task = asyncio.current_task()
@@ -314,7 +307,7 @@ class UnifiPresenceWebsocket:
             return
 
         self._clear_retry()
-        self._set_available(False, force_signal=True)
+        self._set_available(False)
 
         async def _do_reconnect() -> None:
             current_task = asyncio.current_task()
@@ -329,8 +322,6 @@ class UnifiPresenceWebsocket:
                     await api.login()
             except (
                 TimeoutError,
-                aiounifi.BadGateway,
-                aiounifi.ServiceUnavailable,
                 aiounifi.AiounifiException,
                 aiohttp.ClientError,
             ) as exc:

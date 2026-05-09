@@ -12,7 +12,7 @@ import aiohttp
 import aiounifi
 from aiounifi.models.message import Message
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import CONF_HOST
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -25,13 +25,13 @@ from .const import (
     CONF_TRACKED_DEVICES,
     DEFAULT_AWAY_SECONDS,
     DEFAULT_FALLBACK_POLL_INTERVAL,
-    DEFAULT_SITE,
     DOMAIN,
 )
 from .helpers import (
     ClientLike,
     ControllerConnectionParams,
     async_close_controller,
+    config_entry_site_id,
     create_controller,
     create_controller_with_resolved_site,
     normalize_mac,
@@ -61,7 +61,7 @@ class TrackedClientState:
 class UnifiPresenceData:
     """Container for coordinator data."""
 
-    __hash__ = object.__hash__
+    __hash__ = None  # type: ignore[assignment]
 
     clients: dict[str, TrackedClientState]
 
@@ -82,11 +82,6 @@ class UnifiPresenceData:
             for mac, state in self.clients.items()
         )
 
-    @property
-    def device_states(self) -> dict[str, bool]:
-        """Return per-device presence state for diagnostics and tests."""
-        return {mac: client.is_home for mac, client in self.clients.items()}
-
 
 class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     """Coordinator for UniFi client presence via WebSocket + fallback poll."""
@@ -94,7 +89,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     config_entry: ConfigEntry
     _client_states: dict[str, TrackedClientState]
     _cancel_heartbeat_check: CALLBACK_TYPE | None
-    _cancel_hass_stop: CALLBACK_TYPE
     _scheduled_heartbeat_ts: int | None
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
@@ -108,10 +102,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._client_states = {}
         self._cancel_heartbeat_check = None
         self._scheduled_heartbeat_ts = None
-        self._cancel_hass_stop = hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STOP,
-            self._clear_heartbeat_check,
-        )
+        self._shutdown_complete = False
 
         fallback_interval = config_entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
 
@@ -136,15 +127,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     @property
     def site_id(self) -> str:
         """Return the config entry site identifier used for tracker IDs."""
-        unique_id = self.config_entry.unique_id
-        if isinstance(unique_id, str) and unique_id:
-            return unique_id
-
-        entry_id = self.config_entry.entry_id
-        if isinstance(entry_id, str) and entry_id:
-            return entry_id
-
-        return DEFAULT_SITE
+        return config_entry_site_id(self.config_entry)
 
     @property
     def away_seconds(self) -> int:
@@ -166,7 +149,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def async_shutdown(self) -> None:
         """Release the current controller session, if owned by this integration."""
-        self._cancel_hass_stop()
+        if self._shutdown_complete:
+            return
+
+        self._shutdown_complete = True
         self._clear_heartbeat_check()
 
         self._client_states.clear()
@@ -297,9 +283,16 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         *,
         current: ClientLike | None = None,
         historical: ClientLike | None = None,
+        websocket_name: str | None = None,
+        websocket_hostname: str | None = None,
         previous_name: str | None = None,
     ) -> str:
         """Resolve a display name from live, historical, cached, then MAC data."""
+        if websocket_name:
+            return websocket_name
+        if websocket_hostname:
+            return websocket_hostname
+
         for client in (current, historical):
             if client is None:
                 continue
@@ -312,18 +305,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             return previous_name
 
         return mac
-
-    @callback
-    def _sync_public_data_reference(self) -> UnifiPresenceData:
-        """Ensure the published data object references the current state mapping."""
-        current_data = cast(UnifiPresenceData | None, self.data)
-        if current_data is None:
-            current_data = UnifiPresenceData(clients=self._client_states)
-            self.data = current_data
-        elif current_data.clients is not self._client_states:
-            current_data.clients = self._client_states
-
-        return current_data
 
     @callback
     def _update_single_device_state(
@@ -345,7 +326,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             expiry_ts=expiry_ts,
         )
         if previous == updated_state:
-            self._sync_public_data_reference()
+            if cast(UnifiPresenceData | None, self.data) is None:
+                self.data = UnifiPresenceData(clients=self._client_states)
             if not recovered:
                 return
 
@@ -361,7 +343,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             previous.name = name
             previous.last_seen_ts = last_seen_ts
             previous.expiry_ts = expiry_ts
-        self._sync_public_data_reference()
+        if cast(UnifiPresenceData | None, self.data) is None:
+            self.data = UnifiPresenceData(clients=self._client_states)
         self.last_update_success = True
         if not public_changed and not recovered:
             return
@@ -385,7 +368,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         matters for heartbeat-only transitions: a device going ``not_home``
         due to expiry should not look like a successful REST poll.
         """
-        self._sync_public_data_reference()
+        if cast(UnifiPresenceData | None, self.data) is None:
+            self.data = UnifiPresenceData(clients=self._client_states)
         self.async_update_listeners()
 
     @callback
@@ -465,10 +449,13 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             last_seen = last_seen_raw
 
         previous_state = self._client_states.get(mac)
+        name_raw = raw.get("name")
+        hostname_raw = raw.get("hostname")
         name = self._resolve_client_display_name(
             mac,
-            current=cast(ClientLike, _MessageClientView(raw)),
             previous_name=previous_state.name if previous_state is not None else None,
+            websocket_name=name_raw if isinstance(name_raw, str) else None,
+            websocket_hostname=hostname_raw if isinstance(hostname_raw, str) else None,
         )
 
         is_home, effective_last_seen, expiry_ts = self._apply_presence_observation(mac, last_seen=last_seen)
@@ -490,7 +477,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         await controller.clients.update()
 
-    def _cannot_connect_update_failed(self, err: Exception) -> UpdateFailed:
+    def _cannot_connect_update_failed(self) -> UpdateFailed:
         """Build the standard controller connectivity update failure."""
         return UpdateFailed(
             translation_domain=DOMAIN,
@@ -516,14 +503,14 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                     translation_key="credentials_rejected",
                 ) from err
             except (TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError) as err:
-                raise self._cannot_connect_update_failed(err) from err
+                raise self._cannot_connect_update_failed() from err
 
             if self.websocket is not None:
                 self.websocket.restart_with_current_controller()
 
             return controller
         except (TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError) as err:
-            raise self._cannot_connect_update_failed(err) from err
+            raise self._cannot_connect_update_failed() from err
 
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
@@ -565,19 +552,11 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         new_data = UnifiPresenceData(clients=new_states)
         self._reschedule_heartbeat_check()
         if self.data is not None and new_data == self.data:
-            self._sync_public_data_reference()
+            self._client_states = self.data.clients
+            for mac, new_state in new_states.items():
+                current_state = self._client_states[mac]
+                current_state.last_seen_ts = new_state.last_seen_ts
+                current_state.expiry_ts = new_state.expiry_ts
             return self.data
 
         return new_data
-
-
-class _MessageClientView:
-    """Adapter exposing message payload fields through the ClientLike protocol."""
-
-    def __init__(self, raw: dict[str, object]) -> None:
-        """Initialize the message view."""
-        name_raw = raw.get("name")
-        hostname_raw = raw.get("hostname")
-        self.name = name_raw if isinstance(name_raw, str) else None
-        self.hostname = hostname_raw if isinstance(hostname_raw, str) else None
-        self.last_seen = None

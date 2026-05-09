@@ -46,9 +46,9 @@ async def test_coordinator_fetches_clients(
 
     assert isinstance(data, UnifiPresenceData)
     # Client 1 seen just now -> home
-    assert data.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
     # Client 2 seen 120s ago with 60s threshold -> not_home
-    assert data.device_states["11:22:33:44:55:66"] is False
+    assert data.clients["11:22:33:44:55:66"].is_home is False
 
 
 async def test_coordinator_marks_unknown_device_not_home(
@@ -60,8 +60,8 @@ async def test_coordinator_marks_unknown_device_not_home(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.device_states["aa:bb:cc:dd:ee:ff"] is False
-    assert data.device_states["11:22:33:44:55:66"] is False
+    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is False
+    assert data.clients["11:22:33:44:55:66"].is_home is False
 
 
 async def test_coordinator_offline_client_falls_back_to_mac_without_cached_metadata(
@@ -74,7 +74,7 @@ async def test_coordinator_offline_client_falls_back_to_mac_without_cached_metad
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is False
+    assert data.clients[mac].is_home is False
     assert data.clients[mac].name == mac
     mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
@@ -117,7 +117,7 @@ async def test_offline_tracked_client_uses_clients_all_name_when_available(
 
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is True
+    assert data.clients[mac].is_home is True
     assert data.clients[mac].name == "Dan's Renamed Phone"
     assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
 
@@ -142,7 +142,7 @@ async def test_offline_tracked_client_keeps_cached_metadata_when_clients_all_stu
 
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is True
+    assert data.clients[mac].is_home is True
     assert data.clients[mac].name == "Dan Phone"
     assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
 
@@ -161,7 +161,7 @@ async def test_offline_tracked_client_uses_clients_all_name_on_cold_start(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is False
+    assert data.clients[mac].is_home is False
     assert data.clients[mac].name == "Dan Phone"
     mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
@@ -184,7 +184,7 @@ async def test_active_client_with_blank_metadata_preserves_previous_info(
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, last_seen=int(now.timestamp()))
     data = await coordinator._async_update_data()
 
-    assert data.device_states[mac] is True
+    assert data.clients[mac].is_home is True
     assert data.clients[mac].name == "Dan Phone"
 
 
@@ -218,7 +218,7 @@ async def test_fallback_poll_keeps_recently_missing_client_home_until_heartbeat_
 
     second_data = await coordinator._async_update_data()
 
-    assert second_data.device_states[mac] is True
+    assert second_data.clients[mac].is_home is True
     assert coordinator.heartbeat_expiry_count == 1
 
 
@@ -309,7 +309,7 @@ async def test_fallback_poll_returns_new_data_on_state_change(
 
     data1 = await coordinator._async_update_data()
     coordinator.async_set_updated_data(data1)
-    assert data1.device_states["aa:bb:cc:dd:ee:ff"] is True
+    assert data1.clients["aa:bb:cc:dd:ee:ff"].is_home is True
 
     # Simulate device going away: remove from active clients and age out
     # the cached timestamp past the away threshold
@@ -320,4 +320,4 @@ async def test_fallback_poll_returns_new_data_on_state_change(
 
     # State changed -> should return a new data object
     assert data2 is not data1
-    assert data2.device_states["aa:bb:cc:dd:ee:ff"] is False
+    assert data2.clients["aa:bb:cc:dd:ee:ff"].is_home is False

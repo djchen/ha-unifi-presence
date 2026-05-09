@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import cast
 
-from homeassistant.components.device_tracker import ScannerEntity, SourceType  # type: ignore[attr-defined]
+from homeassistant.components.device_tracker.config_entry import ScannerEntity
+from homeassistant.components.device_tracker.const import SourceType
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -68,7 +69,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
 
     @property
     def unique_id(self) -> str | None:
-        """Return the site-scoped unique ID for this tracker."""
+        """Return the site-scoped ID instead of ScannerEntity's MAC-only ID."""
         return self._attr_unique_id
 
     @property

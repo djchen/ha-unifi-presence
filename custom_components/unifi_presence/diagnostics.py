@@ -41,11 +41,6 @@ def _redact_mac_keys(data: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
-def _redact_mac_list(macs: list[str]) -> list[str]:
-    """Return a copy of a list with MAC addresses partially redacted."""
-    return [_partial_redact_mac(m) for m in macs]
-
-
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     entry: UnifiPresenceConfigEntry,
@@ -71,12 +66,18 @@ async def async_get_config_entry_diagnostics(
         websocket_connected = coordinator.websocket is not None and coordinator.websocket.available
         devices_with_active_away_timers = coordinator.heartbeat_expiry_count
 
-    device_states = coordinator_data.device_states if coordinator_data is not None else {}
+    device_states = (
+        {mac: client.is_home for mac, client in coordinator_data.clients.items()}
+        if coordinator_data is not None
+        else {}
+    )
 
     # Redact options containing MAC addresses
     redacted_options = dict(entry.options)
     if CONF_TRACKED_DEVICES in redacted_options:
-        redacted_options[CONF_TRACKED_DEVICES] = _redact_mac_list(redacted_options[CONF_TRACKED_DEVICES])
+        redacted_options[CONF_TRACKED_DEVICES] = [
+            _partial_redact_mac(mac) for mac in redacted_options[CONF_TRACKED_DEVICES]
+        ]
 
     return {
         "config_entry": {

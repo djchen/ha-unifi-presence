@@ -12,7 +12,6 @@ from custom_components.unifi_presence.coordinator import TrackedClientState
 from custom_components.unifi_presence.diagnostics import (
     _partial_redact_mac,
     _redact_mac_keys,
-    _redact_mac_list,
     async_get_config_entry_diagnostics,
 )
 
@@ -68,6 +67,9 @@ async def test_diagnostics_redacts_credentials(hass: HomeAssistant, loaded_entry
 
 async def test_diagnostics_websocket_none(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
     """Test that diagnostics reports websocket_connected=False when websocket is None."""
+    websocket = loaded_entry.runtime_data.websocket
+    assert websocket is not None
+    await websocket.stop_and_wait()
     loaded_entry.runtime_data.websocket = None
 
     result = await async_get_config_entry_diagnostics(hass, loaded_entry)
@@ -142,10 +144,3 @@ async def test_diagnostics_preserves_mac_suffix_collisions(hass: HomeAssistant, 
     assert list(colliding_entries.values()).count(True) == 1
     assert list(colliding_entries.values()).count(False) == 1
     assert set(colliding_entries) == {"**:**:**:dd:ee:ff", "**:**:**:dd:ee:ff (2)"}
-
-
-def test_redact_mac_list() -> None:
-    """Test that MAC lists are partially redacted."""
-    macs = ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"]
-    result = _redact_mac_list(macs)
-    assert result == ["**:**:**:dd:ee:ff", "**:**:**:44:55:66"]
