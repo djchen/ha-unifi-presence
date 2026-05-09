@@ -16,7 +16,7 @@ from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant, callback
@@ -175,6 +175,36 @@ def _is_legacy_or_missing_site_identity(entry_unique_id: str | None) -> bool:
     hex string (MongoDB ObjectId) that never contains underscores.
     """
     return entry_unique_id is None or "_" in entry_unique_id
+
+
+def _entry_site_id(entry: ConfigEntry) -> str:
+    """Return the site identifier used in tracker unique IDs."""
+    if isinstance(entry.unique_id, str) and entry.unique_id:
+        return entry.unique_id
+
+    if isinstance(entry.entry_id, str) and entry.entry_id:
+        return entry.entry_id
+
+    return DEFAULT_SITE
+
+
+@callback
+def _async_remove_deselected_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    removed_macs: set[str],
+) -> None:
+    """Remove entity registry entries for explicitly deselected tracked clients."""
+    if not removed_macs:
+        return
+
+    entity_registry = er.async_get(hass)
+    site_id = _entry_site_id(entry)
+    removed_unique_ids = {tracker_unique_id(site_id, mac) for mac in removed_macs}
+
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if registry_entry.unique_id in removed_unique_ids:
+            entity_registry.async_remove(registry_entry.entity_id)
 
 
 @callback
@@ -687,7 +717,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class UnifiPresenceOptionsFlow(OptionsFlow):
+class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
     """Handle options for UniFi Presence."""
 
     async def _async_fetch_available_clients(self) -> tuple[dict[str, str], bool]:
@@ -735,6 +765,8 @@ class UnifiPresenceOptionsFlow(OptionsFlow):
             if not tracked:
                 errors["base"] = "no_tracked_devices"
             else:
+                removed_macs = set(current_tracked) - set(tracked)
+                _async_remove_deselected_entities(self.hass, self.config_entry, removed_macs)
                 return self.async_create_entry(
                     title="",
                     data={

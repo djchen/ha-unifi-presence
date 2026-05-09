@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine, Generator
+import inspect
+from collections.abc import AsyncGenerator, Callable, Coroutine, Generator
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -305,13 +306,26 @@ def _bypass_setup(hass: HomeAssistant, enable_custom_integrations: None) -> Gene
 
 
 @pytest.fixture
-def coordinator_config_entry(hass: HomeAssistant) -> MagicMock:
+async def coordinator_config_entry(hass: HomeAssistant) -> AsyncGenerator[MagicMock]:
     """Create a mock config entry for coordinator tests."""
+    unload_callbacks: list[Callable[[], object]] = []
+
+    def _async_on_unload(callback: Callable[[], object]) -> Callable[[], object]:
+        unload_callbacks.append(callback)
+        return callback
+
     entry = MagicMock()
     entry.entry_id = "test_entry_id"
     entry.data = MOCK_CONFIG_DATA
     entry.options = MOCK_OPTIONS
-    return entry
+    entry.async_on_unload = MagicMock(side_effect=_async_on_unload)
+
+    yield entry
+
+    for unload_callback in reversed(unload_callbacks):
+        result = unload_callback()
+        if inspect.isawaitable(result):
+            await result
 
 
 @pytest.fixture

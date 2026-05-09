@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import cast
 
-from homeassistant.components.device_tracker import ScannerEntity, SourceType  # type: ignore[attr-defined]
+from homeassistant.components.device_tracker.config_entry import ScannerEntity
+from homeassistant.components.device_tracker.const import SourceType
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity

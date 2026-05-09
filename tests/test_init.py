@@ -16,10 +16,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence import (
     PLATFORMS,
-    _async_remove_deselected_entities,
     async_setup_entry,
     async_unload_entry,
 )
+from custom_components.unifi_presence.config_flow import _async_remove_deselected_entities
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
@@ -94,8 +94,8 @@ async def test_async_unload_entry_releases_resources_even_when_platform_unload_f
     runtime_data.async_shutdown.assert_not_awaited()
 
 
-async def test_async_unload_entry_leaves_coordinator_shutdown_to_entry_unload_callback(hass: HomeAssistant) -> None:
-    """Test direct unload only stops websocket; HA invokes coordinator unload callbacks."""
+async def test_async_unload_entry_shuts_down_coordinator(hass: HomeAssistant) -> None:
+    """Test direct unload stops websocket and releases coordinator resources."""
     entry = _make_config_entry(hass)
     websocket = MagicMock()
     websocket.stop_and_wait = AsyncMock()
@@ -108,7 +108,7 @@ async def test_async_unload_entry_leaves_coordinator_shutdown_to_entry_unload_ca
 
     assert unloaded is True
     websocket.stop_and_wait.assert_awaited_once()
-    runtime_data.async_shutdown.assert_not_awaited()
+    runtime_data.async_shutdown.assert_awaited_once()
 
 
 async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
@@ -398,10 +398,10 @@ async def test_offline_tracked_client_entity_is_not_home(
     assert missing_state.attributes["friendly_name"] == "11:22:33:44:55:66"
 
 
-async def test_options_update_removes_explicitly_deselected_entity_registry_entries(
+async def test_options_flow_removes_explicitly_deselected_entity_registry_entries(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test options updates remove entities for deselected tracked clients."""
+    """Test options flow removes entities for deselected tracked clients."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
@@ -424,22 +424,28 @@ async def test_options_update_removes_explicitly_deselected_entity_registry_entr
         suggested_object_id="jane_phone",
     )
 
+    result = await hass.config_entries.options.async_init(entry.entry_id)
     with patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload:
-        hass.config_entries.async_update_entry(
-            entry,
-            options={**entry.options, CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
+                CONF_AWAY_SECONDS: entry.options[CONF_AWAY_SECONDS],
+                CONF_FALLBACK_POLL_INTERVAL: entry.options[CONF_FALLBACK_POLL_INTERVAL],
+            },
         )
         await hass.async_block_till_done()
 
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entity_registry.async_get(kept_entry.entity_id) is not None
     assert entity_registry.async_get(removed_entry.entity_id) is None
     schedule_reload.assert_called_once_with(entry.entry_id)
 
 
-async def test_options_update_keeps_still_selected_missing_entity_registry_entries(
+async def test_options_flow_keeps_still_selected_missing_entity_registry_entries(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test options updates do not remove still-selected missing tracked clients."""
+    """Test options flow does not remove still-selected missing tracked clients."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
@@ -455,17 +461,19 @@ async def test_options_update_keeps_still_selected_missing_entity_registry_entri
         suggested_object_id="jane_phone",
     )
 
+    result = await hass.config_entries.options.async_init(entry.entry_id)
     with patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload:
-        hass.config_entries.async_update_entry(
-            entry,
-            options={
-                **entry.options,
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
                 CONF_AWAY_SECONDS: 120,
                 CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"],
+                CONF_FALLBACK_POLL_INTERVAL: entry.options[CONF_FALLBACK_POLL_INTERVAL],
             },
         )
         await hass.async_block_till_done()
 
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entity_registry.async_get(missing_entry.entity_id) is not None
     schedule_reload.assert_called_once_with(entry.entry_id)
 
@@ -490,10 +498,10 @@ async def test_data_update_does_not_schedule_listener_reload(
     schedule_reload.assert_not_called()
 
 
-async def test_reconfigure_schedules_one_reload_with_update_listener(
+async def test_reconfigure_schedules_one_reload(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test reconfigure reload is not duplicated by the runtime update listener."""
+    """Test reconfigure schedules a single reload after updating entry data."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
@@ -522,10 +530,10 @@ async def test_reconfigure_schedules_one_reload_with_update_listener(
     schedule_reload.assert_called_once_with(entry.entry_id)
 
 
-async def test_options_flow_saves_loaded_entry_with_update_listener(
+async def test_options_flow_saves_loaded_entry_and_reloads(
     hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
 ) -> None:
-    """Test options flow can save when the runtime update listener is registered."""
+    """Test options flow saves options and schedules a reload."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
@@ -554,7 +562,7 @@ async def test_remove_deselected_entities_noop_when_removed_macs_empty(hass: Hom
     """Test empty deselection sets skip entity-registry cleanup work."""
     entry = _make_config_entry(hass)
 
-    with patch("custom_components.unifi_presence.er.async_get") as async_get:
+    with patch("custom_components.unifi_presence.config_flow.er.async_get") as async_get:
         _async_remove_deselected_entities(hass, entry, set())
 
     async_get.assert_not_called()

@@ -67,6 +67,9 @@ async def test_diagnostics_redacts_credentials(hass: HomeAssistant, loaded_entry
 
 async def test_diagnostics_websocket_none(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
     """Test that diagnostics reports websocket_connected=False when websocket is None."""
+    websocket = loaded_entry.runtime_data.websocket
+    assert websocket is not None
+    await websocket.stop_and_wait()
     loaded_entry.runtime_data.websocket = None
 
     result = await async_get_config_entry_diagnostics(hass, loaded_entry)
