@@ -25,13 +25,13 @@ from .const import (
     CONF_TRACKED_DEVICES,
     DEFAULT_AWAY_SECONDS,
     DEFAULT_FALLBACK_POLL_INTERVAL,
-    DEFAULT_SITE,
     DOMAIN,
 )
 from .helpers import (
     ClientLike,
     ControllerConnectionParams,
     async_close_controller,
+    config_entry_site_id,
     create_controller,
     create_controller_with_resolved_site,
     normalize_mac,
@@ -127,15 +127,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     @property
     def site_id(self) -> str:
         """Return the config entry site identifier used for tracker IDs."""
-        unique_id = self.config_entry.unique_id
-        if isinstance(unique_id, str) and unique_id:
-            return unique_id
-
-        entry_id = self.config_entry.entry_id
-        if isinstance(entry_id, str) and entry_id:
-            return entry_id
-
-        return DEFAULT_SITE
+        return config_entry_site_id(self.config_entry)
 
     @property
     def away_seconds(self) -> int:
@@ -296,8 +288,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         previous_name: str | None = None,
     ) -> str:
         """Resolve a display name from live, historical, cached, then MAC data."""
-        if websocket_name or websocket_hostname:
-            return websocket_name or websocket_hostname or mac
+        if websocket_name:
+            return websocket_name
+        if websocket_hostname:
+            return websocket_hostname
 
         for client in (current, historical):
             if client is None:

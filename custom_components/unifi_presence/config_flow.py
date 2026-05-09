@@ -47,6 +47,7 @@ from .helpers import (
     ControllerConnectionParams,
     SiteLike,
     async_close_controller,
+    config_entry_site_id,
     create_controller,
     create_controller_with_resolved_site,
     format_config_entry_title,
@@ -176,17 +177,6 @@ def _is_legacy_or_missing_site_identity(entry_unique_id: str | None) -> bool:
     return entry_unique_id is None or "_" in entry_unique_id
 
 
-def _entry_site_id(entry: ConfigEntry) -> str:
-    """Return the site identifier used in tracker unique IDs."""
-    if isinstance(entry.unique_id, str) and entry.unique_id:
-        return entry.unique_id
-
-    if isinstance(entry.entry_id, str) and entry.entry_id:
-        return entry.entry_id
-
-    return DEFAULT_SITE
-
-
 @callback
 def _async_remove_deselected_entities(
     hass: HomeAssistant,
@@ -198,7 +188,7 @@ def _async_remove_deselected_entities(
         return
 
     entity_registry = er.async_get(hass)
-    site_id = _entry_site_id(entry)
+    site_id = config_entry_site_id(entry)
     removed_unique_ids = {tracker_unique_id(site_id, mac) for mac in removed_macs}
 
     for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
@@ -225,11 +215,14 @@ def _async_migrate_tracker_unique_ids(
         if not registry_entry.unique_id.startswith(legacy_prefix):
             continue
 
-        for mac in normalize_macs([registry_entry.unique_id.removeprefix(legacy_prefix)]):
-            entity_registry.async_update_entity(
-                registry_entry.entity_id,
-                new_unique_id=tracker_unique_id(new_site_id, mac),
-            )
+        mac = normalize_mac(registry_entry.unique_id.removeprefix(legacy_prefix))
+        if not mac:
+            continue
+
+        entity_registry.async_update_entity(
+            registry_entry.entity_id,
+            new_unique_id=tracker_unique_id(new_site_id, mac),
+        )
 
 
 def _build_client_options(
@@ -557,12 +550,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_sites_available")
 
         if user_input is None:
-            result: ConfigFlowResult
             if len(self._available_sites) != 1:
-                result = self._show_site_form()
-            else:
-                result = await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
-            return result
+                return self._show_site_form()
+            return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
 
         site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
         if site is None:

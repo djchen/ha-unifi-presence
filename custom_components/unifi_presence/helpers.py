@@ -10,6 +10,7 @@ from typing import Any, Protocol, cast
 from aiohttp import CookieJar
 from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import (
@@ -98,6 +99,17 @@ def normalize_macs(macs: Iterable[str]) -> tuple[str, ...]:
 def tracker_unique_id(site_id: str, mac: str) -> str:
     """Return the site-scoped unique ID for a tracked client."""
     return f"{site_id}-{normalize_mac(mac)}"
+
+
+def config_entry_site_id(entry: ConfigEntry) -> str:
+    """Return the config entry site identifier used for tracker IDs."""
+    if isinstance(entry.unique_id, str) and entry.unique_id:
+        return entry.unique_id
+
+    if isinstance(entry.entry_id, str) and entry.entry_id:
+        return entry.entry_id
+
+    return DEFAULT_SITE
 
 
 def site_title(site: SiteLike) -> str:
