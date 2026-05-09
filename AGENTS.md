@@ -7,7 +7,7 @@
 
 ## Setup And Verify
 
-- Use Python `3.14.3` from `.python-version`; activate `.venv` before repo commands: `source .venv/bin/activate`
+- Use Python `3.14.4` from `.python-version`; activate `.venv` before repo commands: `source .venv/bin/activate`
 - Install dev deps/hooks: `pip install ".[dev]" && pre-commit install`
 - CI-equivalent local check: `pre-commit run --all-files` then `PYTHONPATH=. pytest tests/ -v`; CI also runs HACS and hassfest from `.github/workflows/validate.yml`.
 - Pre-commit runs Ruff fixes/format plus `mypy --strict custom_components/unifi_presence/`; run standalone mypy only for focused type checks.

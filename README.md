@@ -25,7 +25,7 @@ Auto-discovery of the controller is intentionally not included. The official int
 ## Requirements
 
 - Home Assistant 2026.3.0 or later
-- Python 3.14.3 or later
+- Python 3.14.4 or later
 - A UniFi Network controller, either UniFi OS or legacy
 - A local UniFi user account with permission to read clients
 
