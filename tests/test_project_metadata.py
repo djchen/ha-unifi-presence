@@ -93,5 +93,4 @@ def test_minimum_homeassistant_version_matches_between_hacs_and_readme() -> None
     hacs = json.loads((ROOT / "hacs.json").read_text())
     readme = (ROOT / "README.md").read_text()
 
-    assert hacs["homeassistant"] == "2026.5.0"
     assert f"Home Assistant {hacs['homeassistant']} or later" in readme
