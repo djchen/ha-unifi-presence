@@ -86,3 +86,12 @@ def test_project_version_matches_between_manifest_and_pyproject() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
     assert manifest["version"] == pyproject["project"]["version"]
+
+
+def test_minimum_homeassistant_version_matches_between_hacs_and_readme() -> None:
+    """Test the minimum supported Home Assistant version is consistent."""
+    hacs = json.loads((ROOT / "hacs.json").read_text())
+    readme = (ROOT / "README.md").read_text()
+
+    assert hacs["homeassistant"] == "2026.5.0"
+    assert f"Home Assistant {hacs['homeassistant']} or later" in readme
