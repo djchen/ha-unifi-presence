@@ -1,16 +1,12 @@
 # UniFi Presence
 
-UniFi Presence is a Home Assistant custom integration for tracking people and devices with a UniFi Network controller.
-
-It keeps the setup focused on one thing: choose the clients you care about, then let Home Assistant update their presence with real-time WebSocket events and fallback polling.
+UniFi Presence is a Home Assistant custom integration for presence detection by looking at client devices connected to a Ubiquiti UniFi Network controller.
 
 ## Why not the official integration?
 
 The official [UniFi Network integration](https://www.home-assistant.io/integrations/unifi/) is the better choice if you want the full UniFi feature set in Home Assistant, including infrastructure devices, client entities, controls, sensors, and SSDP discovery on supported UniFi OS consoles.
 
-This project is the simpler "presence only" option. You pick the clients to track, and it creates only `device_tracker` entities for those devices.
-
-Auto-discovery of the controller is intentionally not included. The official integration already handles discovery for supported UniFi OS consoles, and duplicating that here could lead to confusing duplicate setup prompts.
+This project is the simpler "presence only" option. Nothing is tracked by default. You select the clients to track and only then will it create `device_tracker` entities. 
 
 ## Features
 
