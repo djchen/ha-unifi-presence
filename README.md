@@ -250,18 +250,19 @@ The integration also adds a system health summary to Home Assistant. It reports:
 
 ### Setup
 
+Install [uv](https://docs.astral.sh/uv/) first, then run:
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install ".[dev]"
-pre-commit install
+uv sync --group dev --locked --no-install-project
+uv run --locked --no-sync pre-commit install
 ```
+
+Activation is not required, and the project should not be installed into the uv environment for Home Assistant custom-component tests.
 
 ### Testing
 
 ```bash
-source .venv/bin/activate
-PYTHONPATH=. pytest tests/ -v
+PYTHONPATH=. uv run --locked --no-sync pytest tests/ -v
 ```
 
 Coverage is enforced at 98% minimum and runs automatically with pytest.
@@ -269,16 +270,14 @@ Coverage is enforced at 98% minimum and runs automatically with pytest.
 ### Linting & Formatting
 
 ```bash
-source .venv/bin/activate
-ruff check .
-ruff format --check .
+uv run --locked --no-sync ruff check .
+uv run --locked --no-sync ruff format --check .
 ```
 
 ### Type Checking
 
 ```bash
-source .venv/bin/activate
-mypy --strict custom_components/unifi_presence/
+uv run --locked --no-sync mypy --strict custom_components/unifi_presence/
 ```
 
 ## License
