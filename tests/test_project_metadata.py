@@ -73,7 +73,7 @@ def test_aiounifi_version_matches_between_manifest_and_pyproject() -> None:
     """Test aiounifi is pinned consistently in manifest and pyproject."""
     manifest = json.loads((ROOT / "custom_components" / "unifi_presence" / "manifest.json").read_text())
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    dev_dependencies = pyproject["project"]["optional-dependencies"]["dev"]
+    dev_dependencies = pyproject["dependency-groups"]["dev"]
     aiounifi_requirements = [dependency for dependency in dev_dependencies if dependency.startswith("aiounifi")]
 
     assert manifest["requirements"] == ["aiounifi==90"]
