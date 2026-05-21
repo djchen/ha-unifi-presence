@@ -5,13 +5,13 @@
 - Home Assistant custom integration only; runtime code is under `custom_components/unifi_presence`, with tests under `tests`. There is no standalone app, dev server, YAML setup path, controller auto-discovery, or non-`device_tracker` platform.
 - `__init__.py` creates `UnifiPresenceCoordinator`, performs first refresh, wires `UnifiPresenceWebsocket`, then forwards only `Platform.DEVICE_TRACKER`; `config_flow.py` owns setup, options, reauth, and reconfigure.
 
-## Setup And Verify
+## Commands
 
-- Use uv with Python `3.14.4` from `.python-version`: `uv sync --group dev --locked --no-install-project`
+- Use uv with Python `3.14.5` from `.python-version`: `uv sync --group dev --locked --no-install-project`; do not drop `--no-install-project` because Home Assistant custom-component tests scan `sys.path` as component directories.
 - Install hooks once: `uv run --locked --no-sync pre-commit install`
-- CI-equivalent local checks: `uv run --locked --no-sync pre-commit run --all-files` then `PYTHONPATH=. uv run --locked --no-sync pytest tests/ -v`; CI additionally runs HACS, hassfest, and zizmor via `.github/workflows/validate.yml`.
+- CI-equivalent local checks: `uv run --locked --no-sync pre-commit run --all-files` then `uv run --locked --no-sync pytest tests/ -v`; CI additionally runs HACS, hassfest, and zizmor via `.github/workflows/validate.yml`.
 - Pre-commit may edit files: Ruff runs with `--fix`, then `ruff-format`, then `mypy --strict custom_components/unifi_presence/`.
-- Focused tests still need `PYTHONPATH=.`; use `--no-cov` for narrow runs because `pyproject.toml` enforces 98% coverage, e.g. `PYTHONPATH=. uv run --locked --no-sync pytest tests/test_coordinator_heartbeat.py -k expiry -v --no-cov`.
+- Focused tests usually need `--no-cov` because `pyproject.toml` enforces 98% coverage, e.g. `uv run --locked --no-sync pytest tests/test_coordinator_heartbeat.py -k expiry -v --no-cov`.
 
 ## Architecture Traps
 
@@ -35,4 +35,4 @@
 - Config-flow tests use `enable_custom_integrations`; many also use `_bypass_setup` so entry creation does not run real integration setup.
 - Controller mocks need async `login`, `clients.update`, and `clients_all.update`; flow tests also need `sites.update`/`sites.values`; WebSocket tests need `messages.subscribe = MagicMock(return_value=MagicMock())`, `messages.new_data`, and `connectivity = MagicMock()`.
 - UI copy or flow-error edits must keep `strings.json` and `translations/en.json` keys aligned; tests assert high-churn picker/error keys and stale removals.
-- Keep release metadata in sync: `manifest.json` and `pyproject.toml` version, `aiounifi==90` in both, `hacs.json` HA minimum vs. `README.md`, and `manifest.json` `quality_scale` vs. `custom_components/unifi_presence/quality_scale.yaml` (`tests/test_project_metadata.py`).
+- Keep release metadata in sync: `pyproject.toml`, `manifest.json`, and `uv.lock` version; `aiounifi==90` in `pyproject.toml` and `manifest.json`; `hacs.json` HA minimum vs. `README.md`; and `manifest.json` `quality_scale` vs. `custom_components/unifi_presence/quality_scale.yaml` (`tests/test_project_metadata.py`, `.github/workflows/release.yml`).

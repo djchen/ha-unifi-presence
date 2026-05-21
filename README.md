@@ -21,7 +21,7 @@ This project is the simpler presence-only option. It tracks nothing by default: 
 ## Requirements
 
 - Home Assistant 2026.5.0 or later
-- Python 3.14.4 or later
+- Python 3.14.5 or later
 - A UniFi Network controller, either UniFi OS or legacy
 - A local UniFi user account with permission to read clients
 
@@ -262,7 +262,7 @@ Activation is not required, and the project should not be installed into the uv 
 ### Testing
 
 ```bash
-PYTHONPATH=. uv run --locked --no-sync pytest tests/ -v
+uv run --locked --no-sync pytest tests/ -v
 ```
 
 Coverage is enforced at 98% minimum and runs automatically with pytest.

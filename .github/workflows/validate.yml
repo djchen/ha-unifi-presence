@@ -44,7 +44,7 @@ jobs:
           enable-cache: true
       # Do not install the repo editable; Home Assistant scans sys.path as custom-component directories.
       - run: uv sync --group dev --locked --no-install-project
-      - run: PYTHONPATH=. uv run --locked --no-sync pytest tests/ -v
+      - run: uv run --locked --no-sync pytest tests/ -v
 
   hacs:
     name: HACS Validation
