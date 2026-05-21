@@ -37,7 +37,6 @@ from .const import (
     DEFAULT_AWAY_SECONDS,
     DEFAULT_FALLBACK_POLL_INTERVAL,
     DEFAULT_PORT,
-    DEFAULT_SETUP_SSL_VERIFY,
     DEFAULT_SITE,
     DEFAULT_SSL_VERIFY,
     DOMAIN,
@@ -86,7 +85,7 @@ def _build_user_schema() -> vol.Schema:
             vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
             vol.Required(CONF_USERNAME): str,
             vol.Required(CONF_PASSWORD): str,
-            vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SETUP_SSL_VERIFY): bool,
+            vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SSL_VERIFY): bool,
         }
     )
 
@@ -99,7 +98,7 @@ def _build_reconfigure_schema(current_data: Mapping[str, object]) -> vol.Schema:
             vol.Required(CONF_PORT, default=current_data.get(CONF_PORT, DEFAULT_PORT)): cv.port,
             vol.Required(CONF_USERNAME, default=current_data.get(CONF_USERNAME, "")): str,
             vol.Required(CONF_PASSWORD): str,
-            vol.Optional(CONF_SSL_VERIFY, default=current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)): bool,
+            vol.Optional(CONF_SSL_VERIFY, default=current_data[CONF_SSL_VERIFY]): bool,
         }
     )
 
@@ -298,7 +297,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._username: str = ""
         self._password: str = ""
         self._site: str = DEFAULT_SITE
-        self._ssl_verify: bool = DEFAULT_SETUP_SSL_VERIFY
+        self._ssl_verify: bool = DEFAULT_SSL_VERIFY
         self._site_id: str = ""
         self._site_title: str = ""
         self._available_sites: dict[str, SiteLike] = {}
@@ -532,7 +531,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._store_connection_input(user_input, ssl_verify_default=DEFAULT_SETUP_SSL_VERIFY)
+            self._store_connection_input(user_input, ssl_verify_default=DEFAULT_SSL_VERIFY)
 
             error = await self._async_load_sites_for_current_connection(log_context="UniFi login", site="")
             if error is not None:
@@ -579,7 +578,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._host = str(entry_data[CONF_HOST])
         self._port = _as_int(entry_data[CONF_PORT])
         self._site = str(entry_data.get(CONF_SITE, DEFAULT_SITE))
-        self._ssl_verify = bool(entry_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY))
+        self._ssl_verify = bool(entry_data[CONF_SSL_VERIFY])
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
@@ -637,7 +636,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._store_connection_input(
                 user_input,
-                ssl_verify_default=bool(current_data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)),
+                ssl_verify_default=bool(current_data[CONF_SSL_VERIFY]),
             )
             self._site = str(current_data.get(CONF_SITE, DEFAULT_SITE))
 

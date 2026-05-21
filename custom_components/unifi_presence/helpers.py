@@ -23,7 +23,6 @@ from .const import (
     CONF_SITE,
     CONF_SSL_VERIFY,
     DEFAULT_SITE,
-    DEFAULT_SSL_VERIFY,
 )
 
 CONTROLLER_LOGIN_TIMEOUT = 10
@@ -71,7 +70,7 @@ class ControllerConnectionParams:
             username=str(data[CONF_USERNAME]),
             password=str(data[CONF_PASSWORD]),
             site=str(data.get(CONF_SITE, DEFAULT_SITE) if site is None else site),
-            ssl_verify=bool(data.get(CONF_SSL_VERIFY, DEFAULT_SSL_VERIFY)),
+            ssl_verify=bool(data[CONF_SSL_VERIFY]),
         )
 
 
