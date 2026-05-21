@@ -21,7 +21,7 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: mypy
+        entry: uv run --locked --no-sync mypy
         args: [--strict, custom_components/unifi_presence/]
         language: system
         types: [python]
