@@ -11,7 +11,7 @@ repos:
       - id: check-added-large-files
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.13
+    rev: v0.15.14
     hooks:
       - id: ruff
         args: [--fix]
@@ -21,7 +21,8 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: uv run --locked --no-sync mypy
+        # The venv includes Home Assistant's uv dependency; use it only as a runner.
+        entry: uv run --no-config --locked --no-sync mypy
         args: [--strict, custom_components/unifi_presence/]
         language: system
         types: [python]

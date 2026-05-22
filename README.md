@@ -253,11 +253,11 @@ The integration also adds a system health summary to Home Assistant. It reports:
 Install [uv](https://docs.astral.sh/uv/) first, then run:
 
 ```bash
-uv sync --group dev --locked --no-install-project
+uv sync --locked
 uv run --locked --no-sync pre-commit install
 ```
 
-Activation is not required, and the project should not be installed into the uv environment for Home Assistant custom-component tests.
+Activation is not required, and `[tool.uv] package = false` prevents editable installation for Home Assistant custom-component tests.
 
 ### Testing
 
