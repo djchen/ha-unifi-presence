@@ -7,7 +7,7 @@
 
 ## Commands
 
-- Use uv with Python `3.14.5` from `.python-version`: `uv sync --group dev --locked --no-install-project`; do not drop `--no-install-project` because Home Assistant custom-component tests scan `sys.path` as component directories.
+- Use uv with Python `3.14.5` from `.python-version`: `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
 - Install hooks once: `uv run --locked --no-sync pre-commit install`
 - CI-equivalent local checks: `uv run --locked --no-sync pre-commit run --all-files` then `uv run --locked --no-sync pytest tests/ -v`; CI additionally runs HACS, hassfest, and zizmor via `.github/workflows/validate.yml`.
 - Pre-commit may edit files: Ruff runs with `--fix`, then `ruff-format`, then `mypy --strict custom_components/unifi_presence/`.

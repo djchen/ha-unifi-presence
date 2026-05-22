@@ -1021,7 +1021,7 @@ wheels = [
 [[package]]
 name = "ha-unifi-presence"
 version = "0.7.1"
-source = { editable = "." }
+source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
