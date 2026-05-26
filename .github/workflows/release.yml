@@ -11,41 +11,33 @@ on:
     branches: [main]
     types: [closed]
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   prepare:
     name: Prepare Release PR
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: main
           persist-credentials: false
           fetch-depth: 0
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version-file: '.python-version'
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           version-file: "pyproject.toml"
-          enable-cache: true
-
-      # Requires APP_CLIENT_ID and APP_PRIVATE_KEY secrets for the release GitHub App.
-      - id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          client-id: ${{ secrets.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
+          enable-cache: false
 
       - name: Validate release request
         env:
@@ -83,6 +75,15 @@ jobs:
           if parse(version) <= parse(pyproject_version):
               sys.exit(f"Requested version {version} must be greater than current version {pyproject_version}.")
           PY
+
+      # Requires APP_CLIENT_ID and APP_PRIVATE_KEY secrets for the release GitHub App.
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Check for duplicates
         id: duplicate-check
@@ -218,24 +219,16 @@ jobs:
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.event.pull_request.head.ref, 'release/v') &&
-      contains(github.event.pull_request.body, '<!-- ha-unifi-presence-release:')
+      startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           persist-credentials: false
           fetch-depth: 0
-
-      # Requires APP_CLIENT_ID and APP_PRIVATE_KEY secrets for the release GitHub App.
-      - id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          client-id: ${{ secrets.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: read
 
       - name: Validate merged release PR
         env:
@@ -275,6 +268,15 @@ jobs:
           if pyproject_version != version or manifest_version != version:
               sys.exit("Checked-out metadata does not match release version.")
           PY
+
+      # Requires APP_CLIENT_ID and APP_PRIVATE_KEY secrets for the release GitHub App.
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: read
 
       - name: Check for duplicate release
         env:
