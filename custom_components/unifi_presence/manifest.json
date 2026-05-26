@@ -11,5 +11,5 @@
   "loggers": ["aiounifi"],
   "quality_scale": "silver",
   "requirements": ["aiounifi==91"],
-  "version": "0.7.1"
+  "version": "0.8.0"
 }
