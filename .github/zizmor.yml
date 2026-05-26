@@ -1,0 +1,22 @@
+rules:
+  forbidden-uses:
+    config:
+      allow:
+        - actions/checkout
+        - actions/create-github-app-token
+        - actions/setup-python
+        - astral-sh/setup-uv
+        - hacs/action
+        - home-assistant/actions/hassfest
+        - zizmorcore/zizmor-action
+
+  stale-action-refs:
+    ignore:
+      # These upstream validation actions do not publish version tags; the workflows still pin exact commits.
+      - validate.yml:65
+      - validate.yml:78
+
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin
