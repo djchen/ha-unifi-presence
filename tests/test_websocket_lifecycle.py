@@ -168,6 +168,40 @@ async def test_websocket_startup_without_messages_stays_unavailable(hass: HomeAs
     ws.stop()
 
 
+async def test_websocket_runner_restores_new_data_after_exit(hass: HomeAssistant) -> None:
+    """Test the temporary WebSocket health wrapper is restored on runner exit."""
+    ws, controller, _ = make_websocket(hass, start_websocket_side_effect=RuntimeError("boom"))
+    original_new_data = controller.messages.new_data
+
+    with patch(
+        "custom_components.unifi_presence.websocket.async_call_later",
+        return_value=MagicMock(),
+    ):
+        ws.start()
+        await wait_for_task(ws.ws_task)
+
+    assert controller.messages.new_data is original_new_data
+
+    ws.stop()
+
+
+async def test_websocket_runner_restores_new_data_after_cancel(hass: HomeAssistant) -> None:
+    """Test the temporary WebSocket health wrapper is restored after cancellation."""
+    ws, controller, _ = make_websocket(hass)
+    hang = asyncio.Event()
+    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+    original_new_data = controller.messages.new_data
+
+    ws.start()
+    await wait_for_websocket_start(controller)
+
+    assert controller.messages.new_data is not original_new_data
+
+    await ws.stop_and_wait()
+
+    assert controller.messages.new_data is original_new_data
+
+
 async def test_start_with_none_controller_skips_subscribe(hass: HomeAssistant) -> None:
     """Test that start() handles a None controller gracefully."""
     on_message = MagicMock()
