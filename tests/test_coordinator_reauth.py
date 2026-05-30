@@ -94,7 +94,7 @@ async def test_coordinator_initial_timeout_raises_update_failed(
 
     with (
         patch(
-            "custom_components.unifi_presence.coordinator.create_controller",
+            "custom_components.unifi_presence.coordinator.create_controller_for_params",
             side_effect=TimeoutError,
         ),
         pytest.raises(UpdateFailed),
@@ -124,7 +124,7 @@ async def test_coordinator_reauth_detaches_replaced_runtime_controller(
     coordinator._controller = mock_coordinator_controller
 
     with patch(
-        "custom_components.unifi_presence.coordinator.create_controller",
+        "custom_components.unifi_presence.coordinator.create_controller_for_params",
         return_value=replacement_controller,
     ):
         data = await coordinator._async_update_data()
@@ -246,7 +246,7 @@ async def test_reauth_resets_controller_before_retry(
     controller.clients.update = AsyncMock(side_effect=make_reauth_side_effect(exception, recover=True))
 
     with patch(
-        "custom_components.unifi_presence.coordinator.create_controller",
+        "custom_components.unifi_presence.coordinator.create_controller_for_params",
         return_value=controller,
     ) as mock_create:
         coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -277,7 +277,7 @@ async def test_reauth_triggers_websocket_reconnect(
     mock_ws = MagicMock()
 
     with patch(
-        "custom_components.unifi_presence.coordinator.create_controller",
+        "custom_components.unifi_presence.coordinator.create_controller_for_params",
         return_value=controller,
     ):
         coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
@@ -310,7 +310,7 @@ async def test_reauth_retry_refreshes_clients_all_and_preserves_prior_metadata(
     controller.clients.update = AsyncMock()
 
     with patch(
-        "custom_components.unifi_presence.coordinator.create_controller",
+        "custom_components.unifi_presence.coordinator.create_controller_for_params",
         return_value=controller,
     ):
         coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)

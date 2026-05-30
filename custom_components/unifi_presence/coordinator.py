@@ -5,11 +5,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from json import JSONDecodeError
 from typing import TYPE_CHECKING, cast
 
-import aiohttp
-import aiounifi
 from aiounifi.models.message import Message
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
@@ -28,15 +25,18 @@ from .const import (
     DOMAIN,
 )
 from .helpers import (
+    UNIFI_AUTH_EXCEPTIONS,
+    UNIFI_COMMUNICATION_EXCEPTIONS,
     ClientLike,
+    ClientStoreRefreshPolicy,
     ControllerConnectionParams,
     async_close_controller,
+    async_refresh_client_stores,
     config_entry_site_id,
-    create_controller,
-    create_controller_with_resolved_site,
+    create_controller_for_params,
     normalize_mac,
     normalize_macs,
-    should_resolve_controller_site,
+    resolve_client_display_name,
 )
 
 if TYPE_CHECKING:
@@ -277,35 +277,6 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         is_home, expiry_ts = self._compute_presence_from_last_seen(effective_last_seen)
         return is_home, effective_last_seen, expiry_ts if is_home else None
 
-    @staticmethod
-    def _resolve_client_display_name(
-        mac: str,
-        *,
-        current: ClientLike | None = None,
-        historical: ClientLike | None = None,
-        websocket_name: str | None = None,
-        websocket_hostname: str | None = None,
-        previous_name: str | None = None,
-    ) -> str:
-        """Resolve a display name from live, historical, cached, then MAC data."""
-        if websocket_name:
-            return websocket_name
-        if websocket_hostname:
-            return websocket_hostname
-
-        for client in (current, historical):
-            if client is None:
-                continue
-            name = str(client.name or "")
-            hostname = str(client.hostname or "")
-            if name or hostname:
-                return name or hostname
-
-        if previous_name is not None:
-            return previous_name
-
-        return mac
-
     @callback
     def _update_single_device_state(
         self,
@@ -411,18 +382,12 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             return self._controller
 
         data = self.config_entry.data
-        params = ControllerConnectionParams.from_mapping(data)
-        if should_resolve_controller_site(params, unique_id=self.config_entry.unique_id):
-            self._controller, _ = await create_controller_with_resolved_site(
-                self.hass,
-                params,
-                unique_id=self.config_entry.unique_id,
-            )
-        else:
-            self._controller = await create_controller(
-                self.hass,
-                params,
-            )
+        self._controller = await create_controller_for_params(
+            self.hass,
+            ControllerConnectionParams.from_mapping(data),
+            unique_id=self.config_entry.unique_id,
+            resolve_legacy_site=True,
+        )
 
         return self._controller
 
@@ -451,7 +416,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         previous_state = self._client_states.get(mac)
         name_raw = raw.get("name")
         hostname_raw = raw.get("hostname")
-        name = self._resolve_client_display_name(
+        name = resolve_client_display_name(
             mac,
             previous_name=previous_state.name if previous_state is not None else None,
             websocket_name=name_raw if isinstance(name_raw, str) else None,
@@ -470,12 +435,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def _async_refresh_client_stores(self, controller: Controller) -> None:
         """Refresh UniFi client stores, with historical clients best-effort."""
-        try:
-            await controller.clients_all.update()
-        except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
-            _LOGGER.debug("Best-effort clients_all refresh failed; using cached data")
-
-        await controller.clients.update()
+        await async_refresh_client_stores(
+            controller,
+            policy=ClientStoreRefreshPolicy.RUNTIME,
+        )
 
     def _cannot_connect_update_failed(self) -> UpdateFailed:
         """Build the standard controller connectivity update failure."""
@@ -487,30 +450,32 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def _async_refresh_with_reauth(self) -> Controller:
         """Refresh client stores, re-authenticating once on session expiry."""
-        try:
-            controller = await self._ensure_controller()
-            await self._async_refresh_client_stores(controller)
-            return controller
-        except aiounifi.LoginRequired, aiounifi.Unauthorized:
-            _LOGGER.info("UniFi session expired, re-authenticating")
-            await self._async_close_runtime_controller()
+        reauth_attempted = False
+
+        for _attempt in range(2):
             try:
                 controller = await self._ensure_controller()
                 await self._async_refresh_client_stores(controller)
-            except (aiounifi.LoginRequired, aiounifi.Unauthorized) as err:
-                raise ConfigEntryAuthFailed(
-                    translation_domain=DOMAIN,
-                    translation_key="credentials_rejected",
-                ) from err
-            except (TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError) as err:
+            except UNIFI_AUTH_EXCEPTIONS as err:
+                if reauth_attempted:
+                    raise ConfigEntryAuthFailed(
+                        translation_domain=DOMAIN,
+                        translation_key="credentials_rejected",
+                    ) from err
+
+                _LOGGER.info("UniFi session expired, re-authenticating")
+                await self._async_close_runtime_controller()
+                reauth_attempted = True
+                continue
+            except UNIFI_COMMUNICATION_EXCEPTIONS as err:
                 raise self._cannot_connect_update_failed() from err
 
-            if self.websocket is not None:
+            if reauth_attempted and self.websocket is not None:
                 self.websocket.restart_with_current_controller()
 
             return controller
-        except (TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError) as err:
-            raise self._cannot_connect_update_failed() from err
+
+        raise RuntimeError("Unreachable reauthentication state")
 
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
@@ -527,14 +492,14 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
             client = clients.get(mac)
             if client is not None:
                 last_seen = client.last_seen or None
-                name = self._resolve_client_display_name(
+                name = resolve_client_display_name(
                     mac,
                     current=client,
                     previous_name=previous_name,
                 )
             else:
                 last_seen = None
-                name = self._resolve_client_display_name(
+                name = resolve_client_display_name(
                     mac,
                     historical=clients_all.get(mac),
                     previous_name=previous_name,

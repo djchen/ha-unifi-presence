@@ -31,7 +31,7 @@ from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client, _mock_controller
 
-PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller"
+PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
 
 
 def _make_config_entry(hass: HomeAssistant) -> MockConfigEntry:
@@ -510,7 +510,10 @@ async def test_reconfigure_schedules_one_reload(
 
     flow_controller = _mock_controller()
     with (
-        patch("custom_components.unifi_presence.config_flow.create_controller", return_value=flow_controller),
+        patch(
+            "custom_components.unifi_presence.config_flow.create_controller_for_params",
+            return_value=flow_controller,
+        ),
         patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload,
     ):
         result = await entry.start_reconfigure_flow(hass)

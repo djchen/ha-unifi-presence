@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
-from json import JSONDecodeError
 from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
-import aiohttp
-import aiounifi
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.config_entries import (
@@ -42,19 +39,21 @@ from .const import (
     DOMAIN,
 )
 from .helpers import (
+    UNIFI_AUTH_EXCEPTIONS,
+    UNIFI_COMMUNICATION_EXCEPTIONS,
     ClientLike,
+    ClientStoreRefreshPolicy,
     ControllerConnectionParams,
     SiteLike,
     async_close_controller,
+    async_refresh_client_stores,
+    build_client_labels_from_stores,
     config_entry_site_id,
-    create_controller,
-    create_controller_with_resolved_site,
+    create_controller_for_params,
     format_config_entry_title,
-    format_current_client_label,
     format_missing_client_label,
     normalize_mac,
     normalize_macs,
-    should_resolve_controller_site,
     site_title,
     tracker_unique_id,
 )
@@ -254,35 +253,14 @@ async def _fetch_sites(controller: Controller) -> dict[str, SiteLike]:
 
 async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     """Fetch all known clients from the UniFi controller."""
-    historical_refreshed = False
-    try:
-        await controller.clients_all.update()
-        historical_refreshed = True
-    except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
-        _LOGGER.debug("Failed to refresh historical UniFi clients")
-
-    active_refreshed = False
-    try:
-        await controller.clients.update()
-        active_refreshed = True
-    except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
-        _LOGGER.debug("Failed to refresh active UniFi clients")
-
-    if not historical_refreshed and not active_refreshed:
-        has_cached = any(controller.clients_all) or any(controller.clients)
-        if not has_cached:
-            msg = "Both active and historical client sources failed"
-            raise RuntimeError(msg)
-
-    clients: dict[str, str] = {}
-    for store in (controller.clients_all, controller.clients):
-        for mac, client in store.items():
-            client_obj = cast(ClientLike, client)
-            mac_lower = normalize_mac(mac)
-            name = client_obj.name or client_obj.hostname or mac_lower
-            clients[mac_lower] = format_current_client_label(str(name), mac_lower)
-
-    return clients
+    await async_refresh_client_stores(
+        controller,
+        policy=ClientStoreRefreshPolicy.DISCOVERY,
+    )
+    return build_client_labels_from_stores(
+        cast(Mapping[str, ClientLike], controller.clients_all),
+        cast(Mapping[str, ClientLike], controller.clients),
+    )
 
 
 class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -339,23 +317,19 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         params: ControllerConnectionParams,
         log_context: str,
         unique_id: str | None = None,
+        resolve_legacy_site: bool = False,
     ) -> tuple[Controller | None, FlowErrorKey | None]:
         """Attempt controller login and return (controller, error_key)."""
         try:
-            if unique_id is not None and should_resolve_controller_site(params, unique_id=unique_id):
-                controller, _ = await create_controller_with_resolved_site(
-                    self.hass,
-                    params,
-                    unique_id=unique_id,
-                )
-            else:
-                controller = await create_controller(
-                    self.hass,
-                    params,
-                )
-        except aiounifi.LoginRequired, aiounifi.Unauthorized:
+            controller = await create_controller_for_params(
+                self.hass,
+                params,
+                unique_id=unique_id,
+                resolve_legacy_site=resolve_legacy_site,
+            )
+        except UNIFI_AUTH_EXCEPTIONS:
             return None, "invalid_auth"
-        except TimeoutError, aiounifi.AiounifiException, aiohttp.ClientError, JSONDecodeError:
+        except UNIFI_COMMUNICATION_EXCEPTIONS:
             return None, "cannot_connect"
         except Exception:
             _LOGGER.exception("Unexpected exception during %s", log_context)
@@ -374,7 +348,12 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return None
 
-    async def _async_load_sites_for_current_connection(self, *, log_context: str, site: str) -> FlowErrorKey | None:
+    async def _async_load_sites_for_current_connection(
+        self,
+        *,
+        log_context: str,
+        site: str,
+    ) -> FlowErrorKey | None:
         """Validate credentials and populate accessible sites."""
         controller, error = await self._async_validate_login(
             params=self._current_connection_params(site=site),
@@ -499,26 +478,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(self._site_id)
         self._abort_if_unique_id_configured()
 
-        if len(self._available_sites) == 1:
-            return await self._async_finish_single_site_user_selection()
-
-        return await self._async_finish_multi_site_user_selection()
-
-    async def _async_finish_single_site_user_selection(self) -> ConfigFlowResult:
-        """Complete user setup when only one site is available."""
+        is_single_site = len(self._available_sites) == 1
         error = await self._async_load_selected_site_clients(log_context="UniFi site client discovery")
         if error is not None:
-            return self._show_single_site_retry_form(errors={"base": error})
-
-        if not self._available_clients:
-            return self.async_abort(reason="no_clients_available")
-
-        return await self.async_step_devices()
-
-    async def _async_finish_multi_site_user_selection(self) -> ConfigFlowResult:
-        """Complete user setup after explicit multi-site selection."""
-        error = await self._async_load_selected_site_clients(log_context="UniFi site client discovery")
-        if error is not None:
+            if is_single_site:
+                return self._show_single_site_retry_form(errors={"base": error})
             return self._show_site_form(errors={"base": error})
 
         if not self._available_clients:
@@ -551,7 +515,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             if len(self._available_sites) != 1:
                 return self._show_site_form()
-            return await self.async_step_site({CONF_SITE: next(iter(self._available_sites))})
+            self._set_selected_site(next(iter(self._available_sites.values())))
+            return await self._async_finish_user_site_selection()
 
         site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
         if site is None:
@@ -566,7 +531,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_sites_available")
 
         if len(self._available_sites) != 1:
-            return await self.async_step_site()
+            return self._show_site_form()
+
+        self._set_selected_site(next(iter(self._available_sites.values())))
 
         if user_input is None:
             return self._show_single_site_retry_form()
@@ -586,6 +553,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            reauth_entry = self._get_reauth_entry()
             controller, error = await self._async_validate_login(
                 params=ControllerConnectionParams(
                     host=self._host,
@@ -596,7 +564,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     ssl_verify=self._ssl_verify,
                 ),
                 log_context="UniFi re-authentication",
-                unique_id=self._get_reauth_entry().unique_id,
+                unique_id=reauth_entry.unique_id,
+                resolve_legacy_site=reauth_entry.unique_id is not None,
             )
             if error is not None:
                 errors["base"] = error
@@ -604,7 +573,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 assert controller is not None
                 await async_close_controller(controller)
                 return self.async_update_reload_and_abort(
-                    self._get_reauth_entry(),
+                    reauth_entry,
                     data_updates={
                         CONF_USERNAME: str(user_input[CONF_USERNAME]),
                         CONF_PASSWORD: str(user_input[CONF_PASSWORD]),
@@ -641,7 +610,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             self._site = str(current_data.get(CONF_SITE, DEFAULT_SITE))
 
             error = await self._async_load_sites_for_current_connection(
-                log_context="UniFi reconfigure", site=self._site
+                log_context="UniFi reconfigure",
+                site=self._site,
             )
             if error is not None:
                 errors["base"] = error
@@ -720,18 +690,12 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
 
             if controller is None:
                 data = self.config_entry.data
-                params = ControllerConnectionParams.from_mapping(data)
-                if should_resolve_controller_site(params, unique_id=self.config_entry.unique_id):
-                    controller, _ = await create_controller_with_resolved_site(
-                        self.hass,
-                        params,
-                        unique_id=self.config_entry.unique_id,
-                    )
-                else:
-                    controller = await create_controller(
-                        self.hass,
-                        params,
-                    )
+                controller = await create_controller_for_params(
+                    self.hass,
+                    ControllerConnectionParams.from_mapping(data),
+                    unique_id=self.config_entry.unique_id,
+                    resolve_legacy_site=True,
+                )
                 close_controller = True
 
             return await _fetch_all_clients(controller), False

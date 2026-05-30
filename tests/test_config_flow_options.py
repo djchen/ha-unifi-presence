@@ -214,7 +214,7 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
 
     with (
         patch(
-            "custom_components.unifi_presence.config_flow.create_controller_with_resolved_site",
+            "custom_components.unifi_presence.helpers.create_controller_with_resolved_site",
             return_value=(client_controller, "office"),
         ) as create_controller_with_resolved_site,
     ):

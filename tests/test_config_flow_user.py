@@ -57,58 +57,28 @@ async def test_user_step_shows_form(hass: HomeAssistant) -> None:
     assert result["step_id"] == "user"
 
 
-async def test_user_step_invalid_auth(hass: HomeAssistant) -> None:
-    """Test that invalid credentials show an error."""
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.LoginRequired):
+@pytest.mark.parametrize(
+    ("side_effect", "expected_error"),
+    [
+        (aiounifi.LoginRequired, "invalid_auth"),
+        (aiounifi.Unauthorized, "invalid_auth"),
+        (aiounifi.AiounifiException, "cannot_connect"),
+        (aiohttp.ClientError("offline"), "cannot_connect"),
+        (TimeoutError, "cannot_connect"),
+        (Exception("boom"), "unknown"),
+    ],
+)
+async def test_user_step_controller_errors(
+    hass: HomeAssistant,
+    side_effect: object,
+    expected_error: str,
+) -> None:
+    """Test controller creation errors map to the expected user-step form error."""
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=side_effect):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "invalid_auth"}
-
-
-async def test_user_step_unauthorized(hass: HomeAssistant) -> None:
-    """Test that Unauthorized (api.err.Invalid) shows an auth error."""
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.Unauthorized):
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "invalid_auth"}
-
-
-async def test_user_step_cannot_connect(hass: HomeAssistant) -> None:
-    """Test that connection errors show an error."""
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.AiounifiException):
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-
-async def test_user_step_client_error_shows_cannot_connect(hass: HomeAssistant) -> None:
-    """Test that aiohttp transport errors show a connectivity error."""
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-
-async def test_user_step_timeout_shows_cannot_connect(hass: HomeAssistant) -> None:
-    """Test that controller login timeouts show a connectivity error."""
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-
-async def test_user_step_unknown_error(hass: HomeAssistant) -> None:
-    """Test that unexpected errors surface as unknown."""
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("boom")):
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "unknown"}
+    assert result["errors"] == {"base": expected_error}
 
 
 # ── User step: client discovery ──────────────────────────────────────────
@@ -335,8 +305,12 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
     )
 
 
-async def test_site_selection_stale_site_id_shows_user_error(hass: HomeAssistant) -> None:
-    """Test stale site selections return to the site step with an explicit error."""
+@pytest.mark.parametrize("site_value", ["missing-site", 123])
+async def test_site_selection_invalid_site_value_shows_user_error(
+    hass: HomeAssistant,
+    site_value: object,
+) -> None:
+    """Test invalid site selections return a user-facing validation error."""
     flow = UnifiPresenceConfigFlow()
     flow.hass = hass
     flow._available_sites = {
@@ -344,23 +318,7 @@ async def test_site_selection_stale_site_id_shows_user_error(hass: HomeAssistant
         OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
     }
 
-    result = await flow.async_step_site({CONF_SITE: "missing-site"})
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "site"
-    assert result["errors"] == {"base": "invalid_site"}
-
-
-async def test_site_selection_malformed_site_value_shows_user_error(hass: HomeAssistant) -> None:
-    """Test malformed site selections return a user-facing validation error."""
-    flow = UnifiPresenceConfigFlow()
-    flow.hass = hass
-    flow._available_sites = {
-        DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
-        OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
-    }
-
-    result = await flow.async_step_site({CONF_SITE: 123})
+    result = await flow.async_step_site({CONF_SITE: site_value})
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
@@ -537,8 +495,10 @@ async def test_finish_single_site_user_selection_keeps_retry_form_on_repeat_fail
     flow._site = "default"
     flow._site_title = "Home"
     flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_discover_devices")
+    flow.context = {}
+    flow._site_id = DEFAULT_SITE_ID
 
-    result = await flow._async_finish_single_site_user_selection()
+    result = await flow.async_step_single_site_retry({})
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "single_site_retry"
@@ -547,15 +507,16 @@ async def test_finish_single_site_user_selection_keeps_retry_form_on_repeat_fail
 
 async def test_finish_multi_site_user_selection_returns_site_error(hass: HomeAssistant) -> None:
     """Test multi-site client discovery errors return to the site form."""
-    flow = UnifiPresenceConfigFlow()
-    flow.hass = hass
-    flow._available_sites = {
-        DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
-        OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
-    }
-    flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_connect")
+    site_controller = _mock_controller(
+        sites=[
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+        ]
+    )
 
-    result = await flow._async_finish_multi_site_user_selection()
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, TimeoutError]):
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
+        result = await async_configure_flow_step(hass, result, {CONF_SITE: DEFAULT_SITE_ID})
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
@@ -564,12 +525,17 @@ async def test_finish_multi_site_user_selection_returns_site_error(hass: HomeAss
 
 async def test_finish_multi_site_user_selection_aborts_without_clients(hass: HomeAssistant) -> None:
     """Test multi-site setup aborts when client discovery succeeds but finds nothing."""
-    flow = UnifiPresenceConfigFlow()
-    flow.hass = hass
-    flow._available_clients = {}
-    flow._async_load_selected_site_clients = AsyncMock(return_value=None)
+    site_controller = _mock_controller(
+        sites=[
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+        ]
+    )
+    client_controller = _mock_controller(clients_all_items=[], clients_items=[])
 
-    result = await flow._async_finish_multi_site_user_selection()
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]):
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
+        result = await async_configure_flow_step(hass, result, {CONF_SITE: DEFAULT_SITE_ID})
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_clients_available"
