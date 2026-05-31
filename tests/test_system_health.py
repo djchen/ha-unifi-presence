@@ -13,7 +13,7 @@ from custom_components.unifi_presence.system_health import (
 
 from .conftest import MOCK_OPTIONS, add_mock_config_entry
 
-PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller"
+PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
 
 
 async def test_system_health_info_reports_loaded_entry(

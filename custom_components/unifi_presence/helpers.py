@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
+from enum import Enum, auto
+from json import JSONDecodeError
 from typing import Any, Protocol, cast
 
+import aiohttp
+import aiounifi
 from aiohttp import CookieJar
 from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
@@ -27,6 +31,14 @@ from .const import (
 
 CONTROLLER_LOGIN_TIMEOUT = 10
 NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL = "No longer in UniFi Client Devices"
+
+UNIFI_AUTH_EXCEPTIONS: tuple[type[Exception], ...] = (aiounifi.LoginRequired, aiounifi.Unauthorized)
+UNIFI_COMMUNICATION_EXCEPTIONS: tuple[type[Exception], ...] = (
+    TimeoutError,
+    aiounifi.AiounifiException,
+    aiohttp.ClientError,
+    JSONDecodeError,
+)
 
 
 class SiteLike(Protocol):
@@ -72,6 +84,17 @@ class ControllerConnectionParams:
             site=str(data.get(CONF_SITE, DEFAULT_SITE) if site is None else site),
             ssl_verify=bool(data[CONF_SSL_VERIFY]),
         )
+
+
+class ClientStoreRefreshFailed(RuntimeError):
+    """Raised when client stores cannot be refreshed and no cache can be used."""
+
+
+class ClientStoreRefreshPolicy(Enum):
+    """Client-store refresh policy for runtime and setup discovery."""
+
+    DISCOVERY = auto()
+    RUNTIME = auto()
 
 
 def normalize_mac(mac: str) -> str:
@@ -133,13 +156,65 @@ def format_missing_client_label(mac: str) -> str:
     return f"{normalized_mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})"
 
 
+def resolve_client_display_name(
+    mac: str,
+    *,
+    current: ClientLike | None = None,
+    historical: ClientLike | None = None,
+    websocket_name: str | None = None,
+    websocket_hostname: str | None = None,
+    previous_name: str | None = None,
+) -> str:
+    """Resolve a display name from live, historical, cached, then MAC data."""
+    if websocket_name:
+        return websocket_name
+    if websocket_hostname:
+        return websocket_hostname
+
+    for client in (current, historical):
+        if client is None:
+            continue
+        name = str(client.name or "")
+        hostname = str(client.hostname or "")
+        if name or hostname:
+            return name or hostname
+
+    if previous_name is not None:
+        return previous_name
+
+    return mac
+
+
 def should_resolve_controller_site(
     params: ControllerConnectionParams,
     *,
     unique_id: str | None,
 ) -> bool:
     """Return whether a stored site value needs legacy normalization."""
-    return params.site != DEFAULT_SITE and (unique_id is None or params.site == unique_id or "_" in unique_id)
+    return (
+        bool(params.site)
+        and params.site != DEFAULT_SITE
+        and (unique_id is None or params.site == unique_id or "_" in unique_id)
+    )
+
+
+async def create_controller_for_params(
+    hass: HomeAssistant,
+    params: ControllerConnectionParams,
+    *,
+    unique_id: str | None = None,
+    resolve_legacy_site: bool = False,
+) -> Controller:
+    """Create a controller, resolving legacy stored site values when requested."""
+    if resolve_legacy_site and should_resolve_controller_site(params, unique_id=unique_id):
+        controller, _resolved_site = await create_controller_with_resolved_site(
+            hass,
+            params,
+            unique_id=unique_id,
+        )
+        return controller
+
+    return await create_controller(hass, params)
 
 
 async def create_controller_with_resolved_site(
@@ -175,6 +250,58 @@ async def create_controller_with_resolved_site(
 
     controller.connectivity.config.site = resolved_site
     return controller, resolved_site
+
+
+async def async_refresh_client_stores(
+    controller: Controller,
+    *,
+    policy: ClientStoreRefreshPolicy,
+) -> None:
+    """Refresh UniFi client stores while preserving caller-specific policy."""
+    historical_result, active_result = await asyncio.gather(
+        controller.clients_all.update(),
+        controller.clients.update(),
+        return_exceptions=True,
+    )
+
+    historical_refreshed = _client_store_refresh_succeeded(historical_result)
+    active_refreshed = _client_store_refresh_succeeded(active_result)
+
+    if policy is ClientStoreRefreshPolicy.RUNTIME and not active_refreshed:
+        assert isinstance(active_result, UNIFI_COMMUNICATION_EXCEPTIONS)
+        raise active_result
+
+    if policy is ClientStoreRefreshPolicy.DISCOVERY and not historical_refreshed and not active_refreshed:
+        has_cached = any(controller.clients_all) or any(controller.clients)
+        if not has_cached:
+            msg = "Both active and historical client sources failed"
+            raise ClientStoreRefreshFailed(msg)
+
+
+def _client_store_refresh_succeeded(result: object) -> bool:
+    """Return success for expected refresh results and re-raise unexpected errors."""
+    if not isinstance(result, BaseException):
+        return True
+
+    if isinstance(result, UNIFI_COMMUNICATION_EXCEPTIONS):
+        return False
+
+    raise result
+
+
+def build_client_labels_from_stores(
+    historical_clients: Mapping[str, ClientLike],
+    active_clients: Mapping[str, ClientLike],
+) -> dict[str, str]:
+    """Build picker labels from historical and active UniFi client stores."""
+    clients: dict[str, str] = {}
+    for store in (historical_clients, active_clients):
+        for mac, client in store.items():
+            mac_lower = normalize_mac(mac)
+            name = resolve_client_display_name(mac_lower, current=client)
+            clients[mac_lower] = format_current_client_label(str(name), mac_lower)
+
+    return clients
 
 
 async def async_close_controller(controller: Controller) -> None:

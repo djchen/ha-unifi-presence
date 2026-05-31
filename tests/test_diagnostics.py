@@ -17,7 +17,7 @@ from custom_components.unifi_presence.diagnostics import (
 
 from .conftest import MOCK_OPTIONS, add_mock_config_entry
 
-PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller"
+PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
 
 
 @pytest.fixture

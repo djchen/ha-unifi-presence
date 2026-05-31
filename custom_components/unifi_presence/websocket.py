@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from collections.abc import Callable, Coroutine
-from contextlib import suppress
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import contextmanager, suppress
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -161,51 +161,29 @@ class UnifiPresenceWebsocket:
             _LOGGER.warning("No controller available for WebSocket")
             return
 
-        # Intercept messages.new_data to detect the first inbound WS frame.
-        #
-        # messages.subscribe() cannot be used here because aiounifi's
-        # MessageHandler.handler() drops frames whose MessageKey is not in
-        # _subscribed_messages before iterating subscribers.  The first frame
-        # after connect may carry any key (device:sync, events, etc.), so a
-        # subscriber filtering on CLIENT would miss it.
-        #
-        # connectivity.ws_message_received is never reset between reconnects,
-        # so polling it would require timestamp bookkeeping and adds latency
-        # vs. the synchronous inline call here.
-        #
-        # The patch is restored in the finally block below.
-        message_handler = api.messages
-        original_new_data = cast(Any, message_handler).new_data
-
-        def _handle_message(message: bytes) -> None:
-            self._mark_connected()
+        with self._patched_new_data_for_health(api):
+            websocket_task = asyncio.create_task(api.start_websocket())
             self._arm_watchdog()
-            original_new_data(message)
 
-        cast(Any, message_handler).new_data = _handle_message
-        websocket_task = asyncio.create_task(api.start_websocket())
-        self._arm_watchdog()
-
-        try:
-            await websocket_task
-        except aiohttp.ClientConnectorError as err:
-            _LOGGER.error("WebSocket connector failed: %s", err)
-        except aiohttp.WSServerHandshakeError as err:
-            _LOGGER.error("WebSocket handshake failed with status %s: %s", err.status, err)
-        except aiounifi.WebsocketError:
-            _LOGGER.error("WebSocket disconnected")
-        except asyncio.CancelledError:
-            websocket_task.cancel()
-            with suppress(asyncio.CancelledError):
+            try:
                 await websocket_task
-            raise
-        except Exception:
-            _LOGGER.exception("Unexpected WebSocket error")
-        finally:
-            cast(Any, message_handler).new_data = original_new_data
-            is_active_runner = self.ws_task is asyncio.current_task()
-            if is_active_runner:
-                self.ws_task = None
+            except aiohttp.ClientConnectorError as err:
+                _LOGGER.error("WebSocket connector failed: %s", err)
+            except aiohttp.WSServerHandshakeError as err:
+                _LOGGER.error("WebSocket handshake failed with status %s: %s", err.status, err)
+            except aiounifi.WebsocketError:
+                _LOGGER.error("WebSocket disconnected")
+            except asyncio.CancelledError:
+                websocket_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await websocket_task
+                raise
+            except Exception:
+                _LOGGER.exception("Unexpected WebSocket error")
+            finally:
+                is_active_runner = self.ws_task is asyncio.current_task()
+                if is_active_runner:
+                    self.ws_task = None
 
         if not is_active_runner:
             return
@@ -215,6 +193,26 @@ class UnifiPresenceWebsocket:
         self._clear_watchdog()
         self._set_available(False)
         self._schedule_retry()
+
+    @contextmanager
+    def _patched_new_data_for_health(self, api: Controller) -> Iterator[None]:
+        """Temporarily mark WebSocket health from any inbound frame."""
+        # messages.subscribe() filters by MessageKey before calling subscribers.
+        # The first frame may use any key, so wrap new_data inline and restore it
+        # for every runner exit path.
+        message_handler = api.messages
+        original_new_data = cast(Any, message_handler).new_data
+
+        def _handle_message(message: bytes) -> None:
+            self._mark_connected()
+            self._arm_watchdog()
+            original_new_data(message)
+
+        cast(Any, message_handler).new_data = _handle_message
+        try:
+            yield
+        finally:
+            cast(Any, message_handler).new_data = original_new_data
 
     @callback
     def _schedule_retry(self) -> None:

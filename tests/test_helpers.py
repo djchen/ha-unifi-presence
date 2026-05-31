@@ -11,9 +11,14 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.helpers import (
+    ClientStoreRefreshFailed,
+    ClientStoreRefreshPolicy,
     ControllerConnectionParams,
     async_close_controller,
+    async_refresh_client_stores,
+    build_client_labels_from_stores,
     create_controller,
+    create_controller_for_params,
     create_controller_with_resolved_site,
     format_config_entry_title,
     format_current_client_label,
@@ -25,7 +30,7 @@ from custom_components.unifi_presence.helpers import (
     tracker_unique_id,
 )
 
-from .conftest import MOCK_CONFIG_DATA
+from .conftest import MOCK_CONFIG_DATA, _make_mock_client, _mock_controller
 
 _SSL_PARAMS = ControllerConnectionParams(
     host="192.168.1.1", port=443, username="admin", password="password", site="default", ssl_verify=True
@@ -172,6 +177,104 @@ def test_controller_connection_params_from_mapping_uses_override_site() -> None:
         site="office",
         ssl_verify=False,
     )
+
+
+async def test_create_controller_for_params_uses_legacy_site_resolution(hass: HomeAssistant) -> None:
+    """Test the shared controller helper delegates legacy site resolution."""
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="site-office-id",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+
+    with patch(
+        "custom_components.unifi_presence.helpers.create_controller_with_resolved_site",
+        return_value=(controller, "office"),
+    ) as create_resolved:
+        result = await create_controller_for_params(
+            hass,
+            params,
+            unique_id="192.168.1.1_office",
+            resolve_legacy_site=True,
+        )
+
+    assert result is controller
+    create_resolved.assert_awaited_once_with(hass, params, unique_id="192.168.1.1_office")
+
+
+async def test_create_controller_for_params_skips_resolution_for_new_setup(hass: HomeAssistant) -> None:
+    """Test the shared controller helper can create a site-scoped controller directly."""
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="office",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+
+    with patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller) as create_ctrl:
+        result = await create_controller_for_params(hass, params)
+
+    assert result is controller
+    create_ctrl.assert_awaited_once_with(hass, params)
+
+
+async def test_async_refresh_client_stores_allows_cached_discovery_data() -> None:
+    """Test setup/options refresh can proceed from cache when both sources fail."""
+    controller = _mock_controller(
+        clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone"))]
+    )
+    controller.clients_all.update = AsyncMock(side_effect=TimeoutError)
+    controller.clients.update = AsyncMock(side_effect=TimeoutError)
+
+    await async_refresh_client_stores(
+        controller,
+        policy=ClientStoreRefreshPolicy.DISCOVERY,
+    )
+
+    controller.clients_all.update.assert_awaited_once()
+    controller.clients.update.assert_awaited_once()
+
+
+async def test_async_refresh_client_stores_raises_without_cached_discovery_data() -> None:
+    """Test setup/options refresh fails when both sources fail with no cache."""
+    controller = _mock_controller(clients_all_items=[], clients_items=[])
+    controller.clients_all.update = AsyncMock(side_effect=TimeoutError)
+    controller.clients.update = AsyncMock(side_effect=TimeoutError)
+
+    with pytest.raises(ClientStoreRefreshFailed):
+        await async_refresh_client_stores(
+            controller,
+            policy=ClientStoreRefreshPolicy.DISCOVERY,
+        )
+
+
+async def test_async_refresh_client_stores_requires_active_runtime_refresh() -> None:
+    """Test runtime refresh keeps active clients as a required source."""
+    controller = _mock_controller(clients_all_items=[])
+    controller.clients.update = AsyncMock(side_effect=TimeoutError)
+
+    with pytest.raises(TimeoutError):
+        await async_refresh_client_stores(
+            controller,
+            policy=ClientStoreRefreshPolicy.RUNTIME,
+        )
+
+
+def test_build_client_labels_from_stores_active_wins_on_collision() -> None:
+    """Test active client labels override historical labels for the same MAC."""
+    labels = build_client_labels_from_stores(
+        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Old Name")},
+        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Current Name")},
+    )
+
+    assert labels == {"aa:bb:cc:dd:ee:ff": "Current Name (aa:bb:cc:dd:ee:ff)"}
 
 
 async def test_create_controller_closes_owned_session_on_login_failure(hass: HomeAssistant) -> None:

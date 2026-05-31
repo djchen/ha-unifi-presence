@@ -40,7 +40,7 @@ MOCK_OPTIONS = {
     CONF_FALLBACK_POLL_INTERVAL: 300,
 }
 
-PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.config_flow.create_controller"
+PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.config_flow.create_controller_for_params"
 DEFAULT_SITE_ID = "site-default-id"
 OFFICE_SITE_ID = "site-office-id"
 USER_STEP_INPUT = {k: v for k, v in MOCK_CONFIG_DATA.items() if k != CONF_SITE}
@@ -87,27 +87,20 @@ def _make_mock_site(site_id: str, name: str, description: str = "") -> MagicMock
     return site
 
 
-class _MockClientStore(dict):
+class _MockClientStore(dict[str, MagicMock]):
     """Dict-like store for mock clients that also has an async update method."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, items: list[tuple[str, MagicMock]] | None = None) -> None:
+        super().__init__(items or [])
         self.update_mock = AsyncMock()
 
     async def update(self) -> None:
         await self.update_mock()
 
 
-def _build_client_store(items: list[tuple[str, MagicMock]] | None = None) -> MagicMock:
+def _build_client_store(items: list[tuple[str, MagicMock]] | None = None) -> _MockClientStore:
     """Create a dict-like mock client store with async update support."""
-    store = MagicMock()
-    store.update = AsyncMock()
-    store.update_mock = store.update
-    item_list = items or []
-    store.items.return_value = item_list
-    store.__iter__.side_effect = lambda: iter(k for k, _v in item_list)
-    store.get = MagicMock(side_effect=dict(item_list).get)
-    return store
+    return _MockClientStore(items)
 
 
 def _build_controller(
@@ -121,13 +114,13 @@ def _build_controller(
     if clients_all is not None:
         controller.clients_all = clients_all
     else:
-        controller.clients_all = MagicMock()
-        controller.clients_all.update = AsyncMock()
-        controller.clients_all.get = MagicMock(return_value=None)
+        controller.clients_all = _MockClientStore()
     controller.login = AsyncMock()
     controller.messages = MagicMock()
     controller.messages.subscribe = MagicMock(return_value=MagicMock())
+    controller.messages.new_data = MagicMock()
     controller.connectivity = MagicMock()
+    controller.connectivity.ws_message_received = None
     controller.start_websocket = AsyncMock()
     return controller
 
@@ -160,9 +153,9 @@ _mock_controller = make_mock_controller
 
 
 def _site_arg_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-    """Return the ``site`` argument from a mocked create_controller() call.
+    """Return the ``site`` argument from a mocked controller-helper call.
 
-    The production signature is ``create_controller(hass, params)`` where
+    The production signature is ``create_controller_for_params(hass, params)`` where
     *params* is a ``ControllerConnectionParams`` dataclass.
     """
     if "params" in kwargs:
@@ -337,7 +330,7 @@ def mock_coordinator_controller() -> Generator[MagicMock]:
     )
 
     with patch(
-        "custom_components.unifi_presence.coordinator.create_controller",
+        "custom_components.unifi_presence.coordinator.create_controller_for_params",
         return_value=controller,
     ):
         yield controller
@@ -346,7 +339,5 @@ def mock_coordinator_controller() -> Generator[MagicMock]:
 @pytest.fixture
 def mock_controller() -> MagicMock:
     """Fully-wired mock aiounifi controller for integration tests."""
-    clients = MagicMock()
-    clients.update = AsyncMock()
-    clients.get = MagicMock(return_value=None)
+    clients = _MockClientStore()
     return _build_controller(clients=clients)

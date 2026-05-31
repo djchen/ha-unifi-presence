@@ -9,20 +9,16 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
+from .conftest import make_mock_controller
+
 
 def make_websocket(
     hass: HomeAssistant,
     start_websocket_side_effect: Exception | None = None,
-) -> tuple[UnifiPresenceWebsocket, AsyncMock, MagicMock]:
+) -> tuple[UnifiPresenceWebsocket, MagicMock, MagicMock]:
     """Create a WebSocket manager with a mock controller."""
-    controller = AsyncMock()
-    controller.messages = MagicMock()
-    controller.messages.subscribe = MagicMock(return_value=MagicMock())
-    controller.messages.new_data = MagicMock()
+    controller = make_mock_controller()
     controller.start_websocket = AsyncMock(side_effect=start_websocket_side_effect)
-    controller.login = AsyncMock()
-    controller.connectivity = MagicMock()
-    controller.connectivity.ws_message_received = None
 
     on_message = MagicMock()
 

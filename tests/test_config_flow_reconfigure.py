@@ -44,18 +44,19 @@ def _make_reconfigure_entry(hass: HomeAssistant) -> MockConfigEntry:
     return add_mock_config_entry(hass)
 
 
-def test_find_reconfigure_site_returns_none_for_non_string_stored_site() -> None:
-    """Test reconfigure site lookup ignores malformed stored site values."""
-    sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
-
-    assert _find_reconfigure_site(sites, entry_unique_id=None, stored_site=123) is None
-
-
-def test_find_reconfigure_site_returns_none_when_current_site_is_missing() -> None:
-    """Test reconfigure site lookup returns None when the old site is no longer accessible."""
-    sites = {OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office")}
-
-    assert _find_reconfigure_site(sites, entry_unique_id=None, stored_site="default") is None
+@pytest.mark.parametrize(
+    ("sites", "stored_site"),
+    [
+        ({DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}, 123),
+        ({OFFICE_SITE_ID: _make_mock_site(OFFICE_SITE_ID, "office", "Office")}, "default"),
+    ],
+)
+def test_find_reconfigure_site_returns_none_for_invalid_current_site(
+    sites: dict[str, MagicMock],
+    stored_site: object,
+) -> None:
+    """Test reconfigure site lookup returns None for invalid stored/current sites."""
+    assert _find_reconfigure_site(sites, entry_unique_id=None, stored_site=stored_site) is None
 
 
 # ── Reconfigure flow: success paths ──────────────────────────────────────
@@ -177,79 +178,30 @@ async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAss
 # ── Reconfigure flow: error paths ────────────────────────────────────────
 
 
-async def test_reconfigure_flow_invalid_auth(hass: HomeAssistant) -> None:
-    """Test that reconfigure flow shows error on invalid credentials."""
+@pytest.mark.parametrize(
+    ("side_effect", "expected_error"),
+    [
+        (aiounifi.LoginRequired, "invalid_auth"),
+        (aiounifi.Unauthorized, "invalid_auth"),
+        (aiounifi.AiounifiException, "cannot_connect"),
+        (aiohttp.ClientError("offline"), "cannot_connect"),
+        (TimeoutError, "cannot_connect"),
+        (Exception("boom"), "unknown"),
+    ],
+)
+async def test_reconfigure_flow_controller_errors(
+    hass: HomeAssistant,
+    side_effect: object,
+    expected_error: str,
+) -> None:
+    """Test reconfigure controller errors map to the expected form error."""
     entry = _make_reconfigure_entry(hass)
 
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.LoginRequired):
-        result = await async_run_reconfigure_step(
-            hass,
-            entry,
-            make_reconfigure_input(username="bad-user", password="bad-pass"),
-        )
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=side_effect):
+        result = await async_run_reconfigure_step(hass, entry, make_reconfigure_input())
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "invalid_auth"}
-
-
-async def test_reconfigure_flow_cannot_connect(hass: HomeAssistant) -> None:
-    """Test that reconfigure flow shows cannot_connect on connection errors."""
-    entry = _make_reconfigure_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.AiounifiException):
-        result = await async_run_reconfigure_step(
-            hass,
-            entry,
-            make_reconfigure_input(),
-        )
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-
-async def test_reconfigure_flow_client_error_shows_cannot_connect(hass: HomeAssistant) -> None:
-    """Test that aiohttp transport errors surface as cannot_connect."""
-    entry = _make_reconfigure_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiohttp.ClientError("offline")):
-        result = await async_run_reconfigure_step(
-            hass,
-            entry,
-            make_reconfigure_input(),
-        )
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-
-async def test_reconfigure_flow_timeout_shows_cannot_connect(hass: HomeAssistant) -> None:
-    """Test that reconfigure surfaces login timeouts as cannot_connect."""
-    entry = _make_reconfigure_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=TimeoutError):
-        result = await async_run_reconfigure_step(
-            hass,
-            entry,
-            make_reconfigure_input(),
-        )
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-
-async def test_reconfigure_flow_unknown_error(hass: HomeAssistant) -> None:
-    """Test that reconfigure flow surfaces unexpected errors as unknown."""
-    entry = _make_reconfigure_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("boom")):
-        result = await async_run_reconfigure_step(
-            hass,
-            entry,
-            make_reconfigure_input(),
-        )
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "unknown"}
+    assert result["errors"] == {"base": expected_error}
 
 
 # ── Reconfigure flow: site handling ──────────────────────────────────────

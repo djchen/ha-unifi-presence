@@ -106,7 +106,7 @@ async def test_ensure_controller_reuses_existing_controller(
     existing_controller = AsyncMock()
     coordinator._controller = existing_controller
 
-    with patch("custom_components.unifi_presence.coordinator.create_controller") as create_controller:
+    with patch("custom_components.unifi_presence.coordinator.create_controller_for_params") as create_controller:
         controller = await coordinator._ensure_controller()
 
     assert controller is existing_controller
@@ -123,7 +123,7 @@ async def test_ensure_controller_normalizes_legacy_stored_site_id(
     runtime_controller = AsyncMock()
 
     with patch(
-        "custom_components.unifi_presence.coordinator.create_controller_with_resolved_site",
+        "custom_components.unifi_presence.helpers.create_controller_with_resolved_site",
         return_value=(runtime_controller, "office"),
     ) as create_controller_with_resolved_site:
         coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
