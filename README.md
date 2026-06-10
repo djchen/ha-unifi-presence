@@ -20,7 +20,7 @@ This project is the simpler presence-only option. It tracks nothing by default: 
 
 ## Requirements
 
-- Home Assistant 2026.5.0 or later
+- Home Assistant 2026.6.0 or later
 - Python 3.14.5 or later
 - A UniFi Network controller, either UniFi OS or legacy
 - A local UniFi user account with permission to read clients
