@@ -9,7 +9,7 @@
 
 - Use uv `0.11.17` and Python `3.14.5`: `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
 - Install hooks once: `uv run --locked --no-sync pre-commit install`
-- CI-like local order: `uv run --locked --no-sync pre-commit run --all-files` then `uv run --locked --no-sync pytest tests/ -v`; CI also runs HACS, hassfest, and zizmor via `.github/workflows/validate.yml`.
+- Local CI parity: `uv run --locked --no-sync pre-commit run --all-files` and `uv run --locked --no-sync pytest tests/ -v`; `.github/workflows/validate.yml` also runs HACS, hassfest, and zizmor.
 - Workflow edits must satisfy `.github/zizmor.yml`: `uses:` actions are allowlisted and hash-pinned; update the allowlist deliberately when adding actions.
 - Pre-commit may edit files: Ruff runs with `--fix`, then `ruff-format`, then `mypy --strict custom_components/unifi_presence/`.
 - Focused tests usually need `--no-cov` because `pyproject.toml` enforces 98% coverage, e.g. `uv run --locked --no-sync pytest tests/test_coordinator_heartbeat.py -k expiry -v --no-cov`.
@@ -35,4 +35,4 @@
 - Config-flow tests use `enable_custom_integrations`; many also use `_bypass_setup` so entry creation does not run real integration setup.
 - Controller mocks need dict-like `clients`/`clients_all` stores (`items`, `get`, iteration) with async `update`; flow tests also need async `login`, `sites.update`/`sites.values`; WebSocket tests need `messages.subscribe = MagicMock(return_value=MagicMock())`, `messages.new_data`, and `connectivity = MagicMock()`.
 - UI copy or flow-error edits must keep `strings.json` and `translations/en.json` keys aligned; tests assert high-churn picker/error keys and stale removals.
-- Keep release metadata in sync: `pyproject.toml`, `custom_components/unifi_presence/manifest.json`, and `uv.lock` version for releases; `aiounifi==91` in `pyproject.toml` and `manifest.json`; `hacs.json` HA minimum vs. `README.md`; and manifest `quality_scale` vs. `custom_components/unifi_presence/quality_scale.yaml` (`tests/test_project_metadata.py`, `.github/workflows/release.yml`).
+- Release prep in `.github/workflows/release.yml` updates `pyproject.toml`, `custom_components/unifi_presence/manifest.json`, and `uv.lock`; `tests/test_project_metadata.py` enforces `aiounifi==91`, project version, HACS/README HA minimum, and quality-scale consistency.
