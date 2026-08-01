@@ -8,7 +8,6 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.unifi_presence.coordinator import TrackedClientState
 from custom_components.unifi_presence.diagnostics import (
     _partial_redact_mac,
     _redact_mac_keys,
@@ -120,19 +119,9 @@ def test_redact_mac_keys() -> None:
 
 async def test_diagnostics_preserves_mac_suffix_collisions(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
     """Test that diagnostics keep all device states when redacted MAC keys collide."""
-    loaded_entry.runtime_data.data.clients = {
-        "aa:bb:cc:dd:ee:ff": TrackedClientState(
-            is_home=True,
-            name="Dan Phone",
-            last_seen_ts=None,
-            expiry_ts=None,
-        ),
-        "11:22:33:dd:ee:ff": TrackedClientState(
-            is_home=False,
-            name="Jane Phone",
-            last_seen_ts=None,
-            expiry_ts=None,
-        ),
+    loaded_entry.runtime_data.data = {
+        "aa:bb:cc:dd:ee:ff": (True, "Dan Phone"),
+        "11:22:33:dd:ee:ff": (False, "Jane Phone"),
     }
 
     result = await async_get_config_entry_diagnostics(hass, loaded_entry)

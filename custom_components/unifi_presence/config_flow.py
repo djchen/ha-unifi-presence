@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+from aiounifi.models.site import Site
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigEntryState,
@@ -41,10 +42,8 @@ from .const import (
 from .helpers import (
     UNIFI_AUTH_EXCEPTIONS,
     UNIFI_COMMUNICATION_EXCEPTIONS,
-    ClientLike,
     ClientStoreRefreshPolicy,
     ControllerConnectionParams,
-    SiteLike,
     async_close_controller,
     async_refresh_client_stores,
     build_client_labels_from_stores,
@@ -76,33 +75,31 @@ def _as_int(value: object) -> int:
     return int(cast(SupportsInt | str, value))
 
 
-def _build_user_schema() -> vol.Schema:
-    """Build the credential form schema for initial setup."""
+def _build_credentials_schema(defaults: Mapping[str, object] | None = None) -> vol.Schema:
+    """Build the initial or defaults-aware reconfigure credential schema."""
+    host = vol.Required(CONF_HOST) if defaults is None else vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, ""))
+    port = vol.Required(CONF_PORT, default=DEFAULT_PORT if defaults is None else defaults.get(CONF_PORT, DEFAULT_PORT))
+    username = (
+        vol.Required(CONF_USERNAME)
+        if defaults is None
+        else vol.Required(CONF_USERNAME, default=defaults.get(CONF_USERNAME, ""))
+    )
+    ssl_verify = vol.Optional(
+        CONF_SSL_VERIFY,
+        default=DEFAULT_SSL_VERIFY if defaults is None else defaults[CONF_SSL_VERIFY],
+    )
     return vol.Schema(
         {
-            vol.Required(CONF_HOST): str,
-            vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
-            vol.Required(CONF_USERNAME): str,
+            host: str,
+            port: cv.port,
+            username: str,
             vol.Required(CONF_PASSWORD): str,
-            vol.Optional(CONF_SSL_VERIFY, default=DEFAULT_SSL_VERIFY): bool,
+            ssl_verify: bool,
         }
     )
 
 
-def _build_reconfigure_schema(current_data: Mapping[str, object]) -> vol.Schema:
-    """Build the credential form schema for reconfigure."""
-    return vol.Schema(
-        {
-            vol.Required(CONF_HOST, default=current_data.get(CONF_HOST, "")): str,
-            vol.Required(CONF_PORT, default=current_data.get(CONF_PORT, DEFAULT_PORT)): cv.port,
-            vol.Required(CONF_USERNAME, default=current_data.get(CONF_USERNAME, "")): str,
-            vol.Required(CONF_PASSWORD): str,
-            vol.Optional(CONF_SSL_VERIFY, default=current_data[CONF_SSL_VERIFY]): bool,
-        }
-    )
-
-
-def _build_site_schema(available_sites: Mapping[str, SiteLike]) -> vol.Schema:
+def _build_site_schema(available_sites: Mapping[str, Site]) -> vol.Schema:
     """Build the site selection schema."""
     return vol.Schema(
         {vol.Required(CONF_SITE): vol.In({site_id: site_title(site) for site_id, site in available_sites.items()})}
@@ -138,11 +135,11 @@ def _build_tracked_device_selector(client_options: Mapping[str, str]) -> SelectS
 
 
 def _find_reconfigure_site(
-    available_sites: Mapping[str, SiteLike],
+    available_sites: Mapping[str, Site],
     *,
     entry_unique_id: str | None,
     stored_site: object,
-) -> SiteLike | None:
+) -> Site | None:
     """Return the already-configured site from the fetched site list."""
     if isinstance(entry_unique_id, str) and (site := available_sites.get(entry_unique_id)) is not None:
         return site
@@ -237,10 +234,10 @@ def _build_client_options(
     return client_options
 
 
-async def _fetch_sites(controller: Controller) -> dict[str, SiteLike]:
+async def _fetch_sites(controller: Controller) -> dict[str, Site]:
     """Fetch sites from the UniFi controller keyed by site_id."""
     await controller.sites.update()
-    return {site.site_id: cast(SiteLike, site) for site in controller.sites.values()}
+    return {site.site_id: site for site in controller.sites.values()}
 
 
 async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
@@ -250,8 +247,8 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
         policy=ClientStoreRefreshPolicy.DISCOVERY,
     )
     return build_client_labels_from_stores(
-        cast(Mapping[str, ClientLike], controller.clients_all),
-        cast(Mapping[str, ClientLike], controller.clients),
+        controller.clients_all.items(),
+        controller.clients.items(),
     )
 
 
@@ -270,7 +267,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._ssl_verify: bool = DEFAULT_SSL_VERIFY
         self._site_id: str = ""
         self._site_title: str = ""
-        self._available_sites: dict[str, SiteLike] = {}
+        self._available_sites: dict[str, Site] = {}
         self._available_clients: dict[str, str] = {}
 
     def _current_connection_params(self, *, site: str | None = None) -> ControllerConnectionParams:
@@ -297,7 +294,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         self._password = str(user_input[CONF_PASSWORD])
         self._ssl_verify = bool(user_input.get(CONF_SSL_VERIFY, ssl_verify_default))
 
-    def _set_selected_site(self, site: SiteLike) -> None:
+    def _set_selected_site(self, site: Site) -> None:
         """Persist the currently selected site metadata on the flow."""
         self._site_id = site.site_id
         self._site = site.name
@@ -423,11 +420,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_build_reconfigure_schema(schema_defaults),
+            data_schema=_build_credentials_schema(schema_defaults),
             errors=errors,
         )
 
-    async def _async_finish_reconfigure(self, site: SiteLike) -> ConfigFlowResult:
+    async def _async_finish_reconfigure(self, site: Site) -> ConfigFlowResult:
         """Validate and save the already-configured site during reconfigure."""
         reconfigure_entry = self._get_reconfigure_entry()
         controller, error = await self._async_validate_login(
@@ -497,7 +494,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 return await self.async_step_site()
 
-        return self.async_show_form(step_id="user", data_schema=_build_user_schema(), errors=errors)
+        return self.async_show_form(step_id="user", data_schema=_build_credentials_schema(), errors=errors)
 
     async def async_step_site(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle UniFi site selection."""

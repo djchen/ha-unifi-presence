@@ -214,9 +214,9 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
 
     with (
         patch(
-            "custom_components.unifi_presence.helpers.create_controller_with_resolved_site",
-            return_value=(client_controller, "office"),
-        ) as create_controller_with_resolved_site,
+            "custom_components.unifi_presence.config_flow.create_controller_for_params",
+            return_value=client_controller,
+        ) as create_controller_for_params,
     ):
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
@@ -224,11 +224,12 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
     assert result["step_id"] == "init"
     assert (
         _site_arg_from_call(
-            create_controller_with_resolved_site.await_args.args,
-            create_controller_with_resolved_site.await_args.kwargs,
+            create_controller_for_params.await_args.args,
+            create_controller_for_params.await_args.kwargs,
         )
         == OFFICE_SITE_ID
     )
+    assert create_controller_for_params.await_args.kwargs["resolve_legacy_site"] is True
 
 
 async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, options_entry: MockConfigEntry) -> None:

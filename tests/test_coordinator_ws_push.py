@@ -33,7 +33,7 @@ async def test_process_message_updates_state(
 
     # First do a fallback poll to populate initial data (device away)
     data = await coordinator._async_update_data()
-    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is False
+    assert data["aa:bb:cc:dd:ee:ff"][0] is False
 
     # Simulate a WS message that brings the device home
     message = MagicMock()
@@ -45,8 +45,7 @@ async def test_process_message_updates_state(
     coordinator.process_message(message)
 
     # State should now be home
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"] == (True, "Dan Phone")
     assert coordinator.heartbeat_expiry_count == 1
 
 
@@ -61,7 +60,7 @@ async def test_process_message_updates_offline_client(
     initial_data = await coordinator._async_update_data()
     coordinator.async_set_updated_data(initial_data)
 
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is False
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"][0] is False
 
     message = MagicMock()
     message.data = {
@@ -71,8 +70,7 @@ async def test_process_message_updates_offline_client(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"] == (True, "Dan Phone")
     assert coordinator.heartbeat_expiry_count == 1
 
 
@@ -162,7 +160,7 @@ async def test_process_message_preserves_metadata_when_offline_client_reappears(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.clients[mac].name == "Dan Phone"
+    assert coordinator.data[mac][1] == "Dan Phone"
 
 
 async def test_process_message_uses_hostname_when_name_missing(
@@ -184,7 +182,7 @@ async def test_process_message_uses_hostname_when_name_missing(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "dan-phone"
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"][1] == "dan-phone"
 
 
 async def test_process_message_ignores_untracked_mac(
@@ -224,7 +222,7 @@ async def test_process_message_metadata_only_update_notifies_listeners(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     await coordinator.async_refresh()
 
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"][0] is True
     original_data = coordinator.data
     coordinator.async_update_listeners = MagicMock()
 
@@ -237,8 +235,9 @@ async def test_process_message_metadata_only_update_notifies_listeners(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data is original_data
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone Updated"
+    assert coordinator.data is not original_data
+    assert original_data["aa:bb:cc:dd:ee:ff"][1] == "Dan Phone"
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"][1] == "Dan Phone Updated"
     coordinator.async_update_listeners.assert_called_once_with()
 
 
@@ -275,10 +274,8 @@ async def test_process_message_for_one_mac_preserves_unrelated_tracked_device_st
     }
     coordinator.process_message(message)
 
-    assert coordinator.data.clients[home_mac].is_home is True
-    assert coordinator.data.clients[home_mac].name == "Dan Phone Updated"
-    assert coordinator.data.clients[away_mac].is_home is False
-    assert coordinator.data.clients[away_mac].name == "Jane Phone"
+    assert coordinator.data[home_mac] == (True, "Dan Phone Updated")
+    assert coordinator.data[away_mac] == (False, "Jane Phone")
 
 
 async def test_process_message_inserts_initial_runtime_state_into_client_cache(
@@ -295,9 +292,8 @@ async def test_process_message_inserts_initial_runtime_state_into_client_cache(
 
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
 
-    state = coordinator.data.clients[mac]
-    assert state.is_home is True
-    assert state.name == "Dan Phone"
+    assert coordinator.data[mac] == (True, "Dan Phone")
+    state = coordinator._client_states[mac]
     assert state.last_seen_ts == int(now.timestamp())
     assert state.expiry_ts is not None
 
@@ -322,7 +318,7 @@ async def test_process_message_case_insensitive_mac(
     coordinator.process_message(message)
 
     # Should match after lowercasing
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"][0] is True
 
 
 # ── Malformed message tests ──────────────────────────────────────────────
@@ -355,10 +351,10 @@ async def test_process_message_without_last_seen_uses_cached_timestamp(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
 
-    cached_last_seen = coordinator.data.clients[mac].last_seen_ts
+    cached_last_seen = coordinator._client_states[mac].last_seen_ts
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone"}))
 
-    assert coordinator.data.clients[mac].last_seen_ts == cached_last_seen
+    assert coordinator._client_states[mac].last_seen_ts == cached_last_seen
 
 
 async def test_process_message_missing_mac(

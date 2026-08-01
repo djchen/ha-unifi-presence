@@ -7,13 +7,15 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 from json import JSONDecodeError
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 import aiohttp
 import aiounifi
 from aiohttp import CookieJar
 from aiounifi.controller import Controller
+from aiounifi.models.client import Client
 from aiounifi.models.configuration import Configuration
+from aiounifi.models.site import Site
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -39,22 +41,6 @@ UNIFI_COMMUNICATION_EXCEPTIONS: tuple[type[Exception], ...] = (
     aiohttp.ClientError,
     JSONDecodeError,
 )
-
-
-class SiteLike(Protocol):
-    """Subset of UniFi site fields used by this integration."""
-
-    site_id: str
-    name: str
-    description: str | None
-
-
-class ClientLike(Protocol):
-    """Subset of UniFi client fields used by this integration."""
-
-    name: str | None
-    hostname: str | None
-    last_seen: int | float | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -125,16 +111,10 @@ def tracker_unique_id(site_id: str, mac: str) -> str:
 
 def config_entry_site_id(entry: ConfigEntry) -> str:
     """Return the config entry site identifier used for tracker IDs."""
-    if isinstance(entry.unique_id, str) and entry.unique_id:
-        return entry.unique_id
-
-    if isinstance(entry.entry_id, str) and entry.entry_id:
-        return entry.entry_id
-
-    return DEFAULT_SITE
+    return entry.unique_id or entry.entry_id
 
 
-def site_title(site: SiteLike) -> str:
+def site_title(site: Site) -> str:
     """Return the user-facing title for a UniFi site."""
     return str(site.description or site.name)
 
@@ -159,8 +139,8 @@ def format_missing_client_label(mac: str) -> str:
 def resolve_client_display_name(
     mac: str,
     *,
-    current: ClientLike | None = None,
-    historical: ClientLike | None = None,
+    current: Client | None = None,
+    historical: Client | None = None,
     websocket_name: str | None = None,
     websocket_hostname: str | None = None,
     previous_name: str | None = None,
@@ -206,50 +186,31 @@ async def create_controller_for_params(
     resolve_legacy_site: bool = False,
 ) -> Controller:
     """Create a controller, resolving legacy stored site values when requested."""
-    if resolve_legacy_site and should_resolve_controller_site(params, unique_id=unique_id):
-        controller, _resolved_site = await create_controller_with_resolved_site(
-            hass,
-            params,
-            unique_id=unique_id,
-        )
-        return controller
-
-    return await create_controller(hass, params)
-
-
-async def create_controller_with_resolved_site(
-    hass: HomeAssistant,
-    params: ControllerConnectionParams,
-    *,
-    unique_id: str | None,
-) -> tuple[Controller, str]:
-    """Create a controller and normalize any legacy stored site value in-place."""
+    should_resolve = resolve_legacy_site and should_resolve_controller_site(params, unique_id=unique_id)
     controller = await create_controller(
         hass,
-        replace(
-            params,
-            site="" if should_resolve_controller_site(params, unique_id=unique_id) else params.site,
-        ),
+        replace(params, site="") if should_resolve else params,
     )
 
-    try:
-        if not should_resolve_controller_site(params, unique_id=unique_id):
-            resolved_site = params.site
-        else:
-            async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
-                await controller.sites.update()
+    if not should_resolve:
+        return controller
 
-            resolved_site = params.site
-            for available_site in controller.sites.values():
-                if available_site.site_id in {params.site, unique_id}:
-                    resolved_site = str(available_site.name)
-                    break
-    except Exception:
+    try:
+        async with asyncio.timeout(CONTROLLER_LOGIN_TIMEOUT):
+            await controller.sites.update()
+
+        resolved_site = params.site
+        for available_site in controller.sites.values():
+            if available_site.site_id in {params.site, unique_id}:
+                resolved_site = str(available_site.name)
+                break
+
+        controller.connectivity.config.site = resolved_site
+    except BaseException:
         await async_close_controller(controller)
         raise
 
-    controller.connectivity.config.site = resolved_site
-    return controller, resolved_site
+    return controller
 
 
 async def async_refresh_client_stores(
@@ -290,13 +251,13 @@ def _client_store_refresh_succeeded(result: object) -> bool:
 
 
 def build_client_labels_from_stores(
-    historical_clients: Mapping[str, ClientLike],
-    active_clients: Mapping[str, ClientLike],
+    historical_clients: Iterable[tuple[str, Client]],
+    active_clients: Iterable[tuple[str, Client]],
 ) -> dict[str, str]:
     """Build picker labels from historical and active UniFi client stores."""
     clients: dict[str, str] = {}
-    for store in (historical_clients, active_clients):
-        for mac, client in store.items():
+    for store_items in (historical_clients, active_clients):
+        for mac, client in store_items:
             mac_lower = normalize_mac(mac)
             name = resolve_client_display_name(mac_lower, current=client)
             clients[mac_lower] = format_current_client_label(str(name), mac_lower)

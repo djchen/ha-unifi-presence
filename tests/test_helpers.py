@@ -19,7 +19,6 @@ from custom_components.unifi_presence.helpers import (
     build_client_labels_from_stores,
     create_controller,
     create_controller_for_params,
-    create_controller_with_resolved_site,
     format_config_entry_title,
     format_current_client_label,
     format_missing_client_label,
@@ -180,7 +179,7 @@ def test_controller_connection_params_from_mapping_uses_override_site() -> None:
 
 
 async def test_create_controller_for_params_uses_legacy_site_resolution(hass: HomeAssistant) -> None:
-    """Test the shared controller helper delegates legacy site resolution."""
+    """Test the shared controller helper resolves a legacy site on one controller."""
     params = ControllerConnectionParams(
         host="192.168.1.1",
         port=443,
@@ -190,11 +189,14 @@ async def test_create_controller_for_params_uses_legacy_site_resolution(hass: Ho
         ssl_verify=False,
     )
     controller = MagicMock()
+    controller.connectivity = SimpleNamespace(config=SimpleNamespace(site=""))
+    controller.sites.update = AsyncMock()
+    controller.sites.values.return_value = [SimpleNamespace(site_id="site-office-id", name="office")]
 
     with patch(
-        "custom_components.unifi_presence.helpers.create_controller_with_resolved_site",
-        return_value=(controller, "office"),
-    ) as create_resolved:
+        "custom_components.unifi_presence.helpers.create_controller",
+        return_value=controller,
+    ) as create_ctrl:
         result = await create_controller_for_params(
             hass,
             params,
@@ -203,7 +205,8 @@ async def test_create_controller_for_params_uses_legacy_site_resolution(hass: Ho
         )
 
     assert result is controller
-    create_resolved.assert_awaited_once_with(hass, params, unique_id="192.168.1.1_office")
+    assert create_ctrl.await_args.args[1].site == ""
+    assert controller.connectivity.config.site == "office"
 
 
 async def test_create_controller_for_params_skips_resolution_for_new_setup(hass: HomeAssistant) -> None:
@@ -270,8 +273,8 @@ async def test_async_refresh_client_stores_requires_active_runtime_refresh() -> 
 def test_build_client_labels_from_stores_active_wins_on_collision() -> None:
     """Test active client labels override historical labels for the same MAC."""
     labels = build_client_labels_from_stores(
-        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Old Name")},
-        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Current Name")},
+        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Old Name")}.items(),
+        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Current Name")}.items(),
     )
 
     assert labels == {"aa:bb:cc:dd:ee:ff": "Current Name (aa:bb:cc:dd:ee:ff)"}
@@ -321,7 +324,7 @@ async def test_create_controller_closes_owned_session_on_login_cancellation(hass
     session.detach.assert_called_once_with()
 
 
-async def test_create_controller_with_resolved_site_reuses_single_controller(hass: HomeAssistant) -> None:
+async def test_create_controller_for_params_reuses_single_controller(hass: HomeAssistant) -> None:
     """Test legacy site normalization reuses the same authenticated controller."""
     params = ControllerConnectionParams(
         host="192.168.1.1",
@@ -338,14 +341,14 @@ async def test_create_controller_with_resolved_site_reuses_single_controller(has
     controller.sites.values.return_value = [SimpleNamespace(site_id="site-office-id", name="office")]
 
     with patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller) as create_ctrl:
-        result_controller, resolved_site = await create_controller_with_resolved_site(
+        result_controller = await create_controller_for_params(
             hass,
             params,
             unique_id="192.168.1.1_office",
+            resolve_legacy_site=True,
         )
 
     assert result_controller is controller
-    assert resolved_site == "office"
     assert controller.connectivity.config.site == "office"
     assert create_ctrl.await_count == 1
     assert create_ctrl.await_args.args[1].site == ""
@@ -369,7 +372,7 @@ def test_should_resolve_controller_site_false_for_default_site() -> None:
     )
 
 
-async def test_create_controller_with_resolved_site_keeps_modern_site_name_without_refresh(hass: HomeAssistant) -> None:
+async def test_create_controller_for_params_keeps_modern_site_name_without_refresh(hass: HomeAssistant) -> None:
     """Test modern site names bypass extra site resolution work."""
     params = ControllerConnectionParams(
         host="192.168.1.1",
@@ -385,19 +388,18 @@ async def test_create_controller_with_resolved_site_keeps_modern_site_name_witho
     controller.sites.update = AsyncMock()
 
     with patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller):
-        result_controller, resolved_site = await create_controller_with_resolved_site(
+        result_controller = await create_controller_for_params(
             hass,
             params,
             unique_id="site-office-id",
+            resolve_legacy_site=True,
         )
 
     assert result_controller is controller
-    assert resolved_site == "office"
-    assert controller.connectivity.config.site == "office"
     controller.sites.update.assert_not_awaited()
 
 
-async def test_create_controller_with_resolved_site_closes_controller_on_resolution_failure(
+async def test_create_controller_for_params_closes_controller_on_resolution_failure(
     hass: HomeAssistant,
 ) -> None:
     """Test site-resolution failures close the already-created controller."""
@@ -419,10 +421,83 @@ async def test_create_controller_with_resolved_site_closes_controller_on_resolut
         patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
         pytest.raises(RuntimeError, match="boom"),
     ):
-        await create_controller_with_resolved_site(
+        await create_controller_for_params(
             hass,
             params,
             unique_id="192.168.1.1_office",
+            resolve_legacy_site=True,
+        )
+
+    async_close.assert_awaited_once_with(controller)
+
+
+async def test_create_controller_for_params_closes_controller_on_resolution_cancellation(
+    hass: HomeAssistant,
+) -> None:
+    """Test cancellation during site resolution closes the owned controller."""
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="site-office-id",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+    controller.sites.update = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with (
+        patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
+        patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await create_controller_for_params(
+            hass,
+            params,
+            unique_id="192.168.1.1_office",
+            resolve_legacy_site=True,
+        )
+
+    async_close.assert_awaited_once_with(controller)
+
+
+async def test_create_controller_for_params_closes_controller_on_site_mutation_failure(
+    hass: HomeAssistant,
+) -> None:
+    """Test connectivity config mutation failures close the owned controller."""
+
+    class FailingConfig:
+        @property
+        def site(self) -> str:
+            return ""
+
+        @site.setter
+        def site(self, _value: str) -> None:
+            raise RuntimeError("mutation failed")
+
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="site-office-id",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+    controller.connectivity = SimpleNamespace(config=FailingConfig())
+    controller.sites.update = AsyncMock()
+    controller.sites.values.return_value = [SimpleNamespace(site_id="site-office-id", name="office")]
+
+    with (
+        patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
+        patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
+        pytest.raises(RuntimeError, match="mutation failed"),
+    ):
+        await create_controller_for_params(
+            hass,
+            params,
+            unique_id="192.168.1.1_office",
+            resolve_legacy_site=True,
         )
 
     async_close.assert_awaited_once_with(controller)

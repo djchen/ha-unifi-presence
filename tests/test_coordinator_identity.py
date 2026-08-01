@@ -30,7 +30,7 @@ async def test_coordinator_uses_hostname_when_name_missing(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.clients["aa:bb:cc:dd:ee:ff"].name == "dan-phone"
+    assert data["aa:bb:cc:dd:ee:ff"][1] == "dan-phone"
 
 
 async def test_coordinator_uses_mac_when_name_and_hostname_missing(
@@ -47,7 +47,7 @@ async def test_coordinator_uses_mac_when_name_and_hostname_missing(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.clients["aa:bb:cc:dd:ee:ff"].name == "aa:bb:cc:dd:ee:ff"
+    assert data["aa:bb:cc:dd:ee:ff"][1] == "aa:bb:cc:dd:ee:ff"
 
 
 async def test_coordinator_normalizes_tracked_macs(hass: HomeAssistant, coordinator_config_entry: MagicMock) -> None:
@@ -85,18 +85,6 @@ async def test_coordinator_site_id_uses_entry_id_when_unique_id_missing(
     assert coordinator.site_id == "test_entry_id"
 
 
-async def test_coordinator_site_id_falls_back_to_default_site_when_identity_missing(
-    hass: HomeAssistant, coordinator_config_entry: MagicMock
-) -> None:
-    """Test tracker IDs fall back to the default site when no identity exists."""
-    coordinator_config_entry.unique_id = None
-    coordinator_config_entry.entry_id = None
-
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-
-    assert coordinator.site_id == "default"
-
-
 async def test_ensure_controller_reuses_existing_controller(
     hass: HomeAssistant, coordinator_config_entry: MagicMock
 ) -> None:
@@ -123,14 +111,18 @@ async def test_ensure_controller_normalizes_legacy_stored_site_id(
     runtime_controller = AsyncMock()
 
     with patch(
-        "custom_components.unifi_presence.helpers.create_controller_with_resolved_site",
-        return_value=(runtime_controller, "office"),
-    ) as create_controller_with_resolved_site:
+        "custom_components.unifi_presence.coordinator.create_controller_for_params",
+        return_value=runtime_controller,
+    ) as create_controller_for_params:
         coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
         controller = await coordinator._ensure_controller()
 
     assert controller is runtime_controller
-    assert create_controller_with_resolved_site.await_args.args[1].site == "site-office-id"
+    assert create_controller_for_params.await_args.args[1].site == "site-office-id"
+    assert create_controller_for_params.await_args.kwargs == {
+        "unique_id": "192.168.1.1_office",
+        "resolve_legacy_site": True,
+    }
 
 
 async def test_coordinator_async_shutdown_detaches_owned_runtime_session(
@@ -169,7 +161,7 @@ async def test_update_single_device_state_adds_new_runtime_state_and_notifies_on
     )
 
     assert coordinator.data is not None
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"][1] == "Dan Phone"
     assert coordinator.last_update_success is True
     coordinator.async_update_listeners.assert_called_once_with()
 
@@ -227,7 +219,7 @@ async def test_out_of_order_ws_does_not_regress_presence(
 
     # First WS message: device seen now -> home
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
-    assert coordinator.data.clients[mac].is_home is True
+    assert coordinator.data[mac][0] is True
     assert coordinator._get_known_last_seen(mac) == now
 
     # Delayed/reordered WS message: stale timestamp from before the away threshold
@@ -235,7 +227,7 @@ async def test_out_of_order_ws_does_not_regress_presence(
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": stale}))
 
     # Should still be home — the stale timestamp must not overwrite the newer one
-    assert coordinator.data.clients[mac].is_home is True
+    assert coordinator.data[mac][0] is True
     assert coordinator._get_known_last_seen(mac) == now
 
 
@@ -253,7 +245,7 @@ async def test_stale_poll_does_not_regress_ws_last_seen(
 
     # WS message: device seen now
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
-    assert coordinator.data.clients[mac].is_home is True
+    assert coordinator.data[mac][0] is True
 
     # REST poll returns an older last_seen (e.g. stale cache on controller)
     stale = now - 10
@@ -261,7 +253,7 @@ async def test_stale_poll_does_not_regress_ws_last_seen(
     data = await coordinator._async_update_data()
 
     # The newer WS timestamp must be preserved
-    assert data.clients[mac].is_home is True
+    assert data[mac][0] is True
     assert coordinator._get_known_last_seen(mac) == now
 
 
@@ -279,14 +271,14 @@ async def test_poll_with_missing_last_seen_uses_cached(
 
     # WS message: device seen now
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
-    assert coordinator.data.clients[mac].is_home is True
+    assert coordinator.data[mac][0] is True
 
     # REST poll returns last_seen=0 (missing/null from controller)
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=0)
     data = await coordinator._async_update_data()
 
     # Should still be home — 0 is treated as None and the cached timestamp is used
-    assert data.clients[mac].is_home is True
+    assert data[mac][0] is True
     assert coordinator._get_known_last_seen(mac) == now
 
 
@@ -304,7 +296,7 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     # WS message: device seen a while ago but within threshold
     initial_ts = now - 30
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": initial_ts}))
-    assert coordinator.data.clients[mac].is_home is True
+    assert coordinator.data[mac][0] is True
 
     # REST poll returns a newer timestamp, but it's past the away threshold
     newer_but_expired = now - coordinator.away_seconds - 5
@@ -312,7 +304,7 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     # initial_ts = now - 30, newer_but_expired = now - 65 → NOT newer
     # So let's use a scenario where the initial was even older
     old_ts = now - coordinator.away_seconds - 100
-    coordinator.data.clients[mac].last_seen_ts = old_ts  # simulate very old cache
+    coordinator._client_states[mac].last_seen_ts = old_ts  # simulate very old cache
 
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=newer_but_expired)
     data = await coordinator._async_update_data()
@@ -320,4 +312,4 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     # The newer timestamp should be accepted (it's > old_ts)
     assert coordinator._get_known_last_seen(mac) == newer_but_expired
     # But it's still past the away threshold, so device is away
-    assert data.clients[mac].is_home is False
+    assert data[mac][0] is False
