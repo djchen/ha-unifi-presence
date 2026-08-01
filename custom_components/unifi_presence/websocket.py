@@ -191,7 +191,7 @@ class UnifiPresenceWebsocket:
             return
 
         self._clear_watchdog()
-        self._set_available(False)
+        self.available = False
         self._schedule_retry()
 
     @contextmanager
@@ -249,17 +249,9 @@ class UnifiPresenceWebsocket:
         if self._stopped or self.available:
             return
 
-        self._set_available(True)
+        self.available = True
         self._retry_delay = RETRY_TIMER
         self._clear_retry()
-
-    @callback
-    def _set_available(self, available: bool) -> None:
-        """Update availability state."""
-        if self.available == available:
-            return
-
-        self.available = available
 
     async def _async_restart_runner(self) -> None:
         """Cancel the current runner and start a replacement after it settles."""
@@ -286,7 +278,7 @@ class UnifiPresenceWebsocket:
             return
 
         self._clear_retry()
-        self._set_available(False)
+        self.available = False
 
         async def _do_restart() -> None:
             current_task = asyncio.current_task()
@@ -305,7 +297,7 @@ class UnifiPresenceWebsocket:
             return
 
         self._clear_retry()
-        self._set_available(False)
+        self.available = False
 
         async def _do_reconnect() -> None:
             current_task = asyncio.current_task()
