@@ -25,9 +25,11 @@
 - Coordinator reauths once on UniFi session expiry, restarts WebSocket on recovery, then raises `ConfigEntryAuthFailed` if credentials still fail.
 - WebSocket health is set by the temporary `messages.new_data` wrapper after the first inbound frame; preserve `_stopped`, watchdog, reconnect, stale-runner, and reauth-restart semantics.
 - Client discovery preserves selected MACs no longer returned by UniFi and labels them `No longer in UniFi Client Devices`; only explicit deselection should remove entity-registry entries.
-- For expected communication failures, flow discovery tolerates one failed client store and only errors when both active and historical stores fail with no cache; runtime treats `clients_all` as best-effort but requires `clients.update()`.
+- `async_refresh_client_stores()` centralizes `UNIFI_COMMUNICATION_EXCEPTIONS` handling: `DISCOVERY` tolerates one failed client store and only errors when both stores fail with no cache; `RUNTIME` treats `clients_all` as best-effort but requires `clients.update()`.
 - Stored config data is expected to include `ssl_verify`; do not reintroduce missing-field fallbacks for legacy entries.
 - When `ssl_verify` is `false`, `create_controller()` owns an aiohttp session on the controller; release it through `async_close_controller()` (which detaches the Home Assistant shared-connector session wrapper).
+- The options flow borrows the loaded coordinator controller when possible; close only the fallback controller the flow creates itself.
+- Preserve setup/unload cleanup ordering: a failed platform unload leaves runtime active; successful unload awaits WebSocket stop before coordinator shutdown, and partial setup must release its controller.
 
 ## Tests And Edit Traps
 
@@ -35,4 +37,5 @@
 - Config-flow tests use `enable_custom_integrations`; many also use `_bypass_setup` so entry creation does not run real integration setup.
 - Controller mocks need dict-like `clients`/`clients_all` stores (`items`, `get`, iteration) with async `update`; flow tests also need async `login`, `sites.update`/`sites.values`; WebSocket tests need `messages.subscribe = MagicMock(return_value=MagicMock())`, `messages.new_data`, and `connectivity = MagicMock()`.
 - UI copy or flow-error edits must keep `strings.json` and `translations/en.json` keys aligned; tests assert high-churn picker/error keys and stale removals.
-- Releases start by dispatching `.github/workflows/release.yml` from `main` with an `X.Y.Z` version; it opens `release/vX.Y.Z` after updating `pyproject.toml`, `manifest.json`, and `uv.lock`, and merging that PR creates a draft release. `tests/test_project_metadata.py` enforces cross-file metadata consistency, including `aiounifi==91`.
+- Releases start by dispatching `.github/workflows/release.yml` from `main` with an `X.Y.Z` version; it opens `release/vX.Y.Z` after updating `pyproject.toml`, `custom_components/unifi_presence/manifest.json`, and `uv.lock`, and merging that PR creates a draft release.
+- `tests/test_project_metadata.py` links project/manifest versions, the `aiounifi==91` pins, manifest/quality-scale status, and the README/HACS minimum Home Assistant version.
