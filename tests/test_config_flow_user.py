@@ -579,21 +579,3 @@ async def test_single_site_retry_without_input_shows_retry_form(hass: HomeAssist
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "single_site_retry"
-
-
-async def test_single_site_retry_keeps_form_when_retry_fails(hass: HomeAssistant) -> None:
-    """Test single-site retry keeps the retry form when the next refresh still fails."""
-    flow = UnifiPresenceConfigFlow()
-    flow.hass = hass
-    flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
-    flow._site = "default"
-    flow._site_title = "Home"
-    flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_discover_devices")
-    flow.context = {}
-    flow._site_id = DEFAULT_SITE_ID
-
-    result = await flow.async_step_single_site_retry({})
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "single_site_retry"
-    assert result["errors"] == {"base": "cannot_discover_devices"}

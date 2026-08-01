@@ -6,52 +6,31 @@ import json
 import tomllib
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 QUALITY_SCALE = ROOT / "custom_components" / "unifi_presence" / "quality_scale.yaml"
 
 
 def _parse_quality_scale_statuses() -> dict[str, dict[str, str]]:
     """Parse tiered rule statuses from the local quality scale file."""
-    tiers: dict[str, dict[str, str]] = {
-        "bronze": {},
-        "silver": {},
-        "gold": {},
-        "platinum": {},
-    }
+    tiers: dict[str, dict[str, str]] = {"bronze": {}, "silver": {}, "gold": {}, "platinum": {}}
+    text = QUALITY_SCALE.read_text()
+    rules = yaml.safe_load(text)["rules"]
     current_tier = ""
-    pending_rule = ""
-
-    for raw_line in QUALITY_SCALE.read_text().splitlines():
+    for raw_line in text.splitlines():
         stripped = raw_line.strip()
-        if stripped == "# Bronze":
-            current_tier = "bronze"
-            pending_rule = ""
+        if not stripped:
             continue
-        if stripped == "# Silver":
-            current_tier = "silver"
-            pending_rule = ""
+        if stripped.startswith("#"):
+            tier = stripped.removeprefix("#").strip().lower()
+            if tier in tiers:
+                current_tier = tier
             continue
-        if stripped == "# Gold":
-            current_tier = "gold"
-            pending_rule = ""
-            continue
-        if stripped == "# Platinum":
-            current_tier = "platinum"
-            pending_rule = ""
-            continue
-        if not current_tier or not stripped or stripped == "rules:":
-            continue
-        if raw_line.startswith("  ") and not raw_line.startswith("    ") and stripped.endswith(":"):
-            pending_rule = stripped.removesuffix(":")
-            continue
-        if raw_line.startswith("  ") and not raw_line.startswith("    ") and ": " in stripped:
-            rule, status = stripped.split(": ", maxsplit=1)
-            tiers[current_tier][rule] = status
-            pending_rule = ""
-            continue
-        if pending_rule and stripped.startswith("status: "):
-            tiers[current_tier][pending_rule] = stripped.removeprefix("status: ")
-            pending_rule = ""
+        if current_tier and raw_line.startswith("  ") and not raw_line.startswith("    "):
+            rule = stripped.split(":", maxsplit=1)[0]
+            value = rules[rule]
+            tiers[current_tier][rule] = value if isinstance(value, str) else value["status"]
 
     return tiers
 

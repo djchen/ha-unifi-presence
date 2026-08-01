@@ -137,14 +137,6 @@ def _build_tracked_device_selector(client_options: Mapping[str, str]) -> SelectS
     )
 
 
-def _get_selected_site(available_sites: Mapping[str, SiteLike], selected_site: object) -> SiteLike | None:
-    """Return the selected site object when the flow input is valid."""
-    if not isinstance(selected_site, str):
-        return None
-
-    return available_sites.get(selected_site)
-
-
 def _find_reconfigure_site(
     available_sites: Mapping[str, SiteLike],
     *,
@@ -518,7 +510,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             self._set_selected_site(next(iter(self._available_sites.values())))
             return await self._async_finish_user_site_selection()
 
-        site = _get_selected_site(self._available_sites, user_input.get(CONF_SITE))
+        selected_site = user_input.get(CONF_SITE)
+        site = self._available_sites.get(selected_site) if isinstance(selected_site, str) else None
         if site is None:
             return self._show_site_form(errors={"base": "invalid_site"})
 

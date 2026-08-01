@@ -132,44 +132,30 @@ jobs:
         run: |
           set -euo pipefail
 
+          uv version "$VERSION" --no-sync
+
           python - <<'PY'
           import json
+          import os
           import re
           import sys
           import tomllib
           from pathlib import Path
 
-          import os
-
           version = os.environ["VERSION"]
           pyproject = Path("pyproject.toml")
           manifest = Path("custom_components/unifi_presence/manifest.json")
 
-          pyproject_lines = pyproject.read_text().splitlines(keepends=True)
-          in_project = False
-          py_count = 0
-          for index, line in enumerate(pyproject_lines):
-              if re.fullmatch(r"\s*\[project]\s*\n?", line):
-                  in_project = True
-                  continue
-              if in_project and re.fullmatch(r"\s*\[.+]\s*\n?", line):
-                  in_project = False
-              if in_project and re.fullmatch(r'(version\s*=\s*)"[^"]+"(\s*)', line):
-                  pyproject_lines[index] = re.sub(r'^(version\s*=\s*)"[^"]+"(\s*)$', rf'\1"{version}"\2', line)
-                  py_count += 1
-          if py_count != 1:
-              sys.exit("Expected exactly one pyproject.toml [project] version line to update.")
-          pyproject.write_text("".join(pyproject_lines))
-
           manifest_text = manifest.read_text()
-          manifest_text, manifest_count = re.subn(
+          version_lines = re.findall(r'(?m)^\s*"version"\s*:\s*"[^"]+"\s*,?\s*$', manifest_text)
+          if len(version_lines) != 1:
+              sys.exit("Expected exactly one manifest.json version line to update.")
+          manifest_text = re.sub(
               r'(?m)^(\s*"version"\s*:\s*)"[^"]+"(\s*,?\s*)$',
-              rf'\1"{version}"\2',
+              lambda match: f'{match.group(1)}"{version}"{match.group(2)}',
               manifest_text,
               count=1,
           )
-          if manifest_count != 1:
-              sys.exit("Expected exactly one manifest.json version line to update.")
           manifest.write_text(manifest_text)
 
           parsed_pyproject = tomllib.loads(pyproject.read_text())["project"]["version"]
@@ -177,8 +163,6 @@ jobs:
           if parsed_pyproject != version or parsed_manifest != version:
               sys.exit("Updated metadata does not match requested version.")
           PY
-
-          uv lock
 
       - name: Create release pull request
         if: steps.duplicate-check.outputs.skip != 'true'

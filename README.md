@@ -101,20 +101,6 @@ Any wired or wireless client that has connected to your UniFi network and appear
 
 > **Note**: Access points, switches, and other UniFi infrastructure devices are not tracked.
 
-## Supported Functions
-
-| Function | Description |
-|---|---|
-| **Presence detection** | Tracks whether selected devices are home or away |
-| **Real-time updates** | Uses WebSocket events for fast state changes |
-| **Fallback polling** | Refreshes state when WebSocket events are missed |
-| **Device selection** | Choose the devices to track |
-| **Away threshold** | Control how long inactivity lasts before away |
-| **Reauthentication** | Update credentials without removing the integration |
-| **Reconfiguration** | Change controller settings without starting over |
-| **Diagnostics** | Download redacted troubleshooting data |
-| **System health** | View controller and WebSocket status |
-
 ## How Data is Updated
 
 This integration uses a **push-first, poll-fallback** strategy:
