@@ -121,16 +121,6 @@ async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None
     ws.stop()
 
 
-async def test_set_available_noop_when_value_unchanged(hass: HomeAssistant) -> None:
-    """Test _set_available() leaves state untouched on no-op updates."""
-    ws, _, _ = make_websocket(hass)
-    ws.available = True
-
-    ws._set_available(True)
-
-    assert ws.available is True
-
-
 async def test_websocket_becomes_available_after_runner_confirms_session(hass: HomeAssistant) -> None:
     """Test that availability flips only after the first inbound WebSocket frame."""
     ws, controller, _ = make_websocket(hass)

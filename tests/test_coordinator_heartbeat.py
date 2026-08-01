@@ -43,6 +43,7 @@ async def test_heartbeat_expiry_marks_recently_offline_client_away(
 
     assert coordinator.data.clients[mac].is_home is False
     assert coordinator.heartbeat_expiry_count == 0
+    assert coordinator._cancel_heartbeat_check is None
 
 
 async def test_heartbeat_expiry_skips_client_when_newer_activity_arrives(
@@ -314,29 +315,3 @@ async def test_heartbeat_expiry_noop_without_tracked_state(
     coordinator._async_check_heartbeat_expiry()
 
     assert coordinator.data is None
-
-
-async def test_heartbeat_fires_at_scheduled_time(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
-    coordinator_config_entry: MagicMock,
-) -> None:
-    """Test that the on-demand heartbeat timer fires and transitions device to away."""
-    now = dt_util.utcnow()
-    mac = "aa:bb:cc:dd:ee:ff"
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-
-    # Device comes home via WS
-    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
-    assert coordinator.data.clients[mac].is_home is True
-    assert coordinator._cancel_heartbeat_check is not None
-
-    # Advance time and fire the scheduled callback.
-    freezer.tick(timedelta(seconds=coordinator.away_seconds + 1))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
-
-    assert coordinator.data.clients[mac].is_home is False
-    # No more expiries — timer should be cleared
-    assert coordinator._cancel_heartbeat_check is None

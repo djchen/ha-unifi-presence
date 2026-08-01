@@ -281,33 +281,6 @@ async def test_process_message_for_one_mac_preserves_unrelated_tracked_device_st
     assert coordinator.data.clients[away_mac].name == "Jane Phone"
 
 
-async def test_process_message_when_data_is_none(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
-    coordinator_config_entry: MagicMock,
-) -> None:
-    """Test that process_message works when self.data is None (first WS message before poll)."""
-    now = dt_util.utcnow()
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-
-    # data is None before first poll
-    assert coordinator.data is None
-
-    message = MagicMock()
-    message.data = {
-        "mac": "aa:bb:cc:dd:ee:ff",
-        "name": "Dan Phone",
-        "last_seen": int(now.timestamp()),
-    }
-    coordinator.process_message(message)
-
-    # Should have created data with the device home
-    assert coordinator.data is not None
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
-
-
 async def test_process_message_inserts_initial_runtime_state_into_client_cache(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -318,6 +291,7 @@ async def test_process_message_inserts_initial_runtime_state_into_client_cache(
     now = dt_util.utcnow()
     mac = "aa:bb:cc:dd:ee:ff"
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+    assert coordinator.data is None
 
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": int(now.timestamp())}))
 
