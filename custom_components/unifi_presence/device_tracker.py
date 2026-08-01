@@ -40,8 +40,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         """Enable entities by default.
 
         ScannerEntity disables entities when no device entry exists, but this
-        integration intentionally does not create per-client device entries
-        (matching the official HA UniFi integration pattern).
+        integration intentionally does not create per-client device entries.
         """
         return True
 
