@@ -10,10 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_presence.const import CONF_FALLBACK_POLL_INTERVAL
-from custom_components.unifi_presence.coordinator import (
-    UnifiPresenceCoordinator,
-    UnifiPresenceData,
-)
+from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 
 from .conftest import MOCK_OPTIONS, _make_mock_client
 
@@ -44,11 +41,11 @@ async def test_coordinator_fetches_clients(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert isinstance(data, UnifiPresenceData)
+    assert isinstance(data, dict)
     # Client 1 seen just now -> home
-    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is True
+    assert data["aa:bb:cc:dd:ee:ff"][0] is True
     # Client 2 seen 120s ago with 60s threshold -> not_home
-    assert data.clients["11:22:33:44:55:66"].is_home is False
+    assert data["11:22:33:44:55:66"][0] is False
 
 
 async def test_coordinator_marks_unknown_device_not_home(
@@ -60,8 +57,8 @@ async def test_coordinator_marks_unknown_device_not_home(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.clients["aa:bb:cc:dd:ee:ff"].is_home is False
-    assert data.clients["11:22:33:44:55:66"].is_home is False
+    assert data["aa:bb:cc:dd:ee:ff"][0] is False
+    assert data["11:22:33:44:55:66"][0] is False
 
 
 async def test_coordinator_offline_client_falls_back_to_mac_without_cached_metadata(
@@ -74,8 +71,7 @@ async def test_coordinator_offline_client_falls_back_to_mac_without_cached_metad
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.clients[mac].is_home is False
-    assert data.clients[mac].name == mac
+    assert data[mac] == (False, mac)
     mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
 
@@ -117,8 +113,7 @@ async def test_offline_tracked_client_uses_clients_all_name_when_available(
 
     data = await coordinator._async_update_data()
 
-    assert data.clients[mac].is_home is True
-    assert data.clients[mac].name == "Dan's Renamed Phone"
+    assert data[mac] == (True, "Dan's Renamed Phone")
     assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
 
 
@@ -142,8 +137,7 @@ async def test_offline_tracked_client_keeps_cached_metadata_when_clients_all_stu
 
     data = await coordinator._async_update_data()
 
-    assert data.clients[mac].is_home is True
-    assert data.clients[mac].name == "Dan Phone"
+    assert data[mac] == (True, "Dan Phone")
     assert mock_coordinator_controller.clients_all.update_mock.await_count == 2
 
 
@@ -161,8 +155,7 @@ async def test_offline_tracked_client_uses_clients_all_name_on_cold_start(
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
 
-    assert data.clients[mac].is_home is False
-    assert data.clients[mac].name == "Dan Phone"
+    assert data[mac] == (False, "Dan Phone")
     mock_coordinator_controller.clients_all.update_mock.assert_awaited_once()
 
 
@@ -184,8 +177,7 @@ async def test_active_client_with_blank_metadata_preserves_previous_info(
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, last_seen=int(now.timestamp()))
     data = await coordinator._async_update_data()
 
-    assert data.clients[mac].is_home is True
-    assert data.clients[mac].name == "Dan Phone"
+    assert data[mac] == (True, "Dan Phone")
 
 
 async def test_coordinator_fallback_interval(
@@ -218,17 +210,17 @@ async def test_fallback_poll_keeps_recently_missing_client_home_until_heartbeat_
 
     second_data = await coordinator._async_update_data()
 
-    assert second_data.clients[mac].is_home is True
+    assert second_data[mac][0] is True
     assert coordinator.heartbeat_expiry_count == 1
 
 
-async def test_fallback_poll_diff_returns_existing_data(
+async def test_fallback_poll_returns_detached_equal_snapshot(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
-    """Test that fallback poll returns existing data when state unchanged."""
+    """Test an unchanged fallback poll returns a fresh, equal public snapshot."""
     now = dt_util.utcnow()
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=int(now.timestamp()))
     mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
@@ -241,8 +233,8 @@ async def test_fallback_poll_diff_returns_existing_data(
 
     data2 = await coordinator._async_update_data()
 
-    # Same state -> should return the same object
-    assert data2 is data1
+    assert data2 == data1
+    assert data2 is not data1
 
 
 async def test_async_refresh_skips_listener_update_when_state_unchanged(
@@ -291,7 +283,7 @@ async def test_async_refresh_notifies_listeners_on_metadata_only_change(
     await coordinator.async_refresh()
 
     assert coordinator.async_update_listeners.call_count == 2
-    assert coordinator.data.clients["aa:bb:cc:dd:ee:ff"].name == "Dan Phone Updated"
+    assert coordinator.data["aa:bb:cc:dd:ee:ff"][1] == "Dan Phone Updated"
 
 
 async def test_fallback_poll_returns_new_data_on_state_change(
@@ -309,15 +301,13 @@ async def test_fallback_poll_returns_new_data_on_state_change(
 
     data1 = await coordinator._async_update_data()
     coordinator.async_set_updated_data(data1)
-    assert data1.clients["aa:bb:cc:dd:ee:ff"].is_home is True
+    assert data1["aa:bb:cc:dd:ee:ff"][0] is True
 
     # Simulate device going away: remove from active clients and age out
     # the cached timestamp past the away threshold
     mock_coordinator_controller.clients.clear()
-    coordinator.data.clients["aa:bb:cc:dd:ee:ff"].last_seen_ts = int((now - timedelta(seconds=120)).timestamp())
+    coordinator._client_states["aa:bb:cc:dd:ee:ff"].last_seen_ts = int((now - timedelta(seconds=120)).timestamp())
 
     data2 = await coordinator._async_update_data()
 
-    # State changed -> should return a new data object
-    assert data2 is not data1
-    assert data2.clients["aa:bb:cc:dd:ee:ff"].is_home is False
+    assert data2["aa:bb:cc:dd:ee:ff"][0] is False

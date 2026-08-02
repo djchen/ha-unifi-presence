@@ -101,9 +101,9 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
 
     with (
         patch(
-            "custom_components.unifi_presence.helpers.create_controller_with_resolved_site",
-            return_value=(reauth_controller, "office"),
-        ) as create_controller_with_resolved_site,
+            "custom_components.unifi_presence.config_flow.create_controller_for_params",
+            return_value=reauth_controller,
+        ) as create_controller_for_params,
     ):
         result = await async_run_reauth_confirm_step(
             hass,
@@ -115,11 +115,12 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
     assert result["reason"] == "reauth_successful"
     assert (
         _site_arg_from_call(
-            create_controller_with_resolved_site.await_args.args,
-            create_controller_with_resolved_site.await_args.kwargs,
+            create_controller_for_params.await_args.args,
+            create_controller_for_params.await_args.kwargs,
         )
         == OFFICE_SITE_ID
     )
+    assert create_controller_for_params.await_args.kwargs["resolve_legacy_site"] is True
 
 
 async def test_reauth_missing_unique_id_uses_stored_short_site_directly(

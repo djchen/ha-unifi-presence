@@ -67,9 +67,7 @@ async def async_get_config_entry_diagnostics(
         devices_with_active_away_timers = coordinator.heartbeat_expiry_count
 
     device_states = (
-        {mac: client.is_home for mac, client in coordinator_data.clients.items()}
-        if coordinator_data is not None
-        else {}
+        {mac: is_home for mac, (is_home, _name) in coordinator_data.items()} if coordinator_data is not None else {}
     )
 
     # Redact options containing MAC addresses

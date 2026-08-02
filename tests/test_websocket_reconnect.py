@@ -314,6 +314,7 @@ async def test_schedule_reauth_and_restart_schedules_retry_when_controller_none(
 
     mock_call_later.assert_called_once()
     assert mock_call_later.call_args[0][1] == RETRY_TIMER
+    assert ws._reconnect_task is None
 
 
 async def test_schedule_retry_applies_jitter(hass: HomeAssistant) -> None:

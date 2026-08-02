@@ -265,11 +265,21 @@ class UnifiPresenceWebsocket:
         self._start_websocket_runner()
 
     @callback
-    def _start_reconnect_task(self, coro: Coroutine[object, object, None]) -> None:
+    def _start_reconnect_task(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Replace any existing reconnect task with a new one."""
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
-        self._reconnect_task = self.hass.async_create_background_task(coro, name="unifi_presence_reconnect")
+
+        async def _run() -> None:
+            await asyncio.sleep(0)
+            current_task = asyncio.current_task()
+            try:
+                await coro_factory()
+            finally:
+                if self._reconnect_task is current_task:
+                    self._reconnect_task = None
+
+        self._reconnect_task = self.hass.async_create_background_task(_run(), name="unifi_presence_reconnect")
 
     @callback
     def restart_with_current_controller(self) -> None:
@@ -281,14 +291,9 @@ class UnifiPresenceWebsocket:
         self.available = False
 
         async def _do_restart() -> None:
-            current_task = asyncio.current_task()
-            try:
-                await self._async_restart_runner()
-            finally:
-                if self._reconnect_task is current_task:
-                    self._reconnect_task = None
+            await self._async_restart_runner()
 
-        self._start_reconnect_task(_do_restart())
+        self._start_reconnect_task(_do_restart)
 
     @callback
     def _schedule_reauth_and_restart(self) -> None:
@@ -300,7 +305,6 @@ class UnifiPresenceWebsocket:
         self.available = False
 
         async def _do_reconnect() -> None:
-            current_task = asyncio.current_task()
             api = self._get_api()
             if api is None:
                 _LOGGER.debug("No controller available, scheduling retry")
@@ -319,11 +323,8 @@ class UnifiPresenceWebsocket:
                 self._schedule_retry()
             else:
                 await self._async_restart_runner()
-            finally:
-                if self._reconnect_task is current_task:
-                    self._reconnect_task = None
 
-        self._start_reconnect_task(_do_reconnect())
+        self._start_reconnect_task(_do_reconnect)
 
     @callback
     def _handle_watchdog_expiry(self, _now: object) -> None:

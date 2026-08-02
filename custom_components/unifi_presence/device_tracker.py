@@ -40,8 +40,7 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         """Enable entities by default.
 
         ScannerEntity disables entities when no device entry exists, but this
-        integration intentionally does not create per-client device entries
-        (matching the official HA UniFi integration pattern).
+        integration intentionally does not create per-client device entries.
         """
         return True
 
@@ -64,8 +63,8 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         if data is None:
             return self._mac
 
-        client = data.clients.get(self._mac)
-        return client.name if client else self._mac
+        client = data.get(self._mac)
+        return client[1] if client else self._mac
 
     @property
     def unique_id(self) -> str | None:
@@ -79,14 +78,13 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
         if data is None:
             return False
 
-        client = data.clients.get(self._mac)
-        return client.is_home if client else False
+        client = data.get(self._mac)
+        return client[0] if client else False
 
     @property
     def available(self) -> bool:
         """Return whether the tracked client is currently available."""
-        data = cast(UnifiPresenceData | None, self.coordinator.data)
-        return super().available and data is not None
+        return super().available and self.coordinator.data is not None
 
     @property
     def mac_address(self) -> str:
