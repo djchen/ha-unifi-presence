@@ -40,6 +40,7 @@ from .const import (
     DOMAIN,
 )
 from .helpers import (
+    NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL,
     UNIFI_AUTH_EXCEPTIONS,
     UNIFI_COMMUNICATION_EXCEPTIONS,
     ClientStoreRefreshPolicy,
@@ -49,8 +50,6 @@ from .helpers import (
     build_client_labels_from_stores,
     config_entry_site_id,
     create_controller_for_params,
-    format_config_entry_title,
-    format_missing_client_label,
     normalize_mac,
     normalize_macs,
     site_title,
@@ -226,7 +225,7 @@ def _build_client_options(
     client_options: dict[str, str] = {}
 
     for mac in preserved_missing:
-        client_options[mac] = format_missing_client_label(mac)
+        client_options[mac] = f"{mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})"
 
     for mac, label in current_clients:
         client_options[mac] = label
@@ -451,7 +450,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_update_reload_and_abort(
             reconfigure_entry,
             unique_id=self._site_id,
-            title=format_config_entry_title(site_title(site), self._host),
+            title=f"{site_title(site)} ({self._host})",
             data_updates={
                 CONF_HOST: self._host,
                 CONF_PORT: self._port,
@@ -637,7 +636,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "no_devices"
             else:
                 return self.async_create_entry(
-                    title=format_config_entry_title(self._site_title, self._host),
+                    title=f"{self._site_title} ({self._host})",
                     data={
                         CONF_HOST: self._host,
                         CONF_PORT: self._port,

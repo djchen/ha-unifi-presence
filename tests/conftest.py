@@ -98,11 +98,6 @@ class _MockClientStore(dict[str, MagicMock]):
         await self.update_mock()
 
 
-def _build_client_store(items: list[tuple[str, MagicMock]] | None = None) -> _MockClientStore:
-    """Create a dict-like mock client store with async update support."""
-    return _MockClientStore(items)
-
-
 def _build_controller(
     *,
     clients: MagicMock | _MockClientStore,
@@ -134,8 +129,8 @@ def make_mock_controller(
 ) -> MagicMock:
     """Create a fully-wired controller mock for flow and integration tests."""
     controller = _build_controller(
-        clients=_build_client_store(clients_items),
-        clients_all=_build_client_store(clients_all_items),
+        clients=_MockClientStore(clients_items),
+        clients_all=_MockClientStore(clients_all_items),
     )
     controller.login = AsyncMock(side_effect=login_side_effect)
     controller.sites = MagicMock()

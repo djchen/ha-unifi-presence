@@ -13,7 +13,6 @@ from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.selector import SelectSelectorMode
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence.config_flow import UnifiPresenceConfigFlow
 from custom_components.unifi_presence.const import (
@@ -39,12 +38,6 @@ from .conftest import (
 )
 
 pytestmark = pytest.mark.usefixtures("_bypass_setup")
-
-
-@pytest.fixture
-def config_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Standard config entry added to hass."""
-    return add_mock_config_entry(hass)
 
 
 # ── User step: authentication errors ─────────────────────────────────────
@@ -449,8 +442,10 @@ async def test_devices_step_without_available_clients_aborts(hass: HomeAssistant
     assert result["reason"] == "no_clients_available"
 
 
-async def test_already_configured_abort(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+async def test_already_configured_abort(hass: HomeAssistant) -> None:
     """Test that duplicate site setup aborts even with a different host alias."""
+    config_entry = add_mock_config_entry(hass)
+    assert config_entry.unique_id == DEFAULT_SITE_ID
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
     alias_config = {**USER_STEP_INPUT, CONF_HOST: "controller.example.com"}

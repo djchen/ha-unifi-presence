@@ -149,79 +149,47 @@ async def test_coordinator_reauth_failure_raises_config_entry_auth_failed(
         await coordinator._async_update_data()
 
 
-@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_coordinator_reauth_network_failure_raises_update_failed(
+@pytest.mark.parametrize(
+    "reauth_exception",
+    [aiounifi.LoginRequired, aiounifi.Unauthorized],
+    ids=["login-required", "unauthorized"],
+)
+@pytest.mark.parametrize(
+    ("second_exception_type", "second_exception_args"),
+    [
+        (aiounifi.AiounifiException, ("still down",)),
+        (
+            JSONDecodeError,
+            (
+                "unexpected end of data",
+                '{"meta":{"rc":"ok"},"data":[',
+                27,
+            ),
+        ),
+        (TimeoutError, ()),
+    ],
+    ids=["aiounifi-exception", "json-decode-error", "timeout-error"],
+)
+async def test_coordinator_post_reauth_communication_failure_raises_update_failed(
     hass: HomeAssistant,
     mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
-    exception: type[Exception],
+    reauth_exception: type[Exception],
+    second_exception_type: type[Exception],
+    second_exception_args: tuple[object, ...],
 ) -> None:
-    """Test that network failure after re-auth raises UpdateFailed."""
+    """Test that communication failures after re-auth raise UpdateFailed."""
 
-    async def _network_fails_after_reauth() -> None:
+    async def _communication_fails_after_reauth() -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise exception
-        raise aiounifi.AiounifiException("still down")
+            raise reauth_exception
+        raise second_exception_type(*second_exception_args)
 
     call_count = 0
 
-    mock_coordinator_controller.clients.update_mock.side_effect = _network_fails_after_reauth
-
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-
-
-@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_coordinator_reauth_invalid_json_raises_update_failed(
-    hass: HomeAssistant,
-    mock_coordinator_controller: AsyncMock,
-    coordinator_config_entry: MagicMock,
-    exception: type[Exception],
-) -> None:
-    """Test that truncated JSON after re-auth remains a transient failure."""
-
-    async def _invalid_json_after_reauth() -> None:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise exception
-        raise JSONDecodeError(
-            "unexpected end of data",
-            '{"meta":{"rc":"ok"},"data":[',
-            27,
-        )
-
-    call_count = 0
-
-    mock_coordinator_controller.clients.update_mock.side_effect = _invalid_json_after_reauth
-
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
-
-
-@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_coordinator_reauth_timeout_raises_update_failed(
-    hass: HomeAssistant,
-    mock_coordinator_controller: AsyncMock,
-    coordinator_config_entry: MagicMock,
-    exception: type[Exception],
-) -> None:
-    """Test that timeouts during re-auth remain transient failures."""
-
-    async def _timeout_after_reauth() -> None:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise exception
-        raise TimeoutError
-
-    call_count = 0
-
-    mock_coordinator_controller.clients.update_mock.side_effect = _timeout_after_reauth
+    mock_coordinator_controller.clients.update_mock.side_effect = _communication_fails_after_reauth
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     with pytest.raises(UpdateFailed):
