@@ -119,23 +119,6 @@ def site_title(site: Site) -> str:
     return str(site.description or site.name)
 
 
-def format_config_entry_title(site_title_value: str, host: str) -> str:
-    """Return the Home Assistant config entry title for a site."""
-    return f"{site_title_value} ({host})"
-
-
-def format_current_client_label(name: str, mac: str) -> str:
-    """Return the user-facing label for a current UniFi client."""
-    normalized_mac = normalize_mac(mac)
-    return f"{name} ({normalized_mac})"
-
-
-def format_missing_client_label(mac: str) -> str:
-    """Return the label used for tracked clients no longer listed by UniFi."""
-    normalized_mac = normalize_mac(mac)
-    return f"{normalized_mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})"
-
-
 def resolve_client_display_name(
     mac: str,
     *,
@@ -260,7 +243,7 @@ def build_client_labels_from_stores(
         for mac, client in store_items:
             mac_lower = normalize_mac(mac)
             name = resolve_client_display_name(mac_lower, current=client)
-            clients[mac_lower] = format_current_client_label(str(name), mac_lower)
+            clients[mac_lower] = f"{name} ({mac_lower})"
 
     return clients
 

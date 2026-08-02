@@ -14,6 +14,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.selector import SelectSelectorMode
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence.config_flow import _build_client_options
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
@@ -50,6 +51,19 @@ def config_entry(hass: HomeAssistant) -> MockConfigEntry:
 def options_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Config entry with full options added to hass."""
     return add_mock_config_entry(hass, options=MOCK_OPTIONS)
+
+
+def test_build_client_options_normalizes_available_and_tracked_clients() -> None:
+    """Test client options normalize and deduplicate available tracked clients."""
+    options = _build_client_options(
+        {" AA:BB:CC:DD:EE:FF ": "Available Client (aa:bb:cc:dd:ee:ff)"},
+        [" AA:BB:CC:DD:EE:FF ", " 11:22:33:44:55:66 "],
+    )
+
+    assert options == {
+        "11:22:33:44:55:66": "11:22:33:44:55:66 (No longer in UniFi Client Devices)",
+        "aa:bb:cc:dd:ee:ff": "Available Client (aa:bb:cc:dd:ee:ff)",
+    }
 
 
 # ── Options flow ─────────────────────────────────────────────────────────
@@ -384,34 +398,16 @@ async def test_options_flow_empty_clients_and_empty_tracked_aborts(
 # ── Translation integrity ────────────────────────────────────────────────
 
 
-def test_options_flow_no_tracked_devices_translation_keys_exist() -> None:
-    """Test the dedicated options validation key exists in both translation files."""
-    strings = json.loads((TRANSLATIONS_ROOT / "strings.json").read_text())
-    english = json.loads((TRANSLATIONS_ROOT / "translations" / "en.json").read_text())
-
-    assert "no_tracked_devices" in strings["options"]["error"]
-    assert "no_tracked_devices" in english["options"]["error"]
-
-
-def test_removed_translation_keys_stay_absent_and_aligned() -> None:
-    """Test stale translation keys were removed from both translation files."""
-    strings = json.loads((TRANSLATIONS_ROOT / "strings.json").read_text())
-    english = json.loads((TRANSLATIONS_ROOT / "translations" / "en.json").read_text())
-
-    assert "already_configured" not in strings["config"]["error"]
-    assert "already_configured" not in english["config"]["error"]
-    assert "no_devices" not in strings["options"]["error"]
-    assert "no_devices" not in english["options"]["error"]
-    assert "entity" not in strings
-    assert "entity" not in english
-
-
-def test_device_picker_translation_keys_exist_and_stay_aligned() -> None:
-    """Test high-churn picker/help copy keys remain present in both translation files."""
+def test_translation_keys_exist_and_removed_keys_stay_absent() -> None:
+    """Test translation keys remain present or absent in both translation files."""
     strings = json.loads((TRANSLATIONS_ROOT / "strings.json").read_text())
     english = json.loads((TRANSLATIONS_ROOT / "translations" / "en.json").read_text())
 
     for doc in (strings, english):
+        assert "no_tracked_devices" in doc["options"]["error"]
+        assert "already_configured" not in doc["config"]["error"]
+        assert "no_devices" not in doc["options"]["error"]
+        assert "entity" not in doc
         assert "tracked_devices" in doc["config"]["step"]["devices"]["data"]
         assert "description" in doc["config"]["step"]["devices"]
         assert "ssl_verify" in doc["config"]["step"]["user"]["data_description"]

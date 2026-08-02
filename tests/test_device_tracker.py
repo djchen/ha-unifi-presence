@@ -175,16 +175,6 @@ def test_tracker_available_true_when_offline() -> None:
     assert tracker.name == "Dan Phone"
 
 
-def test_tracker_available_true_when_away_but_present() -> None:
-    """Test that away tracked clients stay available when still present."""
-    data = _make_presence_data(away_macs=["aa:bb:cc:dd:ee:ff"])
-    coordinator = _make_coordinator(data)
-
-    tracker = UnifiPresenceTracker(coordinator, "aa:bb:cc:dd:ee:ff")
-
-    assert tracker.available is True
-
-
 def test_tracker_available_false_when_coordinator_update_failed() -> None:
     """Test that coordinator update failures still make trackers unavailable."""
     data = _make_presence_data(away_macs=["aa:bb:cc:dd:ee:ff"])

@@ -19,9 +19,6 @@ from custom_components.unifi_presence.helpers import (
     build_client_labels_from_stores,
     create_controller,
     create_controller_for_params,
-    format_config_entry_title,
-    format_current_client_label,
-    format_missing_client_label,
     normalize_mac,
     normalize_macs,
     should_resolve_controller_site,
@@ -151,19 +148,6 @@ def test_site_title_prefers_description_then_name() -> None:
     assert site_title(unnamed_description) == "office"
 
 
-def test_format_config_entry_title() -> None:
-    """Test config entry titles combine site title and host."""
-    assert format_config_entry_title("Home", "192.168.1.1") == "Home (192.168.1.1)"
-
-
-def test_client_label_helpers_normalize_mac() -> None:
-    """Test client label helpers normalize MACs before formatting."""
-    assert format_current_client_label("Dan Phone", " AA:BB:CC:DD:EE:FF ") == ("Dan Phone (aa:bb:cc:dd:ee:ff)")
-    assert format_missing_client_label(" AA:BB:CC:DD:EE:FF ") == (
-        "aa:bb:cc:dd:ee:ff (No longer in UniFi Client Devices)"
-    )
-
-
 def test_controller_connection_params_from_mapping_uses_override_site() -> None:
     """Test typed controller params honor an explicit site override."""
     params = ControllerConnectionParams.from_mapping(MOCK_CONFIG_DATA, site="office")
@@ -205,6 +189,7 @@ async def test_create_controller_for_params_uses_legacy_site_resolution(hass: Ho
         )
 
     assert result is controller
+    create_ctrl.assert_awaited_once()
     assert create_ctrl.await_args.args[1].site == ""
     assert controller.connectivity.config.site == "office"
 
@@ -274,7 +259,7 @@ def test_build_client_labels_from_stores_active_wins_on_collision() -> None:
     """Test active client labels override historical labels for the same MAC."""
     labels = build_client_labels_from_stores(
         {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Old Name")}.items(),
-        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Current Name")}.items(),
+        {" AA:BB:CC:DD:EE:FF ": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Current Name")}.items(),
     )
 
     assert labels == {"aa:bb:cc:dd:ee:ff": "Current Name (aa:bb:cc:dd:ee:ff)"}
@@ -322,36 +307,6 @@ async def test_create_controller_closes_owned_session_on_login_cancellation(hass
         )
 
     session.detach.assert_called_once_with()
-
-
-async def test_create_controller_for_params_reuses_single_controller(hass: HomeAssistant) -> None:
-    """Test legacy site normalization reuses the same authenticated controller."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="site-office-id",
-        ssl_verify=False,
-    )
-    controller = MagicMock()
-    controller.connectivity = SimpleNamespace(config=SimpleNamespace(site=""))
-    controller.sites = MagicMock()
-    controller.sites.update = AsyncMock()
-    controller.sites.values.return_value = [SimpleNamespace(site_id="site-office-id", name="office")]
-
-    with patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller) as create_ctrl:
-        result_controller = await create_controller_for_params(
-            hass,
-            params,
-            unique_id="192.168.1.1_office",
-            resolve_legacy_site=True,
-        )
-
-    assert result_controller is controller
-    assert controller.connectivity.config.site == "office"
-    assert create_ctrl.await_count == 1
-    assert create_ctrl.await_args.args[1].site == ""
 
 
 def test_should_resolve_controller_site_false_for_default_site() -> None:
