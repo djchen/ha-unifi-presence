@@ -7,7 +7,7 @@
 
 ## Commands
 
-- Use uv `0.11.26` and Python `3.14.5`: `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
+- Use uv `0.12.1` and Python `3.14.5`: `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
 - Install hooks once: `uv run --locked --no-sync pre-commit install`
 - Local CI parity: `uv run --locked --no-sync pre-commit run --all-files` and `uv run --locked --no-sync pytest tests/ -v`; `.github/workflows/validate.yml` also runs HACS, hassfest, and zizmor.
 - Workflow edits must satisfy `.github/zizmor.yml`: `uses:` actions are allowlisted and hash-pinned; update the allowlist deliberately when adding actions.
