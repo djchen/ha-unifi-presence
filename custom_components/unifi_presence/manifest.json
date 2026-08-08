@@ -3,7 +3,6 @@
   "name": "UniFi Presence",
   "codeowners": ["@djchen"],
   "config_flow": true,
-  "dependencies": [],
   "documentation": "https://github.com/djchen/ha-unifi-presence",
   "integration_type": "hub",
   "iot_class": "local_push",
