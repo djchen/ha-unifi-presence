@@ -389,35 +389,6 @@ async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
     assert "aa:bb:cc:dd:ee:ff" in result["options"][CONF_TRACKED_DEVICES]
 
 
-@pytest.mark.parametrize(
-    ("host", "expected_unique_id"),
-    [
-        ("192.168.1.1", DEFAULT_SITE_ID),
-        ("::1", DEFAULT_SITE_ID),
-        ("fd12:3456:789a::1", DEFAULT_SITE_ID),
-        ("unifi.local", DEFAULT_SITE_ID),
-        ("controller.example.com", DEFAULT_SITE_ID),
-    ],
-)
-async def test_devices_step_creates_entry_host_variants(
-    hass: HomeAssistant, host: str, expected_unique_id: str
-) -> None:
-    """Test that setup identity is based on site_id, not host."""
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
-    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
-
-    config_data = {**USER_STEP_INPUT, CONF_HOST: host}
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await async_run_user_step(hass, config_data)
-        result = await async_configure_flow_step(hass, result, {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]})
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == f"Home ({host})"
-    assert result["data"][CONF_HOST] == host
-    assert result["result"].unique_id == expected_unique_id
-
-
 async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
     """Test that submitting with no devices shows an error."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")

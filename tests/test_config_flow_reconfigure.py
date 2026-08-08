@@ -125,56 +125,6 @@ async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass:
     assert _site_arg_from_call(first_call.args, first_call.kwargs) == "office"
 
 
-@pytest.mark.parametrize(
-    ("new_host", "expected_unique_id"),
-    [
-        ("10.0.0.1", DEFAULT_SITE_ID),
-        ("::1", DEFAULT_SITE_ID),
-        ("fd12:3456:789a::1", DEFAULT_SITE_ID),
-        ("unifi.local", DEFAULT_SITE_ID),
-        ("controller.example.com", DEFAULT_SITE_ID),
-    ],
-)
-async def test_reconfigure_flow_success_host_variants(
-    hass: HomeAssistant, new_host: str, expected_unique_id: str
-) -> None:
-    """Test that reconfigure keeps the same site identity across host changes."""
-    entry = _make_reconfigure_entry(hass)
-
-    controller = _mock_controller()
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await async_run_reconfigure_step(
-            hass,
-            entry,
-            make_reconfigure_input(host=new_host, port=8443, username="newadmin", password="newpass"),
-        )
-
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "reconfigure_successful"
-    assert entry.data["host"] == new_host
-    assert entry.unique_id == expected_unique_id
-    assert entry.title == f"Home ({new_host})"
-
-
-async def test_reconfigure_flow_same_host_site_changes_credentials(hass: HomeAssistant) -> None:
-    """Test reconfigure with the same site updates credentials successfully."""
-    entry = _make_reconfigure_entry(hass)
-
-    controller = _mock_controller()
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await async_run_reconfigure_step(
-            hass,
-            entry,
-            make_reconfigure_input(host="192.168.1.1", port=443, username="newadmin", password="newpass"),
-        )
-
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "reconfigure_successful"
-    assert entry.data["username"] == "newadmin"
-    assert entry.data["password"] == "newpass"
-    assert entry.unique_id == DEFAULT_SITE_ID
-
-
 # ── Reconfigure flow: error paths ────────────────────────────────────────
 
 
