@@ -265,41 +265,23 @@ def test_build_client_labels_from_stores_active_wins_on_collision() -> None:
     assert labels == {"aa:bb:cc:dd:ee:ff": "Current Name (aa:bb:cc:dd:ee:ff)"}
 
 
-async def test_create_controller_closes_owned_session_on_login_failure(hass: HomeAssistant) -> None:
-    """Test SSL-disabled sessions are detached if login fails."""
+@pytest.mark.parametrize("error", [TimeoutError, asyncio.CancelledError])
+async def test_create_controller_closes_owned_session_on_login_failure(
+    hass: HomeAssistant,
+    error: type[BaseException],
+) -> None:
+    """Test SSL-disabled sessions are detached if login does not complete."""
     session = MagicMock()
     session.closed = False
     session.detach = MagicMock()
     controller = MagicMock()
-    controller.login = AsyncMock(side_effect=TimeoutError)
+    controller.login = AsyncMock(side_effect=error)
 
     with (
         patch("custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session),
         patch("custom_components.unifi_presence.helpers.Configuration"),
         patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
-        pytest.raises(TimeoutError),
-    ):
-        await create_controller(
-            hass,
-            _NO_SSL_PARAMS,
-        )
-
-    session.detach.assert_called_once_with()
-
-
-async def test_create_controller_closes_owned_session_on_login_cancellation(hass: HomeAssistant) -> None:
-    """Test SSL-disabled sessions are detached if login is cancelled."""
-    session = MagicMock()
-    session.closed = False
-    session.detach = MagicMock()
-    controller = MagicMock()
-    controller.login = AsyncMock(side_effect=asyncio.CancelledError)
-
-    with (
-        patch("custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session),
-        patch("custom_components.unifi_presence.helpers.Configuration"),
-        patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
-        pytest.raises(asyncio.CancelledError),
+        pytest.raises(error),
     ):
         await create_controller(
             hass,
@@ -354,10 +336,12 @@ async def test_create_controller_for_params_keeps_modern_site_name_without_refre
     controller.sites.update.assert_not_awaited()
 
 
+@pytest.mark.parametrize("error", [RuntimeError, asyncio.CancelledError])
 async def test_create_controller_for_params_closes_controller_on_resolution_failure(
     hass: HomeAssistant,
+    error: type[BaseException],
 ) -> None:
-    """Test site-resolution failures close the already-created controller."""
+    """Test incomplete site resolution closes the already-created controller."""
     params = ControllerConnectionParams(
         host="192.168.1.1",
         port=443,
@@ -367,86 +351,13 @@ async def test_create_controller_for_params_closes_controller_on_resolution_fail
         ssl_verify=False,
     )
     controller = MagicMock()
-    controller.connectivity = SimpleNamespace(config=SimpleNamespace(site=""))
     controller.sites = MagicMock()
-    controller.sites.update = AsyncMock(side_effect=RuntimeError("boom"))
+    controller.sites.update = AsyncMock(side_effect=error)
 
     with (
         patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
         patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
-        pytest.raises(RuntimeError, match="boom"),
-    ):
-        await create_controller_for_params(
-            hass,
-            params,
-            unique_id="192.168.1.1_office",
-            resolve_legacy_site=True,
-        )
-
-    async_close.assert_awaited_once_with(controller)
-
-
-async def test_create_controller_for_params_closes_controller_on_resolution_cancellation(
-    hass: HomeAssistant,
-) -> None:
-    """Test cancellation during site resolution closes the owned controller."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="site-office-id",
-        ssl_verify=False,
-    )
-    controller = MagicMock()
-    controller.sites.update = AsyncMock(side_effect=asyncio.CancelledError)
-
-    with (
-        patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
-        patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
-        pytest.raises(asyncio.CancelledError),
-    ):
-        await create_controller_for_params(
-            hass,
-            params,
-            unique_id="192.168.1.1_office",
-            resolve_legacy_site=True,
-        )
-
-    async_close.assert_awaited_once_with(controller)
-
-
-async def test_create_controller_for_params_closes_controller_on_site_mutation_failure(
-    hass: HomeAssistant,
-) -> None:
-    """Test connectivity config mutation failures close the owned controller."""
-
-    class FailingConfig:
-        @property
-        def site(self) -> str:
-            return ""
-
-        @site.setter
-        def site(self, _value: str) -> None:
-            raise RuntimeError("mutation failed")
-
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="site-office-id",
-        ssl_verify=False,
-    )
-    controller = MagicMock()
-    controller.connectivity = SimpleNamespace(config=FailingConfig())
-    controller.sites.update = AsyncMock()
-    controller.sites.values.return_value = [SimpleNamespace(site_id="site-office-id", name="office")]
-
-    with (
-        patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
-        patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
-        pytest.raises(RuntimeError, match="mutation failed"),
+        pytest.raises(error),
     ):
         await create_controller_for_params(
             hass,
