@@ -122,7 +122,6 @@ def _build_controller(
 
 def make_mock_controller(
     *,
-    login_side_effect: Exception | None = None,
     clients_all_items: list[tuple[str, MagicMock]] | None = None,
     clients_items: list[tuple[str, MagicMock]] | None = None,
     sites: list[MagicMock] | None = None,
@@ -132,7 +131,6 @@ def make_mock_controller(
         clients=_MockClientStore(clients_items),
         clients_all=_MockClientStore(clients_all_items),
     )
-    controller.login = AsyncMock(side_effect=login_side_effect)
     controller.sites = MagicMock()
     controller.sites.update = AsyncMock()
     controller.sites.values.return_value = (
