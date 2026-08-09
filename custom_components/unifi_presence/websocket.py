@@ -220,7 +220,7 @@ class UnifiPresenceWebsocket:
         if self._cancel_retry is not None:
             return
 
-        delay = self._jitter_retry_delay(self._retry_delay)
+        delay = max(1.0, self._retry_delay * random.uniform(1 - RETRY_JITTER, 1 + RETRY_JITTER))
         self._retry_delay = min(self._retry_delay * 2, RETRY_MAX)
         _LOGGER.info("Will try to reconnect to UniFi controller in %s seconds", delay)
 
@@ -230,11 +230,6 @@ class UnifiPresenceWebsocket:
             self._schedule_reauth_and_restart()
 
         self._cancel_retry = async_call_later(self.hass, delay, _run_retry)
-
-    @staticmethod
-    def _jitter_retry_delay(delay: float) -> float:
-        """Spread reconnect attempts to avoid synchronized retries."""
-        return max(1.0, delay * random.uniform(1 - RETRY_JITTER, 1 + RETRY_JITTER))
 
     @callback
     def _clear_retry(self) -> None:

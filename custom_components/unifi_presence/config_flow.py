@@ -98,28 +98,6 @@ def _build_credentials_schema(defaults: Mapping[str, object] | None = None) -> v
     )
 
 
-def _build_site_schema(available_sites: Mapping[str, Site]) -> vol.Schema:
-    """Build the site selection schema."""
-    return vol.Schema(
-        {vol.Required(CONF_SITE): vol.In({site_id: site_title(site) for site_id, site in available_sites.items()})}
-    )
-
-
-def _build_device_selection_schema(
-    client_options: Mapping[str, str],
-    *,
-    default_selected: list[str] | None = None,
-) -> vol.Schema:
-    """Build the tracked-device multi-select schema."""
-    return vol.Schema(
-        {
-            vol.Optional(CONF_TRACKED_DEVICES, default=default_selected or []): _build_tracked_device_selector(
-                client_options
-            ),
-        }
-    )
-
-
 def _build_tracked_device_selector(client_options: Mapping[str, str]) -> SelectSelector:
     """Build a searchable selector for tracked-device choices."""
     options = [SelectOptionDict(value=mac, label=label) for mac, label in client_options.items()]
@@ -231,12 +209,6 @@ def _build_client_options(
         client_options[mac] = label
 
     return client_options
-
-
-async def _fetch_sites(controller: Controller) -> dict[str, Site]:
-    """Fetch sites from the UniFi controller keyed by site_id."""
-    await controller.sites.update()
-    return {site.site_id: site for site in controller.sites.values()}
 
 
 async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
@@ -353,7 +325,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         assert controller is not None
 
         try:
-            self._available_sites = await _fetch_sites(controller)
+            await controller.sites.update()
+            self._available_sites = {site.site_id: site for site in controller.sites.values()}
             self._available_clients = {}
         except Exception:
             _LOGGER.exception("Failed to fetch site list")
@@ -390,7 +363,13 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         """Show the site selection form."""
         return self.async_show_form(
             step_id="site",
-            data_schema=_build_site_schema(self._available_sites),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SITE): vol.In(
+                        {site_id: site_title(site) for site_id, site in self._available_sites.items()}
+                    )
+                }
+            ),
             errors=errors,
         )
 
@@ -658,7 +637,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         client_options = _build_client_options(self._available_clients)
         return self.async_show_form(
             step_id="devices",
-            data_schema=_build_device_selection_schema(client_options),
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_TRACKED_DEVICES, default=[]): _build_tracked_device_selector(client_options),
+                }
+            ),
             errors=errors,
             description_placeholders={"client_count": str(len(client_options))},
         )

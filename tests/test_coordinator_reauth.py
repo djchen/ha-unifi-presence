@@ -15,29 +15,47 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 
-from .conftest import _make_mock_client, make_mock_controller, make_reauth_side_effect
+from .conftest import _make_mock_client, make_mock_controller
 
 
 @pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_coordinator_reauth_on_session_error(
+async def test_coordinator_successful_reauth_lifecycle(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
     exception: type[Exception],
 ) -> None:
-    """Test that the coordinator re-authenticates on LoginRequired or Unauthorized."""
+    """Test controller replacement and state recovery after session expiry."""
     now = int(dt_util.utcnow().timestamp())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
-    mock_coordinator_controller.clients.update_mock.side_effect = make_reauth_side_effect(exception, recover=True)
-    mock_coordinator_controller.clients["aa:bb:cc:dd:ee:ff"] = client1
+    mac = "aa:bb:cc:dd:ee:ff"
+    owned_session = MagicMock(closed=False)
+    initial_controller = make_mock_controller(
+        clients_items=[(mac, _make_mock_client(mac, name="Dan Phone", last_seen=now))]
+    )
+    initial_controller._unifi_presence_owned_session = owned_session
+    replacement_controller = make_mock_controller(clients_items=[(mac, _make_mock_client(mac, last_seen=now))])
+    websocket = MagicMock()
 
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    data = await coordinator._async_update_data()
+    with patch(
+        "custom_components.unifi_presence.coordinator.create_controller_for_params",
+        side_effect=[initial_controller, replacement_controller],
+    ) as mock_create:
+        coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
+        first_data = await coordinator._async_update_data()
+        coordinator.async_set_updated_data(first_data)
 
-    # Should have re-authenticated (reset _controller, called create_controller again) and succeeded
-    assert data["aa:bb:cc:dd:ee:ff"][0] is True
-    assert coordinator._controller is not None
+        initial_controller.clients.update_mock.side_effect = exception
+        coordinator.websocket = websocket
+        data = await coordinator._async_update_data()
+
+    assert data[mac][0] is True
+    assert data[mac][1] == "Dan Phone"
+    assert coordinator.controller is replacement_controller
+    assert mock_create.await_count == 2
+    owned_session.detach.assert_called_once_with()
+    replacement_controller.clients.update_mock.assert_awaited_once()
+    replacement_controller.clients_all.update_mock.assert_awaited_once()
+    websocket.restart_with_current_controller.assert_called_once_with()
 
 
 async def test_coordinator_update_failed(
@@ -102,192 +120,33 @@ async def test_coordinator_initial_timeout_raises_update_failed(
         await coordinator._async_update_data()
 
 
-async def test_coordinator_reauth_detaches_replaced_runtime_controller(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
-    coordinator_config_entry: MagicMock,
-) -> None:
-    """Test poll-triggered reauth detaches the replaced runtime controller session."""
-    now = int(dt_util.utcnow().timestamp())
-    owned_session = MagicMock()
-    owned_session.closed = False
-    owned_session.detach = MagicMock()
-    mock_coordinator_controller.clients.update_mock.side_effect = aiounifi.LoginRequired
-    mock_coordinator_controller._unifi_presence_owned_session = owned_session
-
-    replacement_controller = make_mock_controller(
-        clients_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now))]
-    )
-
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    coordinator._controller = mock_coordinator_controller
-
-    with patch(
-        "custom_components.unifi_presence.coordinator.create_controller_for_params",
-        return_value=replacement_controller,
-    ):
-        data = await coordinator._async_update_data()
-
-    assert data["aa:bb:cc:dd:ee:ff"][0] is True
-    assert coordinator.controller is replacement_controller
-    owned_session.detach.assert_called_once_with()
-
-
-@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
 async def test_coordinator_reauth_failure_raises_config_entry_auth_failed(
     hass: HomeAssistant,
     mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
-    exception: type[Exception],
 ) -> None:
     """Test that persistent credential failure after re-auth raises ConfigEntryAuthFailed."""
-    mock_coordinator_controller.clients.update_mock.side_effect = make_reauth_side_effect(exception, recover=False)
+    mock_coordinator_controller.clients.update_mock.side_effect = [
+        aiounifi.LoginRequired,
+        aiounifi.Unauthorized,
+    ]
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
 
 
-@pytest.mark.parametrize(
-    "reauth_exception",
-    [aiounifi.LoginRequired, aiounifi.Unauthorized],
-    ids=["login-required", "unauthorized"],
-)
-@pytest.mark.parametrize(
-    ("second_exception_type", "second_exception_args"),
-    [
-        (aiounifi.AiounifiException, ("still down",)),
-        (
-            JSONDecodeError,
-            (
-                "unexpected end of data",
-                '{"meta":{"rc":"ok"},"data":[',
-                27,
-            ),
-        ),
-        (TimeoutError, ()),
-    ],
-    ids=["aiounifi-exception", "json-decode-error", "timeout-error"],
-)
 async def test_coordinator_post_reauth_communication_failure_raises_update_failed(
     hass: HomeAssistant,
     mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
-    reauth_exception: type[Exception],
-    second_exception_type: type[Exception],
-    second_exception_args: tuple[object, ...],
 ) -> None:
     """Test that communication failures after re-auth raise UpdateFailed."""
-
-    async def _communication_fails_after_reauth() -> None:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise reauth_exception
-        raise second_exception_type(*second_exception_args)
-
-    call_count = 0
-
-    mock_coordinator_controller.clients.update_mock.side_effect = _communication_fails_after_reauth
+    mock_coordinator_controller.clients.update_mock.side_effect = [
+        aiounifi.LoginRequired,
+        aiounifi.AiounifiException("still down"),
+    ]
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
-
-
-@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_reauth_resets_controller_before_retry(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    coordinator_config_entry: MagicMock,
-    exception: type[Exception],
-) -> None:
-    """Test that re-auth resets _controller to None before retrying."""
-    now = int(dt_util.utcnow().timestamp())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
-
-    controller = AsyncMock()
-    controller.clients = MagicMock()
-    controller.clients.get = MagicMock(return_value=client1)
-    controller.login = AsyncMock()
-    controller.clients.update = AsyncMock(side_effect=make_reauth_side_effect(exception, recover=True))
-
-    with patch(
-        "custom_components.unifi_presence.coordinator.create_controller_for_params",
-        return_value=controller,
-    ) as mock_create:
-        coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-        await coordinator._async_update_data()
-
-    # create_controller called twice: once for initial, once after _controller reset to None
-    assert mock_create.call_count == 2
-    assert coordinator._controller is not None
-
-
-@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_reauth_triggers_websocket_reconnect(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    coordinator_config_entry: MagicMock,
-    exception: type[Exception],
-) -> None:
-    """Test that websocket.restart_with_current_controller() is called after a poll-triggered controller swap."""
-    now = int(dt_util.utcnow().timestamp())
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone", last_seen=now)
-
-    controller = AsyncMock()
-    controller.clients = MagicMock()
-    controller.clients.get = MagicMock(return_value=client1)
-    controller.login = AsyncMock()
-    controller.clients.update = AsyncMock(side_effect=make_reauth_side_effect(exception, recover=True))
-
-    mock_ws = MagicMock()
-
-    with patch(
-        "custom_components.unifi_presence.coordinator.create_controller_for_params",
-        return_value=controller,
-    ):
-        coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-        coordinator.websocket = mock_ws
-        await coordinator._async_update_data()
-
-    mock_ws.restart_with_current_controller.assert_called_once()
-
-
-@pytest.mark.parametrize("exception", [aiounifi.LoginRequired, aiounifi.Unauthorized])
-async def test_reauth_retry_refreshes_clients_all_and_preserves_prior_metadata(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    coordinator_config_entry: MagicMock,
-    exception: type[Exception],
-) -> None:
-    """Test reauth retry refreshes clients_all and preserves prior metadata."""
-    now = int(dt_util.utcnow().timestamp())
-    mac = "aa:bb:cc:dd:ee:ff"
-    client1 = _make_mock_client(mac, name="Dan Phone", last_seen=now)
-    clients = {mac: client1}
-
-    controller = AsyncMock()
-    controller.clients = MagicMock()
-    controller.clients.get = MagicMock(side_effect=clients.get)
-    controller.clients_all = MagicMock()
-    controller.clients_all.update = AsyncMock()
-    controller.clients_all.get = MagicMock(return_value=None)
-    controller.login = AsyncMock()
-    controller.clients.update = AsyncMock()
-
-    with patch(
-        "custom_components.unifi_presence.coordinator.create_controller_for_params",
-        return_value=controller,
-    ):
-        coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-        first_data = await coordinator._async_update_data()
-        coordinator.async_set_updated_data(first_data)
-
-        clients.clear()
-        controller.clients.update = AsyncMock(side_effect=make_reauth_side_effect(exception, recover=True))
-        second_data = await coordinator._async_update_data()
-
-    assert controller.clients_all.update.await_count == 3
-    assert second_data[mac][1] == "Dan Phone"

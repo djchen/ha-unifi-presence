@@ -58,8 +58,6 @@ class ControllerConnectionParams:
     def from_mapping(
         cls,
         data: Mapping[str, Any],
-        *,
-        site: str | None = None,
     ) -> ControllerConnectionParams:
         """Build typed connection params from config-entry style data."""
         return cls(
@@ -67,13 +65,9 @@ class ControllerConnectionParams:
             port=int(data[CONF_PORT]),
             username=str(data[CONF_USERNAME]),
             password=str(data[CONF_PASSWORD]),
-            site=str(data.get(CONF_SITE, DEFAULT_SITE) if site is None else site),
+            site=str(data.get(CONF_SITE, DEFAULT_SITE)),
             ssl_verify=bool(data[CONF_SSL_VERIFY]),
         )
-
-
-class ClientStoreRefreshFailed(RuntimeError):
-    """Raised when client stores cannot be refreshed and no cache can be used."""
 
 
 class ClientStoreRefreshPolicy(Enum):
@@ -219,7 +213,7 @@ async def async_refresh_client_stores(
         has_cached = any(controller.clients_all) or any(controller.clients)
         if not has_cached:
             msg = "Both active and historical client sources failed"
-            raise ClientStoreRefreshFailed(msg)
+            raise RuntimeError(msg)
 
 
 def _client_store_refresh_succeeded(result: object) -> bool:

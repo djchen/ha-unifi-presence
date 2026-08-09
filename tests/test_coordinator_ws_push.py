@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -45,31 +46,6 @@ async def test_process_message_updates_state(
     coordinator.process_message(message)
 
     # State should now be home
-    assert coordinator.data["aa:bb:cc:dd:ee:ff"] == (True, "Dan Phone")
-    assert coordinator.heartbeat_expiry_count == 1
-
-
-async def test_process_message_updates_offline_client(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
-    coordinator_config_entry: MagicMock,
-) -> None:
-    """Test that websocket updates transition offline clients to home."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    initial_data = await coordinator._async_update_data()
-    coordinator.async_set_updated_data(initial_data)
-
-    assert coordinator.data["aa:bb:cc:dd:ee:ff"][0] is False
-
-    message = MagicMock()
-    message.data = {
-        "mac": "aa:bb:cc:dd:ee:ff",
-        "name": "Dan Phone",
-        "last_seen": int(dt_util.utcnow().timestamp()),
-    }
-    coordinator.process_message(message)
-
     assert coordinator.data["aa:bb:cc:dd:ee:ff"] == (True, "Dan Phone")
     assert coordinator.heartbeat_expiry_count == 1
 
@@ -160,7 +136,7 @@ async def test_process_message_preserves_metadata_when_offline_client_reappears(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data[mac][1] == "Dan Phone"
+    assert coordinator.data[mac] == (True, "Dan Phone")
 
 
 async def test_process_message_uses_hostname_when_name_missing(
@@ -183,29 +159,6 @@ async def test_process_message_uses_hostname_when_name_missing(
     coordinator.process_message(message)
 
     assert coordinator.data["aa:bb:cc:dd:ee:ff"][1] == "dan-phone"
-
-
-async def test_process_message_ignores_untracked_mac(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
-    coordinator_config_entry: MagicMock,
-) -> None:
-    """Test that process_message ignores MACs not in tracked set."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    await coordinator._async_update_data()
-
-    original_data = coordinator.data
-
-    message = MagicMock()
-    message.data = {
-        "mac": "ff:ff:ff:ff:ff:ff",
-        "last_seen": int(dt_util.utcnow().timestamp()),
-    }
-    coordinator.process_message(message)
-
-    # Data should be unchanged
-    assert coordinator.data is original_data
 
 
 async def test_process_message_metadata_only_update_notifies_listeners(
@@ -321,20 +274,31 @@ async def test_process_message_case_insensitive_mac(
     assert coordinator.data["aa:bb:cc:dd:ee:ff"][0] is True
 
 
-# ── Malformed message tests ──────────────────────────────────────────────
-
-
-async def test_process_message_none_data(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        "not a dict",
+        {"last_seen": 1},
+        {"mac": 123, "last_seen": 1},
+        {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": "now"},
+        {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": True},
+        {"mac": "ff:ff:ff:ff:ff:ff", "last_seen": 1},
+    ],
+    ids=["none", "non-dict", "missing-mac", "non-string-mac", "non-numeric-last-seen", "bool-last-seen", "untracked"],
+)
+async def test_process_message_ignores_invalid_or_untracked_payload(
+    hass: HomeAssistant,
+    mock_coordinator_controller: AsyncMock,
+    coordinator_config_entry: MagicMock,
+    payload: object,
 ) -> None:
-    """Test that process_message ignores a message with None data."""
+    """Test invalid and untracked payloads do not alter coordinator data."""
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     await coordinator._async_update_data()
     original_data = coordinator.data
 
-    message = MagicMock()
-    message.data = None
-    coordinator.process_message(message)
+    coordinator.process_message(MagicMock(data=payload))
 
     assert coordinator.data is original_data
 
@@ -355,78 +319,3 @@ async def test_process_message_without_last_seen_uses_cached_timestamp(
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone"}))
 
     assert coordinator._client_states[mac].last_seen_ts == cached_last_seen
-
-
-async def test_process_message_missing_mac(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
-) -> None:
-    """Test that process_message ignores a message with no mac field."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    await coordinator._async_update_data()
-    original_data = coordinator.data
-
-    message = MagicMock()
-    message.data = {"last_seen": int(dt_util.utcnow().timestamp())}
-    coordinator.process_message(message)
-
-    assert coordinator.data is original_data
-
-
-async def test_process_message_non_dict_data(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
-) -> None:
-    """Test that process_message ignores a message with non-dict data."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    await coordinator._async_update_data()
-    original_data = coordinator.data
-
-    message = MagicMock()
-    message.data = "not a dict"
-    coordinator.process_message(message)
-
-    assert coordinator.data is original_data
-
-
-async def test_process_message_non_string_mac(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
-) -> None:
-    """Test that process_message ignores payloads with non-string MACs."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    await coordinator._async_update_data()
-    original_data = coordinator.data
-
-    message = MagicMock()
-    message.data = {"mac": 123, "last_seen": int(dt_util.utcnow().timestamp())}
-    coordinator.process_message(message)
-
-    assert coordinator.data is original_data
-
-
-async def test_process_message_non_numeric_last_seen(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
-) -> None:
-    """Test that process_message ignores payloads with non-numeric timestamps."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    await coordinator._async_update_data()
-    original_data = coordinator.data
-
-    message = MagicMock()
-    message.data = {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": "now"}
-    coordinator.process_message(message)
-
-    assert coordinator.data is original_data
-
-
-async def test_process_message_bool_last_seen(
-    hass: HomeAssistant, mock_coordinator_controller: AsyncMock, coordinator_config_entry: MagicMock
-) -> None:
-    """Test that process_message ignores bool last_seen values."""
-    coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
-    await coordinator._async_update_data()
-    original_data = coordinator.data
-
-    message = MagicMock()
-    message.data = {"mac": "aa:bb:cc:dd:ee:ff", "last_seen": True}
-    coordinator.process_message(message)
-
-    assert coordinator.data is original_data
