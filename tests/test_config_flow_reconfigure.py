@@ -39,11 +39,6 @@ from .conftest import (
 pytestmark = pytest.mark.usefixtures("_bypass_setup")
 
 
-def _make_reconfigure_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Create and add a standard entry for reconfigure flow tests."""
-    return add_mock_config_entry(hass)
-
-
 @pytest.mark.parametrize(
     ("sites", "stored_site"),
     [
@@ -64,7 +59,7 @@ def test_find_reconfigure_site_returns_none_for_invalid_current_site(
 
 async def test_reconfigure_flow_success(hass: HomeAssistant) -> None:
     """Test that reconfigure flow updates credentials and reloads."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
 
     new_data = make_reconfigure_input(
         host="10.0.0.1",
@@ -145,7 +140,7 @@ async def test_reconfigure_flow_controller_errors(
     expected_error: str,
 ) -> None:
     """Test reconfigure controller errors map to the expected form error."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=side_effect):
         result = await async_run_reconfigure_step(hass, entry, make_reconfigure_input())
@@ -159,7 +154,7 @@ async def test_reconfigure_flow_controller_errors(
 
 async def test_reconfigure_flow_uses_existing_site_without_showing_picker(hass: HomeAssistant) -> None:
     """Test that reconfigure validates the existing site without exposing a picker."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
 
     controller = _mock_controller(
         sites=[
@@ -181,7 +176,7 @@ async def test_reconfigure_flow_uses_existing_site_without_showing_picker(hass: 
 
 async def test_reconfigure_flow_aborts_when_existing_site_is_no_longer_accessible(hass: HomeAssistant) -> None:
     """Test reconfigure aborts if the updated credentials cannot access the current site."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
     controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
@@ -197,7 +192,7 @@ async def test_reconfigure_flow_aborts_when_existing_site_is_no_longer_accessibl
 
 async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that reconfigure returns an error if the site list cannot be loaded."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
     controller = _mock_controller()
     controller.sites.update = AsyncMock(side_effect=aiounifi.AiounifiException)
 
@@ -211,7 +206,7 @@ async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: Ho
 
 async def test_reconfigure_flow_no_sites_available_aborts(hass: HomeAssistant) -> None:
     """Test that reconfigure aborts when the account has no accessible UniFi sites."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
     controller = _mock_controller(sites=[])
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
@@ -223,7 +218,7 @@ async def test_reconfigure_flow_no_sites_available_aborts(hass: HomeAssistant) -
 
 async def test_reconfigure_flow_same_site_requires_site_access(hass: HomeAssistant) -> None:
     """Test that reconfigure validates site-scoped client access before saving."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
     controller = _mock_controller()
     site_controller = _mock_controller(clients_all_items=[], clients_items=[])
     site_controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException)
@@ -242,7 +237,7 @@ async def test_reconfigure_flow_same_site_requires_site_access(hass: HomeAssista
 
 async def test_reconfigure_flow_second_login_failure_returns_to_reconfigure_form(hass: HomeAssistant) -> None:
     """Test reconfigure shows a form error when existing-site validation fails."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
     site_list_controller = _mock_controller(
         sites=[
             _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
@@ -346,7 +341,7 @@ async def test_reconfigure_flow_migrates_legacy_tracker_entity_unique_ids(hass: 
 
 async def test_migrate_tracker_unique_ids_skips_non_matching_entities(hass: HomeAssistant) -> None:
     """Test tracker migration leaves unrelated entity IDs unchanged."""
-    entry = _make_reconfigure_entry(hass)
+    entry = add_mock_config_entry(hass)
     entity_registry = er.async_get(hass)
     entity = entity_registry.async_get_or_create(
         "device_tracker",
