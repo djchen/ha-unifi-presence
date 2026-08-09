@@ -136,7 +136,7 @@ async def test_process_message_preserves_metadata_when_offline_client_reappears(
     }
     coordinator.process_message(message)
 
-    assert coordinator.data[mac][1] == "Dan Phone"
+    assert coordinator.data[mac] == (True, "Dan Phone")
 
 
 async def test_process_message_uses_hostname_when_name_missing(

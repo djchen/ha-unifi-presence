@@ -352,3 +352,45 @@ async def test_create_controller_for_params_closes_controller_on_resolution_fail
         )
 
     async_close.assert_awaited_once_with(controller)
+
+
+async def test_create_controller_for_params_closes_controller_on_site_assignment_failure(
+    hass: HomeAssistant,
+) -> None:
+    """Test site assignment failures close the already-created controller."""
+
+    class FailingConfig:
+        @property
+        def site(self) -> str:
+            return ""
+
+        @site.setter
+        def site(self, _value: str) -> None:
+            raise RuntimeError("assignment failed")
+
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="site-office-id",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+    controller.connectivity = SimpleNamespace(config=FailingConfig())
+    controller.sites.update = AsyncMock()
+    controller.sites.values.return_value = [SimpleNamespace(site_id="site-office-id", name="office")]
+
+    with (
+        patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller),
+        patch("custom_components.unifi_presence.helpers.async_close_controller") as async_close,
+        pytest.raises(RuntimeError, match="assignment failed"),
+    ):
+        await create_controller_for_params(
+            hass,
+            params,
+            unique_id="192.168.1.1_office",
+            resolve_legacy_site=True,
+        )
+
+    async_close.assert_awaited_once_with(controller)
