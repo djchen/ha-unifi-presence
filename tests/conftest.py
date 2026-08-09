@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator, Callable, Coroutine, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -253,31 +253,6 @@ def add_mock_config_entry(
     )
     entry.add_to_hass(hass)
     return entry
-
-
-# ── Shared coordinator helpers ───────────────────────────────────────────
-
-
-def make_reauth_side_effect(
-    exception: type[Exception],
-    *,
-    recover: bool = True,
-) -> Callable[[], Coroutine[Any, Any, None]]:
-    """Return an async update side effect that raises *exception* on first call.
-
-    If *recover* is True, the second call succeeds.  Otherwise it raises again.
-    """
-    call_count = 0
-
-    async def _side_effect() -> None:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise exception
-        if not recover:
-            raise exception
-
-    return _side_effect
 
 
 # ── Shared fixtures ──────────────────────────────────────────────────────
