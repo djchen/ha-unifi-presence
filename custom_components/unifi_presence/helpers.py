@@ -70,10 +70,6 @@ class ControllerConnectionParams:
         )
 
 
-class ClientStoreRefreshFailed(RuntimeError):
-    """Raised when client stores cannot be refreshed and no cache can be used."""
-
-
 class ClientStoreRefreshPolicy(Enum):
     """Client-store refresh policy for runtime and setup discovery."""
 
@@ -217,7 +213,7 @@ async def async_refresh_client_stores(
         has_cached = any(controller.clients_all) or any(controller.clients)
         if not has_cached:
             msg = "Both active and historical client sources failed"
-            raise ClientStoreRefreshFailed(msg)
+            raise RuntimeError(msg)
 
 
 def _client_store_refresh_succeeded(result: object) -> bool:

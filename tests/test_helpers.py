@@ -11,7 +11,6 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.helpers import (
-    ClientStoreRefreshFailed,
     ClientStoreRefreshPolicy,
     ControllerConnectionParams,
     async_close_controller,
@@ -222,7 +221,7 @@ async def test_async_refresh_client_stores_raises_without_cached_discovery_data(
     controller.clients_all.update = AsyncMock(side_effect=TimeoutError)
     controller.clients.update = AsyncMock(side_effect=TimeoutError)
 
-    with pytest.raises(ClientStoreRefreshFailed):
+    with pytest.raises(RuntimeError):
         await async_refresh_client_stores(
             controller,
             policy=ClientStoreRefreshPolicy.DISCOVERY,
