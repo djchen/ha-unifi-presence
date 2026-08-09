@@ -58,8 +58,6 @@ class ControllerConnectionParams:
     def from_mapping(
         cls,
         data: Mapping[str, Any],
-        *,
-        site: str | None = None,
     ) -> ControllerConnectionParams:
         """Build typed connection params from config-entry style data."""
         return cls(
@@ -67,7 +65,7 @@ class ControllerConnectionParams:
             port=int(data[CONF_PORT]),
             username=str(data[CONF_USERNAME]),
             password=str(data[CONF_PASSWORD]),
-            site=str(data.get(CONF_SITE, DEFAULT_SITE) if site is None else site),
+            site=str(data.get(CONF_SITE, DEFAULT_SITE)),
             ssl_verify=bool(data[CONF_SSL_VERIFY]),
         )
 

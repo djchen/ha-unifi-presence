@@ -26,7 +26,7 @@ from custom_components.unifi_presence.helpers import (
     tracker_unique_id,
 )
 
-from .conftest import MOCK_CONFIG_DATA, _make_mock_client, _mock_controller
+from .conftest import _make_mock_client, _mock_controller
 
 _SSL_PARAMS = ControllerConnectionParams(
     host="192.168.1.1", port=443, username="admin", password="password", site="default", ssl_verify=True
@@ -146,20 +146,6 @@ def test_site_title_prefers_description_then_name() -> None:
 
     unnamed_description = SimpleNamespace(site_id="site-id", name="office", description="")
     assert site_title(unnamed_description) == "office"
-
-
-def test_controller_connection_params_from_mapping_uses_override_site() -> None:
-    """Test typed controller params honor an explicit site override."""
-    params = ControllerConnectionParams.from_mapping(MOCK_CONFIG_DATA, site="office")
-
-    assert params == ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="office",
-        ssl_verify=False,
-    )
 
 
 async def test_create_controller_for_params_uses_legacy_site_resolution(hass: HomeAssistant) -> None:
