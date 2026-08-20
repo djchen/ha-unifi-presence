@@ -29,22 +29,20 @@ from custom_components.unifi_presence.const import (
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client, _mock_controller
+from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client, _mock_controller, add_mock_config_entry
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
 
 
 def _make_config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Create and add a mock config entry."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
+    return add_mock_config_entry(
+        hass,
         title="UniFi Presence (192.168.1.1)",
         data=MOCK_CONFIG_DATA,
         unique_id="192.168.1.1_default",
         options=MOCK_OPTIONS,
     )
-    entry.add_to_hass(hass)
-    return entry
 
 
 async def test_async_setup_entry(hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock) -> None:

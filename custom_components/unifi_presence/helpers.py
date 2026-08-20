@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from enum import Enum, auto
 from json import JSONDecodeError
 from typing import Any, cast
 
@@ -70,13 +69,6 @@ class ControllerConnectionParams:
         )
 
 
-class ClientStoreRefreshPolicy(Enum):
-    """Client-store refresh policy for runtime and setup discovery."""
-
-    DISCOVERY = auto()
-    RUNTIME = auto()
-
-
 def normalize_mac(mac: str) -> str:
     """Return a normalized MAC string for storage and comparisons."""
     return mac.strip().lower()
@@ -84,18 +76,7 @@ def normalize_mac(mac: str) -> str:
 
 def normalize_macs(macs: Iterable[str]) -> tuple[str, ...]:
     """Return trimmed, lowercased, deduplicated MACs preserving order."""
-    normalized: list[str] = []
-    seen: set[str] = set()
-
-    for mac in macs:
-        normalized_mac = normalize_mac(mac)
-        if not normalized_mac or normalized_mac in seen:
-            continue
-
-        seen.add(normalized_mac)
-        normalized.append(normalized_mac)
-
-    return tuple(normalized)
+    return tuple(dict.fromkeys(filter(None, map(normalize_mac, macs))))
 
 
 def tracker_unique_id(site_id: str, mac: str) -> str:
@@ -142,19 +123,6 @@ def resolve_client_display_name(
     return mac
 
 
-def should_resolve_controller_site(
-    params: ControllerConnectionParams,
-    *,
-    unique_id: str | None,
-) -> bool:
-    """Return whether a stored site value needs legacy normalization."""
-    return (
-        bool(params.site)
-        and params.site != DEFAULT_SITE
-        and (unique_id is None or params.site == unique_id or "_" in unique_id)
-    )
-
-
 async def create_controller_for_params(
     hass: HomeAssistant,
     params: ControllerConnectionParams,
@@ -163,7 +131,11 @@ async def create_controller_for_params(
     resolve_legacy_site: bool = False,
 ) -> Controller:
     """Create a controller, resolving legacy stored site values when requested."""
-    should_resolve = resolve_legacy_site and should_resolve_controller_site(params, unique_id=unique_id)
+    should_resolve = resolve_legacy_site and (
+        bool(params.site)
+        and params.site != DEFAULT_SITE
+        and (unique_id is None or params.site == unique_id or "_" in unique_id)
+    )
     controller = await create_controller(
         hass,
         replace(params, site="") if should_resolve else params,
@@ -193,7 +165,7 @@ async def create_controller_for_params(
 async def async_refresh_client_stores(
     controller: Controller,
     *,
-    policy: ClientStoreRefreshPolicy,
+    require_active_refresh: bool,
 ) -> None:
     """Refresh UniFi client stores while preserving caller-specific policy."""
     historical_result, active_result = await asyncio.gather(
@@ -205,11 +177,11 @@ async def async_refresh_client_stores(
     historical_refreshed = _client_store_refresh_succeeded(historical_result)
     active_refreshed = _client_store_refresh_succeeded(active_result)
 
-    if policy is ClientStoreRefreshPolicy.RUNTIME and not active_refreshed:
+    if require_active_refresh and not active_refreshed:
         assert isinstance(active_result, UNIFI_COMMUNICATION_EXCEPTIONS)
         raise active_result
 
-    if policy is ClientStoreRefreshPolicy.DISCOVERY and not historical_refreshed and not active_refreshed:
+    if not require_active_refresh and not historical_refreshed and not active_refreshed:
         has_cached = any(controller.clients_all) or any(controller.clients)
         if not has_cached:
             msg = "Both active and historical client sources failed"
@@ -225,21 +197,6 @@ def _client_store_refresh_succeeded(result: object) -> bool:
         return False
 
     raise result
-
-
-def build_client_labels_from_stores(
-    historical_clients: Iterable[tuple[str, Client]],
-    active_clients: Iterable[tuple[str, Client]],
-) -> dict[str, str]:
-    """Build picker labels from historical and active UniFi client stores."""
-    clients: dict[str, str] = {}
-    for store_items in (historical_clients, active_clients):
-        for mac, client in store_items:
-            mac_lower = normalize_mac(mac)
-            name = resolve_client_display_name(mac_lower, current=client)
-            clients[mac_lower] = f"{name} ({mac_lower})"
-
-    return clients
 
 
 async def async_close_controller(controller: Controller) -> None:

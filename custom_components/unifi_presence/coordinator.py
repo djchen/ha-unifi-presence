@@ -27,7 +27,6 @@ from .const import (
 from .helpers import (
     UNIFI_AUTH_EXCEPTIONS,
     UNIFI_COMMUNICATION_EXCEPTIONS,
-    ClientStoreRefreshPolicy,
     ControllerConnectionParams,
     async_close_controller,
     async_refresh_client_stores,
@@ -402,7 +401,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 controller = await self._ensure_controller()
                 await async_refresh_client_stores(
                     controller,
-                    policy=ClientStoreRefreshPolicy.RUNTIME,
+                    require_active_refresh=True,
                 )
             except UNIFI_AUTH_EXCEPTIONS as err:
                 if reauth_attempted:

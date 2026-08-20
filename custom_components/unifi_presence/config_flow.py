@@ -43,15 +43,14 @@ from .helpers import (
     NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL,
     UNIFI_AUTH_EXCEPTIONS,
     UNIFI_COMMUNICATION_EXCEPTIONS,
-    ClientStoreRefreshPolicy,
     ControllerConnectionParams,
     async_close_controller,
     async_refresh_client_stores,
-    build_client_labels_from_stores,
     config_entry_site_id,
     create_controller_for_params,
     normalize_mac,
     normalize_macs,
+    resolve_client_display_name,
     site_title,
     tracker_unique_id,
 )
@@ -131,16 +130,6 @@ def _find_reconfigure_site(
     return None
 
 
-def _is_legacy_or_missing_site_identity(entry_unique_id: str | None) -> bool:
-    """Return whether an entry still lacks a stable site_id identity.
-
-    Legacy entries used ``{host}_{site_name}`` as unique_id which contains
-    underscores.  Modern entries use the bare UniFi site_id, a 24-character
-    hex string (MongoDB ObjectId) that never contains underscores.
-    """
-    return entry_unique_id is None or "_" in entry_unique_id
-
-
 @callback
 def _async_remove_deselected_entities(
     hass: HomeAssistant,
@@ -215,12 +204,15 @@ async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
     """Fetch all known clients from the UniFi controller."""
     await async_refresh_client_stores(
         controller,
-        policy=ClientStoreRefreshPolicy.DISCOVERY,
+        require_active_refresh=False,
     )
-    return build_client_labels_from_stores(
-        controller.clients_all.items(),
-        controller.clients.items(),
-    )
+    clients: dict[str, str] = {}
+    for store in (controller.clients_all, controller.clients):
+        for mac, client in store.items():
+            normalized_mac = normalize_mac(mac)
+            name = resolve_client_display_name(normalized_mac, current=client)
+            clients[normalized_mac] = f"{name} ({normalized_mac})"
+    return clients
 
 
 class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -592,10 +584,10 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     stored_site=current_data.get(CONF_SITE),
                 )
                 if current_site is None:
-                    if (
-                        _is_legacy_or_missing_site_identity(reconfigure_entry.unique_id)
-                        and len(self._available_sites) == 1
-                    ):
+                    # Legacy IDs contain an underscore; modern site IDs do not.
+                    if (reconfigure_entry.unique_id is None or "_" in reconfigure_entry.unique_id) and len(
+                        self._available_sites
+                    ) == 1:
                         current_site = next(iter(self._available_sites.values()))
                     else:
                         return self.async_abort(reason="different_site_selected")

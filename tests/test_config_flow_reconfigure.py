@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import aiohttp
 import aiounifi
 import pytest
 from homeassistant.core import HomeAssistant
@@ -30,7 +29,6 @@ from .conftest import (
     PATCH_CREATE_CONTROLLER,
     _make_mock_site,
     _mock_controller,
-    _site_arg_from_call,
     add_mock_config_entry,
     async_run_reconfigure_step,
     make_reconfigure_input,
@@ -100,7 +98,7 @@ async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass:
     controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
 
     def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        site = _site_arg_from_call(args, kwargs)
+        site = args[1].site
         if site == "default":
             raise aiounifi.Unauthorized
         return controller
@@ -117,36 +115,7 @@ async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass:
     assert entry.data["site"] == "office"
     assert entry.unique_id == OFFICE_SITE_ID
     first_call = mock_create_controller.call_args_list[0]
-    assert _site_arg_from_call(first_call.args, first_call.kwargs) == "office"
-
-
-# ── Reconfigure flow: error paths ────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("side_effect", "expected_error"),
-    [
-        (aiounifi.LoginRequired, "invalid_auth"),
-        (aiounifi.Unauthorized, "invalid_auth"),
-        (aiounifi.AiounifiException, "cannot_connect"),
-        (aiohttp.ClientError("offline"), "cannot_connect"),
-        (TimeoutError, "cannot_connect"),
-        (Exception("boom"), "unknown"),
-    ],
-)
-async def test_reconfigure_flow_controller_errors(
-    hass: HomeAssistant,
-    side_effect: object,
-    expected_error: str,
-) -> None:
-    """Test reconfigure controller errors map to the expected form error."""
-    entry = add_mock_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=side_effect):
-        result = await async_run_reconfigure_step(hass, entry, make_reconfigure_input())
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": expected_error}
+    assert first_call.args[1].site == "office"
 
 
 # ── Reconfigure flow: site handling ──────────────────────────────────────

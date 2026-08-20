@@ -232,24 +232,6 @@ async def test_start_websocket_runner_skips_when_stopped(hass: HomeAssistant) ->
     controller.start_websocket.assert_not_called()
 
 
-async def test_async_cancel_and_wait_ignores_none_task(hass: HomeAssistant) -> None:
-    """Test task cancellation helper handles a missing task."""
-    ws, _, _ = make_websocket(hass)
-
-    await ws._async_cancel_and_wait(None)
-
-
-async def test_async_cancel_and_wait_skips_awaiting_current_task(hass: HomeAssistant) -> None:
-    """Test self-cancellation does not await the current task."""
-    ws, _, _ = make_websocket(hass)
-    current_task = MagicMock()
-
-    with patch("custom_components.unifi_presence.websocket.asyncio.current_task", return_value=current_task):
-        await ws._async_cancel_and_wait(current_task)
-
-    current_task.cancel.assert_called_once_with()
-
-
 async def test_schedule_retry_noop_when_retry_already_pending(hass: HomeAssistant) -> None:
     """Test duplicate retry scheduling is ignored while a handle exists."""
     ws, _, _ = make_websocket(hass)
@@ -280,18 +262,20 @@ async def test_async_restart_runner_noop_when_stop_occurs_after_cancel(hass: Hom
     """Test restart does not resubscribe after stopping during cancellation."""
     ws, _, _ = make_websocket(hass)
 
-    async def _cancel_and_stop(_task: asyncio.Task[None] | None) -> None:
-        ws._stopped = True
+    async def _stop_when_cancelled() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            ws._stopped = True
 
-    ws.ws_task = hass.async_create_task(asyncio.sleep(0))
+    ws.ws_task = hass.async_create_task(_stop_when_cancelled())
+    await asyncio.sleep(0)
 
     with (
-        patch.object(ws, "_async_cancel_and_wait", side_effect=_cancel_and_stop) as cancel_and_wait,
         patch.object(ws, "_replace_message_subscription") as replace_subscription,
         patch.object(ws, "_start_websocket_runner") as start_runner,
     ):
         await ws._async_restart_runner()
 
-    cancel_and_wait.assert_awaited_once()
     replace_subscription.assert_not_called()
     start_runner.assert_not_called()

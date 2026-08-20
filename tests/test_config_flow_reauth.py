@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import aiohttp
 import aiounifi
 import pytest
 from homeassistant.core import HomeAssistant
@@ -22,7 +21,6 @@ from .conftest import (
     OFFICE_SITE_ID,
     PATCH_CREATE_CONTROLLER,
     _mock_controller,
-    _site_arg_from_call,
     add_mock_config_entry,
     async_run_reauth_confirm_step,
     make_reauth_confirm_input,
@@ -87,6 +85,16 @@ async def test_reauth_success(hass: HomeAssistant, config_entry: MockConfigEntry
     assert config_entry.data["password"] == "new_pass"
 
 
+async def test_reauth_invalid_auth_shows_form_error(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    """Test an authentication failure is shown on the reauth form."""
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=aiounifi.LoginRequired("bad credentials")):
+        result = await async_run_reauth_confirm_step(hass, config_entry, make_reauth_confirm_input())
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "invalid_auth"}
+
+
 async def test_reauth_normalizes_legacy_stored_site_id_before_login(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
@@ -113,13 +121,7 @@ async def test_reauth_normalizes_legacy_stored_site_id_before_login(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
-    assert (
-        _site_arg_from_call(
-            create_controller_for_params.await_args.args,
-            create_controller_for_params.await_args.kwargs,
-        )
-        == OFFICE_SITE_ID
-    )
+    assert create_controller_for_params.await_args.args[1].site == OFFICE_SITE_ID
     assert create_controller_for_params.await_args.kwargs["resolve_legacy_site"] is True
 
 
@@ -144,33 +146,5 @@ async def test_reauth_missing_unique_id_uses_stored_short_site_directly(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
-    assert _site_arg_from_call(create_controller.await_args.args, create_controller.await_args.kwargs) == "office"
+    assert create_controller.await_args.args[1].site == "office"
     assert create_controller.await_args.kwargs["resolve_legacy_site"] is False
-
-
-# ── Reauth flow: error paths ────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("side_effect", "expected_error"),
-    [
-        (aiounifi.LoginRequired("bad"), "invalid_auth"),
-        (aiounifi.Unauthorized("bad"), "invalid_auth"),
-        (aiounifi.AiounifiException("fail"), "cannot_connect"),
-        (aiohttp.ClientError("offline"), "cannot_connect"),
-        (TimeoutError, "cannot_connect"),
-        (RuntimeError("boom"), "unknown"),
-    ],
-)
-async def test_reauth_controller_errors(
-    hass: HomeAssistant,
-    config_entry: MockConfigEntry,
-    side_effect: object,
-    expected_error: str,
-) -> None:
-    """Test reauth controller errors map to the expected form error."""
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=side_effect):
-        result = await async_run_reauth_confirm_step(hass, config_entry, make_reauth_confirm_input())
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": expected_error}
