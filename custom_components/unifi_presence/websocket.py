@@ -101,16 +101,6 @@ class UnifiPresenceWebsocket:
             self._unsub_messages()
             self._unsub_messages = None
 
-    async def _async_cancel_and_wait(self, task: asyncio.Task[None] | None) -> None:
-        """Cancel a task and wait for it unless it is the current task."""
-        if task is None:
-            return
-
-        task.cancel()
-        if task is not asyncio.current_task():
-            with suppress(asyncio.CancelledError):
-                await task
-
     @callback
     def stop(self, *_: object) -> None:
         """Stop WebSocket connection."""
@@ -251,7 +241,10 @@ class UnifiPresenceWebsocket:
     async def _async_restart_runner(self) -> None:
         """Cancel the current runner and start a replacement after it settles."""
         previous_task = self.ws_task
-        await self._async_cancel_and_wait(previous_task)
+        if previous_task is not None:
+            previous_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await previous_task
         if self._stopped:
             return
 
@@ -285,10 +278,7 @@ class UnifiPresenceWebsocket:
         self._clear_retry()
         self.available = False
 
-        async def _do_restart() -> None:
-            await self._async_restart_runner()
-
-        self._start_reconnect_task(_do_restart)
+        self._start_reconnect_task(self._async_restart_runner)
 
     @callback
     def _schedule_reauth_and_restart(self) -> None:

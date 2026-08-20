@@ -31,7 +31,6 @@ from .conftest import (
     _make_mock_client,
     _make_mock_site,
     _mock_controller,
-    _site_arg_from_call,
     add_mock_config_entry,
     async_configure_flow_step,
     async_run_user_step,
@@ -152,20 +151,8 @@ async def test_user_step_single_site_fetches_clients_with_selected_site(hass: Ho
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
     assert create_controller.await_count == 2
-    assert (
-        _site_arg_from_call(
-            create_controller.await_args_list[0].args,
-            create_controller.await_args_list[0].kwargs,
-        )
-        == ""
-    )
-    assert (
-        _site_arg_from_call(
-            create_controller.await_args_list[1].args,
-            create_controller.await_args_list[1].kwargs,
-        )
-        == "default"
-    )
+    assert create_controller.await_args_list[0].args[1].site == ""
+    assert create_controller.await_args_list[1].args[1].site == "default"
 
 
 async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: HomeAssistant) -> None:
@@ -283,7 +270,7 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
     )
 
     def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        site = _site_arg_from_call(args, kwargs)
+        site = args[1].site
         if site == "default":
             raise aiounifi.Unauthorized
         return controller
@@ -293,9 +280,7 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
-    assert not any(
-        _site_arg_from_call(call.args, call.kwargs) == "default" for call in mock_create_controller.call_args_list
-    )
+    assert not any(call.args[1].site == "default" for call in mock_create_controller.call_args_list)
 
 
 @pytest.mark.parametrize("site_value", ["missing-site", 123])

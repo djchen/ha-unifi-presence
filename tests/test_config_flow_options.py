@@ -32,7 +32,6 @@ from .conftest import (
     _get_tracked_device_selector,
     _make_mock_client,
     _mock_controller,
-    _site_arg_from_call,
     add_mock_config_entry,
 )
 
@@ -236,13 +235,7 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
-    assert (
-        _site_arg_from_call(
-            create_controller_for_params.await_args.args,
-            create_controller_for_params.await_args.kwargs,
-        )
-        == OFFICE_SITE_ID
-    )
+    assert create_controller_for_params.await_args.args[1].site == OFFICE_SITE_ID
     assert create_controller_for_params.await_args.kwargs["resolve_legacy_site"] is True
 
 

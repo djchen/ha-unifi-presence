@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncGenerator, Callable, Generator
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,31 +67,27 @@ def _make_mock_client(
     ip: str = "",
     last_seen: int = 0,
     is_wired: bool = False,
-) -> MagicMock:
-    """Create a mock aiounifi client object."""
-    client = MagicMock()
-    client.mac = mac
-    client.name = name
-    client.hostname = hostname
-    client.ip = ip
-    client.last_seen = last_seen
-    client.is_wired = is_wired
-    return client
+) -> SimpleNamespace:
+    """Create an aiounifi-like client record."""
+    return SimpleNamespace(
+        mac=mac,
+        name=name,
+        hostname=hostname,
+        ip=ip,
+        last_seen=last_seen,
+        is_wired=is_wired,
+    )
 
 
-def _make_mock_site(site_id: str, name: str, description: str = "") -> MagicMock:
-    """Create a mock aiounifi site object."""
-    site = MagicMock()
-    site.site_id = site_id
-    site.name = name
-    site.description = description
-    return site
+def _make_mock_site(site_id: str, name: str, description: str = "") -> SimpleNamespace:
+    """Create an aiounifi-like site record."""
+    return SimpleNamespace(site_id=site_id, name=name, description=description)
 
 
-class _MockClientStore(dict[str, MagicMock]):
+class _MockClientStore(dict[str, Any]):
     """Dict-like store for mock clients that also has an async update method."""
 
-    def __init__(self, items: list[tuple[str, MagicMock]] | None = None) -> None:
+    def __init__(self, items: list[tuple[str, Any]] | None = None) -> None:
         super().__init__(items or [])
         self.update_mock = AsyncMock()
 
@@ -122,9 +119,9 @@ def _build_controller(
 
 def make_mock_controller(
     *,
-    clients_all_items: list[tuple[str, MagicMock]] | None = None,
-    clients_items: list[tuple[str, MagicMock]] | None = None,
-    sites: list[MagicMock] | None = None,
+    clients_all_items: list[tuple[str, Any]] | None = None,
+    clients_items: list[tuple[str, Any]] | None = None,
+    sites: list[Any] | None = None,
 ) -> MagicMock:
     """Create a fully-wired controller mock for flow and integration tests."""
     controller = _build_controller(
@@ -143,19 +140,6 @@ _mock_controller = make_mock_controller
 
 
 # ── Shared config-flow helpers ───────────────────────────────────────────
-
-
-def _site_arg_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-    """Return the ``site`` argument from a mocked controller-helper call.
-
-    The production signature is ``create_controller_for_params(hass, params)`` where
-    *params* is a ``ControllerConnectionParams`` dataclass.
-    """
-    if "params" in kwargs:
-        return str(kwargs["params"].site)
-
-    # Positional: create_controller(hass, params)
-    return str(args[1].site)
 
 
 def _get_tracked_device_selector(result: dict[str, Any]) -> SelectSelector:
@@ -196,20 +180,16 @@ async def async_configure_flow_step(
     )
 
 
-async def async_start_user_flow(hass: HomeAssistant) -> dict[str, Any]:
-    """Start the integration's user config flow."""
-    return cast(
-        dict[str, Any],
-        await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER}),
-    )
-
-
 async def async_run_user_step(
     hass: HomeAssistant,
     user_input: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Start the user flow and submit the first credential step."""
-    return await async_configure_flow_step(hass, await async_start_user_flow(hass), user_input)
+    result = cast(
+        dict[str, Any],
+        await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER}),
+    )
+    return await async_configure_flow_step(hass, result, user_input)
 
 
 async def async_run_reconfigure_step(

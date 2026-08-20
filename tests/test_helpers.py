@@ -11,16 +11,13 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.helpers import (
-    ClientStoreRefreshPolicy,
     ControllerConnectionParams,
     async_close_controller,
     async_refresh_client_stores,
-    build_client_labels_from_stores,
     create_controller,
     create_controller_for_params,
     normalize_mac,
     normalize_macs,
-    should_resolve_controller_site,
     site_title,
     tracker_unique_id,
 )
@@ -198,6 +195,32 @@ async def test_create_controller_for_params_skips_resolution_for_new_setup(hass:
     create_ctrl.assert_awaited_once_with(hass, params)
 
 
+async def test_create_controller_for_params_keeps_default_site_without_refresh(hass: HomeAssistant) -> None:
+    """Test legacy resolution passes the default site directly without loading sites."""
+    params = ControllerConnectionParams(
+        host="192.168.1.1",
+        port=443,
+        username="admin",
+        password="password",
+        site="default",
+        ssl_verify=False,
+    )
+    controller = MagicMock()
+    controller.sites.update = AsyncMock()
+
+    with patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller) as create_ctrl:
+        result = await create_controller_for_params(
+            hass,
+            params,
+            unique_id="192.168.1.1_default",
+            resolve_legacy_site=True,
+        )
+
+    assert result is controller
+    create_ctrl.assert_awaited_once_with(hass, params)
+    controller.sites.update.assert_not_awaited()
+
+
 async def test_async_refresh_client_stores_allows_cached_discovery_data() -> None:
     """Test setup/options refresh can proceed from cache when both sources fail."""
     controller = _mock_controller(
@@ -208,7 +231,7 @@ async def test_async_refresh_client_stores_allows_cached_discovery_data() -> Non
 
     await async_refresh_client_stores(
         controller,
-        policy=ClientStoreRefreshPolicy.DISCOVERY,
+        require_active_refresh=False,
     )
 
     controller.clients_all.update.assert_awaited_once()
@@ -224,7 +247,7 @@ async def test_async_refresh_client_stores_raises_without_cached_discovery_data(
     with pytest.raises(RuntimeError):
         await async_refresh_client_stores(
             controller,
-            policy=ClientStoreRefreshPolicy.DISCOVERY,
+            require_active_refresh=False,
         )
 
 
@@ -236,18 +259,8 @@ async def test_async_refresh_client_stores_requires_active_runtime_refresh() -> 
     with pytest.raises(TimeoutError):
         await async_refresh_client_stores(
             controller,
-            policy=ClientStoreRefreshPolicy.RUNTIME,
+            require_active_refresh=True,
         )
-
-
-def test_build_client_labels_from_stores_active_wins_on_collision() -> None:
-    """Test active client labels override historical labels for the same MAC."""
-    labels = build_client_labels_from_stores(
-        {"aa:bb:cc:dd:ee:ff": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Old Name")}.items(),
-        {" AA:BB:CC:DD:EE:FF ": _make_mock_client("aa:bb:cc:dd:ee:ff", name="Current Name")}.items(),
-    )
-
-    assert labels == {"aa:bb:cc:dd:ee:ff": "Current Name (aa:bb:cc:dd:ee:ff)"}
 
 
 @pytest.mark.parametrize("error", [TimeoutError, asyncio.CancelledError])
@@ -274,24 +287,6 @@ async def test_create_controller_closes_owned_session_on_login_failure(
         )
 
     session.detach.assert_called_once_with()
-
-
-def test_should_resolve_controller_site_false_for_default_site() -> None:
-    """Test default-site configs skip legacy normalization."""
-    assert (
-        should_resolve_controller_site(
-            ControllerConnectionParams(
-                host="192.168.1.1",
-                port=443,
-                username="admin",
-                password="password",
-                site="default",
-                ssl_verify=False,
-            ),
-            unique_id=None,
-        )
-        is False
-    )
 
 
 async def test_create_controller_for_params_keeps_modern_site_name_without_refresh(hass: HomeAssistant) -> None:
