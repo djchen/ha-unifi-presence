@@ -1,7 +1,5 @@
 """Tests for UniFi Presence helper utilities."""
 
-from __future__ import annotations
-
 import asyncio
 import ssl
 from types import SimpleNamespace

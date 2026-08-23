@@ -1,7 +1,5 @@
 """Tests for the UniFi Presence diagnostics platform."""
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock, patch
 
 import pytest

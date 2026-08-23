@@ -1,7 +1,5 @@
 """Tests for UniFi Presence system health."""
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock, patch
 
 from homeassistant.core import HomeAssistant

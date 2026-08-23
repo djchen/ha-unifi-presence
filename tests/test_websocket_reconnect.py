@@ -1,7 +1,5 @@
 """Tests for WebSocket reconnect, reauth, retry scheduling, and error recovery."""
 
-from __future__ import annotations
-
 import asyncio
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 

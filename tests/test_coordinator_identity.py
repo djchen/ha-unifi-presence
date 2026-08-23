@@ -1,7 +1,5 @@
 """Tests for the UniFi Presence coordinator — identity, naming, timestamp ordering, and controller lifecycle."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from freezegun.api import FrozenDateTimeFactory

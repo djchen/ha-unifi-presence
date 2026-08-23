@@ -13,8 +13,8 @@ rules:
   stale-action-refs:
     ignore:
       # These upstream validation actions do not publish version tags; the workflows still pin exact commits.
-      - validate.yml:65
-      - validate.yml:78
+      - validate.yml:68
+      - validate.yml:82
 
   unpinned-uses:
     config:
