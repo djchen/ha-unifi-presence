@@ -8,10 +8,10 @@
 ## Commands
 
 - Use uv `0.12.5` and Python `3.14.5`: `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
-- Install hooks once: `uv run --locked --no-sync pre-commit install`
-- Local CI parity: `uv run --locked --no-sync pre-commit run --all-files` and `uv run --locked --no-sync pytest tests/ -v`; `.github/workflows/validate.yml` also runs HACS, hassfest, and zizmor.
+- Install hooks once: `uv run --locked --no-sync prek install`
+- Local CI parity: `uv run --locked --no-sync prek run --all-files` and `uv run --locked --no-sync pytest tests/ -v`; `.github/workflows/validate.yml` also runs HACS, hassfest, and zizmor.
 - Workflow edits must satisfy `.github/zizmor.yml`: `uses:` actions are allowlisted and hash-pinned; update the allowlist deliberately when adding actions.
-- Pre-commit may edit files: Ruff runs with `--fix`, then `ruff-format`, then `mypy --strict custom_components/unifi_presence/`.
+- Prek may edit files: Ruff runs with `--fix`, then `ruff-format`, then `mypy --strict custom_components/unifi_presence/`.
 - Focused tests usually need `--no-cov` because `pyproject.toml` enforces 98% coverage, e.g. `uv run --locked --no-sync pytest tests/test_coordinator_heartbeat.py -k expiry -v --no-cov`.
 
 ## Architecture Traps

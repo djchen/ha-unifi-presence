@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pre-commit:
-    name: Pre-commit
+  prek:
+    name: Prek
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,7 +31,7 @@ jobs:
           enable-cache: true
       # pyproject.toml disables editable install because Home Assistant scans sys.path as custom-component directories.
       - run: uv sync --locked
-      - run: uv run --locked --no-sync pre-commit run --all-files
+      - run: uv run --locked --no-sync prek run --all-files
 
   test:
     name: Test
