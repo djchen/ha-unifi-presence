@@ -3,8 +3,6 @@ name = "ha-unifi-presence"
 version = "0.11.0"
 description = "Home Assistant custom integration for UniFi presence detection"
 license = "Apache-2.0"
-license-files = ["LICENSE.md"]
-readme = "README.md"
 requires-python = ">=3.14.5"
 
 [dependency-groups]
@@ -38,7 +36,6 @@ addopts = [
 line-length = 120
 fix = true
 show-fixes = true
-required-version = ">=0.16.3"
 
 [tool.ruff.format]
 docstring-code-format = true
