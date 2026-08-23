@@ -240,7 +240,7 @@ Install [uv](https://docs.astral.sh/uv/) first, then run:
 
 ```bash
 uv sync --locked
-uv run --locked --no-sync pre-commit install
+uv run --locked --no-sync prek install
 ```
 
 Activation is not required, and `[tool.uv] package = false` prevents editable installation for Home Assistant custom-component tests.
