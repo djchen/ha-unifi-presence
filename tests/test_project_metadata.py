@@ -55,8 +55,8 @@ def test_aiounifi_version_matches_between_manifest_and_pyproject() -> None:
     dev_dependencies = pyproject["dependency-groups"]["dev"]
     aiounifi_requirements = [dependency for dependency in dev_dependencies if dependency.startswith("aiounifi")]
 
-    assert manifest["requirements"] == ["aiounifi==92"]
-    assert aiounifi_requirements == ["aiounifi==92"]
+    assert manifest["requirements"] == ["aiounifi==93"]
+    assert aiounifi_requirements == ["aiounifi==93"]
 
 
 def test_project_version_matches_between_manifest_and_pyproject() -> None:
