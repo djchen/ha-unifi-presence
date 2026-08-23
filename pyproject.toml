@@ -7,7 +7,7 @@ requires-python = ">=3.14.5"
 
 [dependency-groups]
 dev = [
-    "aiounifi==92",
+    "aiounifi==93",
     "mypy",
     "pre-commit",
     "pytest",
@@ -19,7 +19,7 @@ dev = [
 
 [tool.uv]
 package = false
-required-version = "==0.12.1"
+required-version = "==0.12.5"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

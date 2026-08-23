@@ -91,7 +91,7 @@ jobs:
           advanced-security: false
           annotations: true
           config: .github/zizmor.yml
-          version: v1.25.2
+          version: v1.29.0
           persona: pedantic
           min-severity: low
           min-confidence: medium
