@@ -1,7 +1,5 @@
 """Tests for the UniFi Presence config flow — reauth flow."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 import aiounifi

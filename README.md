@@ -236,7 +236,7 @@ The integration also adds a system health summary to Home Assistant. It reports:
 
 ### Setup
 
-Install [uv](https://docs.astral.sh/uv/) first, then run:
+Install [uv](https://docs.astral.sh/uv/) as local bootstrap tooling first, then run the commands below. CI pins uv `0.12.5` explicitly.
 
 ```bash
 uv sync --locked

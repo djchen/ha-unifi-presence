@@ -1,7 +1,5 @@
 """Device tracker platform for UniFi Presence."""
 
-from __future__ import annotations
-
 from typing import cast
 
 from homeassistant.components.device_tracker import ScannerEntity  # type: ignore[attr-defined]

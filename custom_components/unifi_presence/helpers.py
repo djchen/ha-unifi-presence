@@ -1,7 +1,5 @@
 """Shared helpers for UniFi Presence integration."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace

@@ -1,7 +1,5 @@
 """Tests for the UniFi Presence config flow — options flow."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch

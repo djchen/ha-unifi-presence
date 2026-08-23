@@ -7,7 +7,7 @@
 
 ## Commands
 
-- Use uv `0.12.5` and Python `3.14.5`: `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
+- Use Python `3.14.5`, selected by `.python-version`. Locally installed uv is bootstrap tooling; CI explicitly pins uv `0.12.5`. Set up dependencies with `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
 - Install hooks once: `uv run --locked --no-sync prek install`
 - Local CI parity: `uv run --locked --no-sync prek run --all-files` and `uv run --locked --no-sync pytest tests/ -v`; `.github/workflows/validate.yml` also runs HACS, hassfest, and zizmor.
 - Workflow edits must satisfy `.github/zizmor.yml`: `uses:` actions are allowlisted and hash-pinned; update the allowlist deliberately when adding actions.
@@ -37,5 +37,5 @@
 - Config-flow tests use `enable_custom_integrations`; many also use `_bypass_setup` so entry creation does not run real integration setup.
 - Controller mocks need dict-like `clients`/`clients_all` stores (`items`, `get`, iteration) with async `update`; flow tests also need async `login`, `sites.update`/`sites.values`; WebSocket tests need `messages.subscribe = MagicMock(return_value=MagicMock())`, `messages.new_data`, and `connectivity = MagicMock()`.
 - UI copy or flow-error edits must keep `strings.json` and `translations/en.json` keys aligned; tests assert high-churn picker/error keys and stale removals.
+- Keep the minimum Home Assistant version in `hacs.json` aligned with the requirement documented in `README.md`.
 - Releases start by dispatching `.github/workflows/release.yml` from `main` with an `X.Y.Z` version; it opens `release/vX.Y.Z` after updating `pyproject.toml`, `custom_components/unifi_presence/manifest.json`, and `uv.lock`, and merging that PR creates a draft release.
-- `tests/test_project_metadata.py` links project/manifest versions, the `aiounifi==93` pins, manifest/quality-scale status, and the README/HACS minimum Home Assistant version.

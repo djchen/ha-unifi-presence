@@ -1,7 +1,5 @@
 """Tests for the UniFi Presence config flow — user step, site selection, and device selection."""
 
-from __future__ import annotations
-
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 

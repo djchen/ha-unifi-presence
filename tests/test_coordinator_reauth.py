@@ -1,7 +1,5 @@
 """Tests for the UniFi Presence coordinator — reauth and error handling."""
 
-from __future__ import annotations
-
 from json import JSONDecodeError
 from unittest.mock import AsyncMock, MagicMock, patch
 

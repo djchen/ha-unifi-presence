@@ -1,7 +1,5 @@
 """System health support for UniFi Presence."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from homeassistant.components import system_health

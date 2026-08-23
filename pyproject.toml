@@ -2,7 +2,9 @@
 name = "ha-unifi-presence"
 version = "0.11.0"
 description = "Home Assistant custom integration for UniFi presence detection"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE.md"]
+readme = "README.md"
 requires-python = ">=3.14.5"
 
 [dependency-groups]
@@ -19,11 +21,13 @@ dev = [
 
 [tool.uv]
 package = false
-required-version = "==0.12.5"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_debug = true
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
 addopts = [
     "--cov=custom_components.unifi_presence",
     "--cov-report=term-missing",
@@ -34,13 +38,38 @@ addopts = [
 line-length = 120
 fix = true
 show-fixes = true
+required-version = ">=0.16.3"
 
 [tool.ruff.format]
 docstring-code-format = true
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "D", "PL"]
+select = [
+    "ASYNC",
+    "B",
+    "BLE",
+    "D",
+    "DTZ",
+    "E",
+    "F",
+    "G",
+    "I",
+    "LOG",
+    "PERF",
+    "PL",
+    "PT",
+    "RET",
+    "RSE",
+    "RUF",
+    "SIM",
+    "TID251",
+    "TRY",
+    "UP",
+    "W",
+]
 ignore = [
+    "ASYNC109", # Async function with a timeout parameter
+    "ASYNC110", # Async busy-wait with sleep
     "D100",    # Missing docstring in public module (we have file-level docstrings)
     "D104",    # Missing docstring in public package
     "D105",    # Missing docstring in magic method
@@ -49,7 +78,12 @@ ignore = [
     "D212",    # Multi-line summary first line (conflicts with D213)
     "PLR0913", # Too many arguments (create_controller needs 7)
     "PLR2004", # Magic value comparisons
+    "TRY003",  # Long exception messages
+    "TRY400",  # Use logging.exception instead of logging.error
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"__future__.annotations".msg = "It should not be needed because Home Assistant requires Python 3.14+"
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

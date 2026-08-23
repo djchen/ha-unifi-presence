@@ -1,7 +1,5 @@
 """Config flow for UniFi Presence integration."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Literal, SupportsInt, cast
@@ -189,13 +187,8 @@ def _build_client_options(
     preserved_missing = sorted(mac for mac in normalized_tracked if mac not in normalized_available)
     current_clients = sorted(normalized_available.items(), key=lambda item: item[1].lower())
 
-    client_options: dict[str, str] = {}
-
-    for mac in preserved_missing:
-        client_options[mac] = f"{mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})"
-
-    for mac, label in current_clients:
-        client_options[mac] = label
+    client_options = {mac: f"{mac} ({NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL})" for mac in preserved_missing}
+    client_options.update(current_clients)
 
     return client_options
 
@@ -663,7 +656,7 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
                 close_controller = True
 
             return await _fetch_all_clients(controller), False
-        except Exception:
+        except Exception:  # noqa: BLE001 - Keep options usable when client fetching fails.
             _LOGGER.warning("Could not fetch UniFi clients for options flow")
             return {}, True
         finally:

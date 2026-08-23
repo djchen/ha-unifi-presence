@@ -1,7 +1,5 @@
 """Tests for the UniFi Presence coordinator — WebSocket process_message."""
 
-from __future__ import annotations
-
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 

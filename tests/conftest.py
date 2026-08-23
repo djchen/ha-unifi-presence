@@ -1,7 +1,5 @@
 """Shared fixtures and helpers for UniFi Presence tests."""
 
-from __future__ import annotations
-
 import inspect
 from collections.abc import AsyncGenerator, Callable, Generator
 from types import SimpleNamespace

@@ -16,6 +16,7 @@ jobs:
   prek:
     name: Prek
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -27,7 +28,7 @@ jobs:
           python-version-file: '.python-version'
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
-          version-file: "pyproject.toml"
+          version: "0.12.5"
           enable-cache: true
       # pyproject.toml disables editable install because Home Assistant scans sys.path as custom-component directories.
       - run: uv sync --locked
@@ -36,6 +37,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -47,7 +49,7 @@ jobs:
           python-version-file: '.python-version'
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
-          version-file: "pyproject.toml"
+          version: "0.12.5"
           enable-cache: true
       # pyproject.toml disables editable install because Home Assistant scans sys.path as custom-component directories.
       - run: uv sync --locked
@@ -56,6 +58,7 @@ jobs:
   hacs:
     name: HACS Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -69,6 +72,7 @@ jobs:
   hassfest:
     name: Hassfest Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -80,6 +84,7 @@ jobs:
   zizmor:
     name: GitHub Actions Security
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
