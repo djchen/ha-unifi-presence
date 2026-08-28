@@ -9,6 +9,6 @@
   "issue_tracker": "https://github.com/djchen/ha-unifi-presence/issues",
   "loggers": ["aiounifi"],
   "quality_scale": "silver",
-  "requirements": ["aiounifi==93"],
+  "requirements": ["aiounifi==94"],
   "version": "0.11.0"
 }
