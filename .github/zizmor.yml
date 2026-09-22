@@ -5,10 +5,15 @@ rules:
         - actions/checkout
         - actions/create-github-app-token
         - actions/setup-python
+        - adrienverge/yamllint
         - astral-sh/setup-uv
+        - astral-sh/ruff-pre-commit
+        - codespell-project/codespell
         - hacs/action
         - home-assistant/actions/hassfest
+        - pre-commit/pre-commit-hooks
         - zizmorcore/zizmor-action
+        - zizmorcore/zizmor-pre-commit
 
   stale-action-refs:
     ignore:
