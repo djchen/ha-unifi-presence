@@ -189,7 +189,7 @@ wheels = [
 
 [[package]]
 name = "aiounifi"
-version = "95"
+version = "96"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -197,9 +197,9 @@ dependencies = [
     { name = "pyotp" },
     { name = "segno" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f9/c9/ca2f96cc24a8f9ca02224bcb59a2c4e9c70dd6a0531db135389a80338a52/aiounifi-95.tar.gz", hash = "sha256:b6ace0dbb42ba5095c9aa7dd0bf882ae5240cad4ce88830c03a4fec69ab4c787", size = 67909, upload-time = "2026-08-28T17:15:44.226Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/07/5497e2ce3eb5dd0441097c7e1d5909ed06ead2fcfc1fa52ca9764b6cc965/aiounifi-96.tar.gz", hash = "sha256:a0990daff952af432308785b8b5926071eb87c46a087448a96af154294e77780", size = 68710, upload-time = "2026-09-16T16:34:29.002Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/8b/65ab9e3dad409374e3887a31c87c07f838e10e2cfa3944387b88616ca935/aiounifi-95-py3-none-any.whl", hash = "sha256:e4d02fc8eb91c9bd672b963c811211c7a3681b889f82ed33c5a4a7cf7750e767", size = 56821, upload-time = "2026-08-28T17:15:43.139Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/51/636dbfc3981e00f4add5aa2676461788d73e9fa766f0e6b0504a6fcbb3fd/aiounifi-96-py3-none-any.whl", hash = "sha256:fc306800cb874c0274a837081eca1e3a031601e4abaf26c3f532f2c42c35eb24", size = 57132, upload-time = "2026-09-16T16:34:27.928Z" },
 ]
 
 [[package]]
@@ -1052,7 +1052,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "aiounifi", specifier = "==95" },
+    { name = "aiounifi", specifier = "==96" },
     { name = "mypy" },
     { name = "prek", specifier = "==0.5.2" },
     { name = "pytest" },
