@@ -287,33 +287,35 @@ async def test_previously_linked_tracker_is_detached_without_removing_devices(
     original_devices = list(device_registry.devices)
     controller = make_mock_controller()
 
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
-        for reload in (False, True):
-            if reload:
-                assert await hass.config_entries.async_reload(entry.entry_id)
-                await hass.async_block_till_done()
-            updated = entity_registry.async_get(tracker_entry.entity_id)
-            assert updated is not None
-            assert updated.id == tracker_entry.id
-            assert updated.unique_id == tracker_entry.unique_id
-            assert updated.name == "My presence"
-            assert updated.device_id is None
-            assert updated.disabled_by is None
-            state = hass.states.get(tracker_entry.entity_id)
-            assert state is not None
-            assert state.state == "not_home"
-            assert list(device_registry.devices) == original_devices
-            preserved_device = device_registry.async_get(previous_device.id)
-            assert preserved_device is not None
-            assert preserved_device.name_by_user == "My phone"
-            assert entity_registry.async_get(other_entity.entity_id) == other_entity
-
-        assert await hass.config_entries.async_unload(entry.entry_id)
-        await hass.async_block_till_done()
+    def assert_devices_preserved() -> None:
         assert list(device_registry.devices) == original_devices
         preserved_device = device_registry.async_get(previous_device.id)
         assert preserved_device is not None
         assert preserved_device.name_by_user == "My phone"
+
+    def assert_tracker_detached() -> None:
+        updated = entity_registry.async_get(tracker_entry.entity_id)
+        assert updated is not None
+        assert updated.id == tracker_entry.id
+        assert updated.unique_id == tracker_entry.unique_id
+        assert updated.name == "My presence"
+        assert updated.device_id is None
+        assert updated.disabled_by is None
+        state = hass.states.get(tracker_entry.entity_id)
+        assert state is not None
+        assert state.state == "not_home"
+        assert_devices_preserved()
+        assert entity_registry.async_get(other_entity.entity_id) == other_entity
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert_tracker_detached()
+
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert_tracker_detached()
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert_devices_preserved()
