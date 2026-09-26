@@ -1,14 +1,18 @@
 """Tests for the UniFi Presence device tracker platform."""
 
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.device_tracker import SourceType
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.unifi_presence.const import DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceData
@@ -157,6 +161,92 @@ async def test_trackers_remain_entity_only(
         assert await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
         assert list(device_registry.devices) == original_devices
+
+
+@pytest.mark.parametrize(
+    ("associated_zone", "initial_state", "initial_zones"),
+    [
+        pytest.param(None, "home", ["zone.home"], id="default-home"),
+        pytest.param("zone.office", "Office", ["zone.office", "zone.campus"], id="saved-office"),
+    ],
+)
+async def test_tracker_associated_zone_lifecycle(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    freezer: FrozenDateTimeFactory,
+    associated_zone: str | None,
+    initial_state: str,
+    initial_zones: list[str],
+) -> None:
+    """Entity-only trackers inherit zone options, attributes, and health behavior."""
+    assert await async_setup_component(
+        hass,
+        "zone",
+        {
+            "zone": [
+                {"name": "Office", "latitude": 0, "longitude": 0, "radius": 50},
+                {"name": "Campus", "latitude": 0, "longitude": 0, "radius": 500},
+            ]
+        },
+    )
+    entry = add_mock_config_entry(hass)
+    entity_registry = er.async_get(hass)
+    tracker_entry = entity_registry.async_get_or_create(
+        "device_tracker", DOMAIN, f"{entry.unique_id}-{MAC}", config_entry=entry
+    )
+    entity_id = tracker_entry.entity_id
+    if associated_zone:
+        entity_registry.async_update_entity_options(entity_id, "device_tracker", {"associated_zone": associated_zone})
+    client = _make_mock_client(MAC, name="Phone", last_seen=int(dt_util.utcnow().timestamp()))
+    controller = make_mock_controller(clients_items=[(MAC, client)])
+
+    def assert_tracker_state(expected_state: str, in_zones: list[str] | None = None) -> None:
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.state == expected_state
+        assert state.attributes["tracking_type"] == "connection"
+        if in_zones is not None:
+            assert state.attributes["source_type"] == "router"
+            assert state.attributes["mac"] == MAC
+            assert state.attributes["in_zones"] == in_zones
+        else:
+            assert "in_zones" not in state.attributes
+        registered = entity_registry.async_get(entity_id)
+        assert registered is not None
+        assert registered.device_id is None
+        assert not dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert_tracker_state(initial_state, initial_zones)
+
+        # Registry changes must update the connected state without a reload or poll.
+        entity_registry.async_update_entity_options(entity_id, "device_tracker", {"associated_zone": "zone.office"})
+        await hass.async_block_till_done()
+        assert_tracker_state("Office", ["zone.office", "zone.campus"])
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert_tracker_state("Office", ["zone.office", "zone.campus"])
+
+        # Use the real coordinator to distinguish client expiry from controller failure.
+        coordinator = entry.runtime_data
+        freezer.tick(timedelta(seconds=coordinator.away_seconds + 1))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert_tracker_state("not_home", [])
+        coordinator.async_set_update_error(UpdateFailed("Controller unavailable"))
+        assert_tracker_state("unavailable")
+        client.last_seen = int(dt_util.utcnow().timestamp())
+        await coordinator.async_refresh()
+        assert_tracker_state("Office", ["zone.office", "zone.campus"])
+
+        # Clearing the entity option restores Home rather than keeping a stale zone.
+        entity_registry.async_update_entity_options(entity_id, "device_tracker", {})
+        await hass.async_block_till_done()
+        assert_tracker_state("home", ["zone.home"])
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
 
 
 @pytest.mark.parametrize("previous_device_owner", ["other", "unifi_presence"])

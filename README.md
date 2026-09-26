@@ -113,7 +113,7 @@ If the WebSocket disconnects, the integration reconnects automatically. Polling 
 
 ### Offline vs. Unavailable
 
-- **Offline (`not_home`)**: A tracked client stays `home` until its away timer expires, then becomes `not_home`.
+- **Offline (`not_home`)**: A tracked client stays in its associated zone (`home` by default) until its away timer expires, then becomes `not_home`. Offline clients remain available.
 - **Unavailable**: The coordinator or controller has a health problem. In that case, all tracked entities become `unavailable` and recover automatically when connectivity returns.
 
 ## Entities
@@ -123,12 +123,20 @@ Each tracked device creates a `device_tracker` entity:
 - **Entity ID**: `device_tracker.<device_name_slug>`
 - **Friendly name**: The UniFi client name, for example `Dan's iPhone`
 - **Unique ID**: The site ID plus the device MAC address
-- **State**: `home` or `not_home`
-- **Attributes**:
+- **State**: The associated zone while connected (`home` by default, or a zone name such as `Office`), `not_home` after the away threshold, or `unavailable` during a coordinator/controller health problem
+- **Attributes (while available)**:
   - `source_type`: Always `router`
+  - `tracking_type`: Always `connection`
+  - `in_zones`: Zone entity IDs, including the associated zone and any enclosing zones while connected; empty when disconnected
   - `mac`: Device MAC address
 
 > **Note:** This integration follows the official Home Assistant `ScannerEntity` pattern and does not create per-client device-registry entries. Tracker entities appear in the entity registry only.
+
+### Associated zone
+
+Home Assistant treats these entities as [connection trackers](https://www.home-assistant.io/integrations/device_tracker/#connection-trackers): a connected client is assumed to be in its associated zone. The default is **Home** (`zone.home`).
+
+To change it for an individual tracker, go to **Settings** → **Devices & Services** → **Entities**, select the tracker, and open its settings (cog icon). Choose an **Associated zone** and select **Update**. For example, a tracker associated with `zone.office`, named **Office**, reports `Office` while connected and `not_home` when away. This setting takes effect without reloading the integration.
 
 ## Reauthentication
 
@@ -136,7 +144,7 @@ If the controller rejects the saved credentials, Home Assistant will show a **Re
 
 ## Examples
 
-> **Note:** The entity IDs below are examples. Check **Settings** → **Devices & Services** → **Entities** for your actual IDs.
+> **Note:** The entity IDs below are examples, and the home automations assume the default **Home** associated zone. Check **Settings** → **Devices & Services** → **Entities** for your actual IDs.
 
 ### Arrive home — turn on lights
 
