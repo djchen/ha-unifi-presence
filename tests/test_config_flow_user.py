@@ -24,6 +24,8 @@ from .conftest import (
     OFFICE_SITE_ID,
     PATCH_CREATE_CONTROLLER,
     USER_STEP_INPUT,
+    _assert_session_cleanup,
+    _attach_mock_session,
     _get_tracked_device_options,
     _get_tracked_device_selector,
     _make_mock_client,
@@ -80,10 +82,17 @@ async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAs
     client_controller = _mock_controller(clients_all_items=[])
     client_controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical fetch failed"))
     client_controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
+    site_session = _attach_mock_session(site_controller)
+    client_session = _attach_mock_session(client_controller)
 
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]):
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]) as create_controller:
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
+    _assert_session_cleanup(site_session)
+    _assert_session_cleanup(client_session)
+    assert create_controller.await_count == 2
+    assert create_controller.await_args_list[0].args[1].site == ""
+    assert create_controller.await_args_list[1].args[1].site == "default"
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "single_site_retry"
     assert result["description_placeholders"] == {"site": "Home"}
@@ -91,13 +100,21 @@ async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAs
 
 
 async def test_user_step_success_goes_to_devices(hass: HomeAssistant) -> None:
-    """Test successful login proceeds to device selection."""
+    """Test single-site setup discovers clients on the selected site and proceeds to devices."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
-    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    site_controller = _mock_controller()
+    client_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    site_session = _attach_mock_session(site_controller)
+    client_session = _attach_mock_session(client_controller)
 
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]) as create_controller:
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
+    _assert_session_cleanup(site_session)
+    _assert_session_cleanup(client_session)
+    assert create_controller.await_count == 2
+    assert create_controller.await_args_list[0].args[1].site == ""
+    assert create_controller.await_args_list[1].args[1].site == "default"
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
     selector = _get_tracked_device_selector(result)
@@ -137,22 +154,6 @@ async def test_user_step_active_client_refresh_failure_uses_historical_clients(
     assert result["step_id"] == "devices"
 
 
-async def test_user_step_single_site_fetches_clients_with_selected_site(hass: HomeAssistant) -> None:
-    """Test single-site setup fetches clients with the selected UniFi site."""
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
-    site_controller = _mock_controller()
-    client_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]) as create_controller:
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "devices"
-    assert create_controller.await_count == 2
-    assert create_controller.await_args_list[0].args[1].site == ""
-    assert create_controller.await_args_list[1].args[1].site == "default"
-
-
 async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: HomeAssistant) -> None:
     """Test single-site client discovery errors are retried on the next submit."""
     site_controller = _mock_controller(clients_all_items=[])
@@ -188,10 +189,17 @@ async def test_user_step_no_clients_available_aborts(hass: HomeAssistant) -> Non
     """Test that setup aborts with the clearer no-clients reason."""
     site_controller = _mock_controller()
     client_controller = _mock_controller(clients_all_items=[])
+    site_session = _attach_mock_session(site_controller)
+    client_session = _attach_mock_session(client_controller)
 
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]):
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller]) as create_controller:
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
+    _assert_session_cleanup(site_session)
+    _assert_session_cleanup(client_session)
+    assert create_controller.await_count == 2
+    assert create_controller.await_args_list[0].args[1].site == ""
+    assert create_controller.await_args_list[1].args[1].site == "default"
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_clients_available"
 
