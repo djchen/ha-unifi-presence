@@ -1,41 +1,40 @@
 # AGENTS.md
 
-## Repo
+## Runtime
 
-- Home Assistant custom integration only: runtime code is under `custom_components/unifi_presence`, tests under `tests`; there is no standalone app, dev server, YAML setup path, controller auto-discovery, or non-`device_tracker` platform.
-- `__init__.py` creates `UnifiPresenceCoordinator`, performs first refresh, wires `UnifiPresenceWebsocket`, then forwards only `Platform.DEVICE_TRACKER`; `config_flow.py` owns setup/options/reauth/reconfigure.
+- UI-only Home Assistant custom integration. `custom_components/unifi_presence/__init__.py` first-refreshes the coordinator, stores it in `entry.runtime_data`, wires WebSocket, and forwards only `Platform.DEVICE_TRACKER`. `config_flow.py` owns setup/options/reauth/reconfigure.
 
 ## Commands
 
-- Use Python `3.14.5`, selected by `.python-version`. Locally installed uv is bootstrap tooling; CI explicitly pins uv `0.12.5`. Set up dependencies with `uv sync --locked`; `[tool.uv] package = false` prevents editable installation because Home Assistant custom-component tests scan `sys.path` as component directories.
+- Bootstrap with external uv and Python from `.python-version` (currently `3.14.5`; CI pins uv `0.12.5`): `uv sync --locked`. Keep `[tool.uv] package = false`: Home Assistant tests scan `sys.path` as component directories, so editable installation breaks discovery.
 - Install hooks once: `uv run --locked --no-sync prek install`
-- Local CI parity: `uv run --locked --no-sync prek run --all-files` and `uv run --locked --no-sync pytest tests/ -v`; `.github/workflows/validate.yml` also runs HACS, hassfest, and zizmor.
-- Workflow edits must satisfy `.github/zizmor.yml`: `uses:` actions are allowlisted and hash-pinned; update the allowlist deliberately when adding actions.
-- Prek may edit files: Ruff runs with `--fix`, then `ruff-format`, then `mypy --strict custom_components/unifi_presence/`.
-- Focused tests usually need `--no-cov` because `pyproject.toml` enforces 98% coverage, e.g. `uv run --locked --no-sync pytest tests/test_coordinator_heartbeat.py -k expiry -v --no-cov`.
+- Local CI checks: `uv run --locked --no-sync prek run --all-files`, then `uv run --locked --no-sync pytest tests/ -v`. Prek fixes Ruff issues and formatting before strict mypy; CI also runs HACS, hassfest, and zizmor.
+- Focused tests need `--no-cov` to avoid the whole-integration 98% coverage gate: `uv run --locked --no-sync pytest tests/test_coordinator_heartbeat.py -k expiry -v --no-cov`.
+- Pytest enables asyncio auto mode/debug and treats warnings as errors. Ruff bans `from __future__ import annotations` on this Python baseline.
 
 ## Architecture Traps
 
-- Config-entry identity is the UniFi `site_id`; tracker unique IDs are `{site_id}-{normalized_mac}`. `entry.data["site"]` stores the UniFi short site name used in controller requests, not identity.
-- Reconfigure preserves site identity across host changes, aborts if the resolved site changes, and migrates legacy tracker unique IDs when an old entry gains a real `site_id`.
-- Initial setup lists sites by connecting with `site=""`, then stores the selected site's short `name`; runtime/reconfigure may resolve legacy stored site IDs back to short names before controller use.
-- Trackers are entity-registry-only `ScannerEntity` instances, one per selected MAC. Do not add device-registry devices or UniFi infrastructure devices.
-- Presence is push-first: WebSocket `sta:sync` updates + local heartbeat expiry + REST fallback polling. Heartbeat-only expiry must not reset refresh timers or flip `last_update_success` back to `True`.
-- Offline clients are `not_home` but still `available`; only coordinator/controller failures make entities unavailable.
-- Coordinator reauths once on UniFi session expiry, restarts WebSocket on recovery, then raises `ConfigEntryAuthFailed` if credentials still fail.
-- WebSocket health is set by the temporary `messages.new_data` wrapper after the first inbound frame; preserve `_stopped`, watchdog, reconnect, stale-runner, and reauth-restart semantics.
-- Client discovery preserves selected MACs no longer returned by UniFi and labels them `No longer in UniFi Client Devices`; only explicit deselection should remove entity-registry entries.
-- `async_refresh_client_stores()` centralizes `UNIFI_COMMUNICATION_EXCEPTIONS` handling: `DISCOVERY` tolerates one failed client store and only errors when both stores fail with no cache; `RUNTIME` treats `clients_all` as best-effort but requires `clients.update()`.
-- Stored config data is expected to include `ssl_verify`; do not reintroduce missing-field fallbacks for legacy entries.
-- When `ssl_verify` is `false`, `create_controller()` owns an aiohttp session on the controller; release it through `async_close_controller()` (which detaches the Home Assistant shared-connector session wrapper).
-- The options flow borrows the loaded coordinator controller when possible; close only the fallback controller the flow creates itself.
-- Preserve setup/unload cleanup ordering: a failed platform unload leaves runtime active; successful unload awaits WebSocket stop before coordinator shutdown, and partial setup must release its controller.
+- Identity is `entry.unique_id` (UniFi `site_id`); `entry.data["site"]` is the request-facing short site name. Tracker IDs are `{site_id}-{normalized_mac}`, falling back to `entry.entry_id` for entries without a unique ID. Reconfigure preserves site identity across host changes and migrates legacy tracker IDs.
+- Initial site listing connects with `site=""`; `helpers.create_controller_for_params(..., resolve_legacy_site=True)` resolves legacy stored site IDs to short names for runtime/options/reauth.
+- Trackers are entity-registry-only `ScannerEntity` instances for selected clients. Preserve the MAC-registration opt-out, enabled-default and site-scoped unique-ID overrides, and inherited associated-zone lifecycle; connected state need not be `home`.
+- Presence combines WebSocket `sta:sync`, local heartbeat expiry, and REST fallback. Heartbeat-only changes use `_publish_local_state_change()`, not `async_set_updated_data()`, to preserve poll timers and `last_update_success`. Away clients stay available; controller failures make them unavailable.
+- Coordinator retries authentication once on session expiry: successful recovery restarts WebSocket with the new controller; repeated auth failure raises `ConfigEntryAuthFailed`.
+- WebSocket health comes from any inbound frame via the temporary `messages.new_data` wrapper, not only subscribed `sta:sync` events. Restore the wrapper on exit; replacement runners must await cancellation, and stopped/stale runners must not schedule retries.
+- Discovery retains selected MACs absent from UniFi with the `No longer in UniFi Client Devices` label. Only explicit deselection removes entity-registry entries.
+- `helpers.async_refresh_client_stores()` centralizes communication-error handling: `require_active_refresh=False` tolerates failed stores unless both fail with no cache; `True` requires `clients.update()` but treats `clients_all` as best-effort. Unexpected exceptions propagate.
+- Stored config must include `ssl_verify`. With it disabled, `create_controller()` owns a session wrapper: release through `async_close_controller()`, which detaches without closing HA's shared connector. Options borrow the runtime controller; close only their fallback controller.
+- Cleanup order matters: failed platform unload leaves runtime active; successful unload awaits WebSocket stop before coordinator shutdown. Partial setup must release its controller.
 
 ## Tests And Edit Traps
 
-- Patch controller factories where the code under test imports them: flows/options use `config_flow.create_controller_for_params`, coordinator/init/diagnostics/system-health tests use `coordinator.create_controller_for_params`, and helper tests patch `helpers.create_controller` or `helpers.create_controller_with_resolved_site`.
-- Config-flow tests use `enable_custom_integrations`; many also use `_bypass_setup` so entry creation does not run real integration setup.
-- Controller mocks need dict-like `clients`/`clients_all` stores (`items`, `get`, iteration) with async `update`; flow tests also need async `login`, `sites.update`/`sites.values`; WebSocket tests need `messages.subscribe = MagicMock(return_value=MagicMock())`, `messages.new_data`, and `connectivity = MagicMock()`.
-- UI copy or flow-error edits must keep `strings.json` and `translations/en.json` keys aligned; tests assert high-churn picker/error keys and stale removals.
+- Patch factories at the import site: flows/options use `config_flow.create_controller_for_params`; runtime tests use `coordinator.create_controller_for_params`; helper factory tests use `helpers.create_controller`.
+- Reuse `tests/conftest.py`'s `make_mock_controller()` and coordinator fixtures: client stores are dict-like with async `update()` (failures go on `update_mock`), while `sites.values()` is synchronous. Flow fixture `_bypass_setup` enables custom integrations and prevents real setup after entry creation.
+- Use `tests/websocket_helpers.py` for WebSocket mocks and task/start waits; coordinator fixtures run unload callbacks to clean up timers/controllers.
+- Keep `custom_components/unifi_presence/strings.json` and `translations/en.json` aligned; picker/error copy assertions live in `tests/test_config_flow_options.py`.
+
+## Metadata And CI
+
+- Keep the `aiounifi` pin aligned in `pyproject.toml` and the integration's `manifest.json`, and refresh `uv.lock` when dependencies change.
 - Keep the minimum Home Assistant version in `hacs.json` aligned with the requirement documented in `README.md`.
-- Releases start by dispatching `.github/workflows/release.yml` from `main` with an `X.Y.Z` version; it opens `release/vX.Y.Z` after updating `pyproject.toml`, `custom_components/unifi_presence/manifest.json`, and `uv.lock`, and merging that PR creates a draft release.
+- Workflow actions are allowlisted and hash-pinned in `.github/zizmor.yml`; its `stale-action-refs` exceptions use workflow line numbers, so check them when moving steps.
+- Dispatch `.github/workflows/release.yml` from `main` with a higher `X.Y.Z` version (no `v`). It updates `pyproject.toml`, `manifest.json`, and `uv.lock` and opens `release/vX.Y.Z`; merging the marked release PR creates a draft release.

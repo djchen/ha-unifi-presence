@@ -47,9 +47,9 @@ rules:
   devices:
     status: exempt
     comment: |
-      This integration follows the official HA ScannerEntity pattern and
-      does not create per-client device-registry entries. Entities appear
-      in the entity registry only.
+      Trackers use ScannerEntity but explicitly opt out of its automatic
+      MAC-based device registration. Entities appear in the entity registry
+      only; the integration does not create per-client device entries.
   diagnostics: done
   discovery: not-done
   discovery-update-info:
@@ -103,9 +103,10 @@ rules:
   stale-devices:
     status: exempt
     comment: |
-      This integration follows the official HA ScannerEntity pattern and
-      does not create per-client device-registry entries. There are no
-      integration-owned device entries to become stale.
+      Trackers explicitly opt out of ScannerEntity's automatic MAC-based
+      device registration. Setup clears previous entity-device links, but
+      existing device records are preserved to avoid deleting user metadata.
+      The integration does not create new device entries to become stale.
 
   # Platinum
   async-dependency: done

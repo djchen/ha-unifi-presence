@@ -4,7 +4,7 @@ from typing import cast
 
 from homeassistant.components.device_tracker import ScannerEntity  # type: ignore[attr-defined]
 from homeassistant.components.device_tracker.const import SourceType
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -32,6 +32,16 @@ class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerE
     """Represent a tracked UniFi client as a device tracker entity."""
 
     _attr_source_type = SourceType.ROUTER
+
+    @callback
+    def _async_mac_address_registered(self) -> bool:
+        """Opt out of ScannerEntity's automatic MAC-based device registration.
+
+        HA creates and links a device when this predicate matches another
+        integration's MAC. Keep these trackers entity-only while retaining
+        ScannerEntity's complete lifecycle, including associated-zone handling.
+        """
+        return False
 
     @property
     def entity_registry_enabled_default(self) -> bool:
