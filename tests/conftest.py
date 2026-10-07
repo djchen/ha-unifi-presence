@@ -137,6 +137,33 @@ def make_mock_controller(
 _mock_controller = make_mock_controller
 
 
+def _attach_mock_session(controller: MagicMock, *, owned: bool = True) -> MagicMock:
+    """Attach an explicit session wrapper sharing a connector with Home Assistant."""
+    connector = MagicMock()
+    connector.close = AsyncMock()
+    session = MagicMock(closed=False, connector=connector)
+    session.close = AsyncMock()
+    session.shared_connector = connector
+
+    def _detach() -> None:
+        session.closed = True
+        session.connector = None
+
+    session.detach.side_effect = _detach
+    controller.connectivity.config.session = session
+    controller._unifi_presence_owned_session = session if owned else None
+    return session
+
+
+def _assert_session_cleanup(session: MagicMock, *, owned: bool = True) -> None:
+    """Verify only an owned wrapper detached, without closing the shared connector."""
+    assert session.closed is owned
+    assert session.detach.call_count == int(owned)
+    assert session.connector is (None if owned else session.shared_connector)
+    session.close.assert_not_called()
+    session.shared_connector.close.assert_not_called()
+
+
 # ── Shared config-flow helpers ───────────────────────────────────────────
 
 

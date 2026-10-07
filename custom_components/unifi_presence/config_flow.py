@@ -390,19 +390,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_finish_reconfigure(self, site: Site) -> ConfigFlowResult:
         """Validate and save the already-configured site during reconfigure."""
         reconfigure_entry = self._get_reconfigure_entry()
-        controller, error = await self._async_validate_login(
-            params=self._current_connection_params(),
+        error = await self._async_load_selected_site_clients(
             log_context="UniFi reconfigure site validation",
         )
         if error is not None:
             return self._show_reconfigure_form(errors={"base": error})
-
-        assert controller is not None
-        try:
-            if (client_error := await self._async_discover_clients_from_controller(controller)) is not None:
-                return self._show_reconfigure_form(errors={"base": client_error})
-        finally:
-            await async_close_controller(controller)
 
         _async_migrate_tracker_unique_ids(
             self.hass,
