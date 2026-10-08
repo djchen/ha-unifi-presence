@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import aiounifi
 import pytest
@@ -17,15 +17,14 @@ from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
     CONF_TRACKED_DEVICES,
-    DOMAIN,
 )
 
 from .conftest import (
-    DEFAULT_SITE_ID,
-    MOCK_CONFIG_DATA,
     MOCK_OPTIONS,
     OFFICE_SITE_ID,
     PATCH_CREATE_CONTROLLER,
+    _assert_session_cleanup,
+    _attach_mock_session,
     _get_tracked_device_options,
     _get_tracked_device_selector,
     _make_mock_client,
@@ -72,12 +71,18 @@ async def test_options_flow(hass: HomeAssistant, options_entry: MockConfigEntry)
     mock_coordinator.controller = _mock_controller(
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
     )
+    session = _attach_mock_session(mock_coordinator.controller)
     options_entry.runtime_data = mock_coordinator
     options_entry.mock_state(hass, ConfigEntryState.LOADED)
 
-    result = await hass.config_entries.options.async_init(options_entry.entry_id)
+    with patch(PATCH_CREATE_CONTROLLER) as create_controller:
+        result = await hass.config_entries.options.async_init(options_entry.entry_id)
+
+    create_controller.assert_not_called()
+    _assert_session_cleanup(session, owned=False)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
+    assert result["data_schema"]({}) == MOCK_OPTIONS
     selector = _get_tracked_device_selector(result)
     assert selector.config["multiple"] is True
     assert selector.config["mode"] == SelectSelectorMode.DROPDOWN
@@ -95,26 +100,23 @@ async def test_options_flow(hass: HomeAssistant, options_entry: MockConfigEntry)
     assert result["data"][CONF_AWAY_SECONDS] == 120
     assert result["data"][CONF_FALLBACK_POLL_INTERVAL] == 600
     assert result["data"][CONF_TRACKED_DEVICES] == ["aa:bb:cc:dd:ee:ff"]
+    assert options_entry.options == result["data"]
 
 
 async def test_options_flow_preserves_missing_clients_with_expected_labels_and_order(hass: HomeAssistant) -> None:
     """Test missing tracked clients stay selectable and sort ahead of current clients."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
+    entry = add_mock_config_entry(
+        hass,
         options={
             CONF_TRACKED_DEVICES: ["cc:cc:cc:cc:cc:cc", "aa:aa:aa:aa:aa:aa"],
             CONF_AWAY_SECONDS: 60,
             CONF_FALLBACK_POLL_INTERVAL: 300,
         },
     )
-    entry.add_to_hass(hass)
     controller = _mock_controller(
         clients_all_items=[
-            ("22:22:22:22:22:22", _make_mock_client("22:22:22:22:22:22", name="Alpha Phone")),
             ("11:11:11:11:11:11", _make_mock_client("11:11:11:11:11:11", name="Beta Phone")),
+            ("22:22:22:22:22:22", _make_mock_client("22:22:22:22:22:22", name="Alpha Phone")),
         ]
     )
 
@@ -141,14 +143,10 @@ async def test_options_flow_current_labels_always_append_mac(hass: HomeAssistant
         ]
     )
 
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
+    entry = add_mock_config_entry(
+        hass,
         options={CONF_TRACKED_DEVICES: ["aa:aa:aa:aa:aa:aa"]},
     )
-    entry.add_to_hass(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -164,18 +162,14 @@ async def test_options_flow_current_labels_always_append_mac(hass: HomeAssistant
 
 async def test_options_flow_keeps_missing_selected_clients_configured(hass: HomeAssistant) -> None:
     """Test a missing client remains configured when still selected in options."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id=DEFAULT_SITE_ID,
+    entry = add_mock_config_entry(
+        hass,
         options={
             CONF_TRACKED_DEVICES: ["aa:aa:aa:aa:aa:aa"],
             CONF_AWAY_SECONDS: 60,
             CONF_FALLBACK_POLL_INTERVAL: 300,
         },
     )
-    entry.add_to_hass(hass)
 
     controller = _mock_controller(
         clients_all_items=[("bb:bb:bb:bb:bb:bb", _make_mock_client("bb:bb:bb:bb:bb:bb", name="Other Phone"))]
@@ -194,19 +188,26 @@ async def test_options_flow_keeps_missing_selected_clients_configured(hass: Home
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_TRACKED_DEVICES] == ["aa:aa:aa:aa:aa:aa"]
+    assert entry.options[CONF_TRACKED_DEVICES] == ["aa:aa:aa:aa:aa:aa"]
 
 
-async def test_options_flow_without_runtime_data_uses_login(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+@pytest.mark.parametrize("state", [ConfigEntryState.NOT_LOADED, ConfigEntryState.LOADED])
+async def test_options_flow_without_runtime_data_uses_login(
+    hass: HomeAssistant, config_entry: MockConfigEntry, state: ConfigEntryState
+) -> None:
     """Test options flow falls back to creating a controller when runtime_data is unavailable."""
+    config_entry.mock_state(hass, state)
     controller = _mock_controller(
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
     )
+    session = _attach_mock_session(controller)
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller:
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
-    create_controller.assert_called_once()
+    create_controller.assert_awaited_once()
+    _assert_session_cleanup(session)
 
 
 async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
@@ -223,17 +224,14 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
     )
 
-    with (
-        patch(
-            "custom_components.unifi_presence.config_flow.create_controller_for_params",
-            return_value=client_controller,
-        ) as create_controller_for_params,
-    ):
+    with patch(PATCH_CREATE_CONTROLLER, return_value=client_controller) as create_controller_for_params:
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
+    create_controller_for_params.assert_awaited_once()
     assert create_controller_for_params.await_args.args[1].site == OFFICE_SITE_ID
+    assert create_controller_for_params.await_args.kwargs["unique_id"] == config_entry.unique_id
     assert create_controller_for_params.await_args.kwargs["resolve_legacy_site"] is True
 
 
@@ -259,7 +257,9 @@ async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, o
     )
 
     assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
     assert result["errors"] == {"base": "no_tracked_devices"}
+    assert options_entry.options == MOCK_OPTIONS
 
 
 async def test_options_flow_runtime_data_no_controller_falls_back(
@@ -279,7 +279,7 @@ async def test_options_flow_runtime_data_no_controller_falls_back(
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
-    create_ctrl.assert_called_once()
+    create_ctrl.assert_awaited_once()
 
 
 async def test_options_flow_active_client_refresh_failure_uses_historical_clients(
@@ -289,13 +289,15 @@ async def test_options_flow_active_client_refresh_failure_uses_historical_client
     controller = _mock_controller(
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
     )
-    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active clients unavailable"))
+    controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active clients unavailable")
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
+    assert result["errors"] == {}
+    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
 
 
 async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
@@ -306,6 +308,9 @@ async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, conf
         assert result["type"] is FlowResultType.FORM
         assert result["step_id"] == "init"
         assert result["errors"] == {"base": "cannot_discover_devices"}
+        assert _get_tracked_device_options(result) == {
+            "aa:bb:cc:dd:ee:ff": "aa:bb:cc:dd:ee:ff (No longer in UniFi Client Devices)"
+        }
 
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
@@ -316,7 +321,12 @@ async def test_options_flow_handles_client_fetch_error(hass: HomeAssistant, conf
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_TRACKED_DEVICES] == ["aa:bb:cc:dd:ee:ff"]
+    assert result["data"] == {
+        CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
+        CONF_AWAY_SECONDS: 90,
+        CONF_FALLBACK_POLL_INTERVAL: 600,
+    }
+    assert config_entry.options == result["data"]
 
 
 async def test_options_flow_discovery_failure_preserves_validation_error(
@@ -348,14 +358,12 @@ async def test_options_flow_discovery_failure_without_tracked_devices_aborts(
     hass: HomeAssistant,
 ) -> None:
     """Test options flow aborts on discovery failure when no tracked devices exist."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
+    entry = add_mock_config_entry(
+        hass,
         title="UniFi Presence (192.168.1.1)",
-        data=MOCK_CONFIG_DATA,
         unique_id="192.168.1.1_default",
         options={CONF_TRACKED_DEVICES: []},
     )
-    entry.add_to_hass(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, side_effect=Exception("offline")):
         result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -368,14 +376,12 @@ async def test_options_flow_empty_clients_and_empty_tracked_aborts(
     hass: HomeAssistant,
 ) -> None:
     """Test that options flow aborts when no clients and no tracked MACs."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
+    entry = add_mock_config_entry(
+        hass,
         title="UniFi Presence (192.168.1.1)",
-        data=MOCK_CONFIG_DATA,
         unique_id="192.168.1.1_default",
-        options={CONF_TRACKED_DEVICES: [], **{k: v for k, v in MOCK_OPTIONS.items() if k != CONF_TRACKED_DEVICES}},
+        options={**MOCK_OPTIONS, CONF_TRACKED_DEVICES: []},
     )
-    entry.add_to_hass(hass)
 
     # Client discovery returns nothing, and there are no currently tracked MACs
     controller = _mock_controller(clients_all_items=[], clients_items=[])

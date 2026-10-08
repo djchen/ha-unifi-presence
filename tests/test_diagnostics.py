@@ -1,6 +1,7 @@
 """Tests for the UniFi Presence diagnostics platform."""
 
-from unittest.mock import MagicMock, patch
+from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -14,12 +15,10 @@ from custom_components.unifi_presence.diagnostics import (
 
 from .conftest import MOCK_OPTIONS, add_mock_config_entry
 
-PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
-
 
 @pytest.fixture
-async def loaded_entry(hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock) -> MockConfigEntry:
-    """Config entry fully set up in hass for diagnostics tests."""
+def runtime_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Config entry with runtime data, without starting platforms or WebSocket tasks."""
     entry = add_mock_config_entry(
         hass,
         title="UniFi Presence (192.168.1.1)",
@@ -27,16 +26,20 @@ async def loaded_entry(hass: HomeAssistant, enable_custom_integrations, mock_con
         options=MOCK_OPTIONS,
     )
 
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
+    entry.runtime_data = SimpleNamespace(
+        data={mac: (False, mac) for mac in MOCK_OPTIONS["tracked_devices"]},
+        tracked_devices=tuple(MOCK_OPTIONS["tracked_devices"]),
+        away_seconds=MOCK_OPTIONS["away_seconds"],
+        update_interval=timedelta(seconds=MOCK_OPTIONS["fallback_poll_interval"]),
+        websocket=SimpleNamespace(available=True),
+        heartbeat_expiry_count=0,
+    )
     return entry
 
 
-async def test_diagnostics_redacts_credentials(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
+async def test_diagnostics_redacts_credentials(hass: HomeAssistant, runtime_entry: MockConfigEntry) -> None:
     """Test that diagnostics redacts sensitive credentials and MAC addresses."""
-    result = await async_get_config_entry_diagnostics(hass, loaded_entry)
+    result = await async_get_config_entry_diagnostics(hass, runtime_entry)
 
     # Sensitive config entry data should be redacted.
     assert result["config_entry"]["data"]["host"] == "**REDACTED**"
@@ -46,30 +49,26 @@ async def test_diagnostics_redacts_credentials(hass: HomeAssistant, loaded_entry
     # Site remains visible in diagnostics data.
     assert result["config_entry"]["data"]["site"] == "default"
     assert result["tracked_device_count"] == 2
-    assert "device_states" in result
-    assert "away_seconds" in result
-    assert "fallback_poll_interval_seconds" in result
-    assert "websocket_connected" in result
-    assert "devices_with_active_away_timers" in result
+    assert result["away_seconds"] == 60
+    assert result["fallback_poll_interval_seconds"] == 300
+    assert result["websocket_connected"] is True
+    assert result["devices_with_active_away_timers"] == 0
 
     # MAC addresses in options should be partially redacted
-    tracked = result["config_entry"]["options"]["tracked_devices"]
-    for mac in tracked:
-        assert mac.startswith("**:**:**:")
+    assert result["config_entry"]["options"]["tracked_devices"] == ["**:**:**:dd:ee:ff", "**:**:**:44:55:66"]
 
     # MAC addresses in device_states keys should be partially redacted
-    for key in result["device_states"]:
-        assert key.startswith("**:**:**:")
+    assert result["device_states"] == {"**:**:**:dd:ee:ff": False, "**:**:**:44:55:66": False}
+    # Building diagnostics must not redact the stored entry in place.
+    assert runtime_entry.data["host"] == "192.168.1.1"
+    assert runtime_entry.options["tracked_devices"] == MOCK_OPTIONS["tracked_devices"]
 
 
-async def test_diagnostics_websocket_none(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
+async def test_diagnostics_websocket_none(hass: HomeAssistant, runtime_entry: MockConfigEntry) -> None:
     """Test that diagnostics reports websocket_connected=False when websocket is None."""
-    websocket = loaded_entry.runtime_data.websocket
-    assert websocket is not None
-    await websocket.stop_and_wait()
-    loaded_entry.runtime_data.websocket = None
+    runtime_entry.runtime_data.websocket = None
 
-    result = await async_get_config_entry_diagnostics(hass, loaded_entry)
+    result = await async_get_config_entry_diagnostics(hass, runtime_entry)
 
     assert result["websocket_connected"] is False
 
@@ -108,26 +107,17 @@ def test_redact_mac_keys() -> None:
     """Test that dict keys containing MACs are partially redacted."""
     data = {"aa:bb:cc:dd:ee:ff": True, "11:22:33:44:55:66": False}
     result = _redact_mac_keys(data)
-    assert "**:**:**:dd:ee:ff" in result
-    assert "**:**:**:44:55:66" in result
-    assert result["**:**:**:dd:ee:ff"] is True
-    assert result["**:**:**:44:55:66"] is False
-    assert "aa:bb:cc:dd:ee:ff" not in result
+    assert result == {"**:**:**:dd:ee:ff": True, "**:**:**:44:55:66": False}
+    assert data == {"aa:bb:cc:dd:ee:ff": True, "11:22:33:44:55:66": False}
 
 
-async def test_diagnostics_preserves_mac_suffix_collisions(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
+async def test_diagnostics_preserves_mac_suffix_collisions(hass: HomeAssistant, runtime_entry: MockConfigEntry) -> None:
     """Test that diagnostics keep all device states when redacted MAC keys collide."""
-    loaded_entry.runtime_data.data = {
+    runtime_entry.runtime_data.data = {
         "aa:bb:cc:dd:ee:ff": (True, "Dan Phone"),
         "11:22:33:dd:ee:ff": (False, "Jane Phone"),
     }
 
-    result = await async_get_config_entry_diagnostics(hass, loaded_entry)
+    result = await async_get_config_entry_diagnostics(hass, runtime_entry)
 
-    colliding_entries = {
-        key: value for key, value in result["device_states"].items() if key.startswith("**:**:**:dd:ee:ff")
-    }
-    assert len(colliding_entries) == 2
-    assert list(colliding_entries.values()).count(True) == 1
-    assert list(colliding_entries.values()).count(False) == 1
-    assert set(colliding_entries) == {"**:**:**:dd:ee:ff", "**:**:**:dd:ee:ff (2)"}
+    assert result["device_states"] == {"**:**:**:dd:ee:ff": True, "**:**:**:dd:ee:ff (2)": False}

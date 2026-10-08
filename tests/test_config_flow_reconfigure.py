@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from copy import deepcopy
 from functools import partial
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import aiounifi
 import pytest
@@ -14,7 +14,6 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.unifi_presence.config_flow import (
     UnifiPresenceConfigFlow,
@@ -172,25 +171,16 @@ async def test_reconfigure_flow_success(hass: HomeAssistant, populated: bool, ss
 
 async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass: HomeAssistant) -> None:
     """Test reconfigure does not require access to the default site."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
+    entry = add_mock_config_entry(
+        hass,
         title="Office",
         data={**MOCK_CONFIG_DATA, "site": "office"},
         unique_id=OFFICE_SITE_ID,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
     )
-    entry.runtime_data = None
-    entry.add_to_hass(hass)
 
     controller = _mock_controller(sites=[_make_mock_site(OFFICE_SITE_ID, "office", "Office")])
 
-    def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        site = args[1].site
-        if site == "default":
-            raise aiounifi.Unauthorized
-        return controller
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=_create_controller_side_effect) as mock_create_controller:
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller:
         result = await async_run_reconfigure_step(
             hass,
             entry,
@@ -201,8 +191,7 @@ async def test_reconfigure_flow_uses_existing_site_for_site_scoped_account(hass:
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["site"] == "office"
     assert entry.unique_id == OFFICE_SITE_ID
-    first_call = mock_create_controller.call_args_list[0]
-    assert first_call.args[1].site == "office"
+    assert [acquisition.args[1].site for acquisition in create_controller.await_args_list] == ["office", "office"]
 
 
 # ── Reconfigure flow: site handling ──────────────────────────────────────
@@ -214,8 +203,8 @@ async def test_reconfigure_flow_uses_existing_site_without_showing_picker(hass: 
 
     controller = _mock_controller(
         sites=[
-            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
             _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
         ]
     )
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
@@ -244,13 +233,15 @@ async def test_reconfigure_flow_aborts_when_existing_site_is_no_longer_accessibl
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "different_site_selected"
+    assert entry.data == MOCK_CONFIG_DATA
+    assert entry.unique_id == DEFAULT_SITE_ID
 
 
 async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that reconfigure returns an error if the site list cannot be loaded."""
     entry = add_mock_config_entry(hass)
     controller = _mock_controller()
-    controller.sites.update = AsyncMock(side_effect=aiounifi.AiounifiException)
+    controller.sites.update.side_effect = aiounifi.AiounifiException
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_reconfigure_step(hass, entry, make_reconfigure_input())
@@ -319,19 +310,13 @@ async def test_reconfigure_flow_second_login_failure_returns_to_reconfigure_form
     )
     site_session = _attach_mock_session(site_list_controller)
 
-    with (
-        patch(PATCH_CREATE_CONTROLLER, side_effect=[site_list_controller, error]) as create_controller,
-        patch.object(
-            unchanged_reconfigure_flow,
-            "_async_discover_clients_from_controller",
-            wraps=unchanged_reconfigure_flow._async_discover_clients_from_controller,
-        ) as discover,
-    ):
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_list_controller, error]) as create_controller:
         result = await unchanged_reconfigure_flow.async_step_reconfigure(_validation_input())
 
     _assert_reconfigure_error(result, expected_error)
     assert create_controller.await_count == 2
-    discover.assert_not_awaited()
+    site_list_controller.clients.update_mock.assert_not_awaited()
+    site_list_controller.clients_all.update_mock.assert_not_awaited()
     _assert_session_cleanup(site_session)
     if expected_error == "unknown":
         assert "Unexpected exception during UniFi reconfigure site validation" in caplog.text
@@ -439,17 +424,16 @@ async def test_load_selected_site_clients_returns_login_error(hass: HomeAssistan
     flow.hass = hass
     flow._available_clients = {"aa:bb:cc:dd:ee:ff": "Stale Phone"}
 
-    async def _acquire(**kwargs: Any) -> tuple[None, str]:
+    async def _acquire(*args: Any, **kwargs: Any) -> MagicMock:
         assert flow._available_clients == {}
-        return None, "cannot_connect"
+        raise aiounifi.AiounifiException("offline")
 
-    flow._async_validate_login = AsyncMock(side_effect=_acquire)
-    flow._async_discover_clients_from_controller = AsyncMock()
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=_acquire) as create_controller:
+        error = await flow._async_load_selected_site_clients(log_context="UniFi site client discovery")
 
-    assert await flow._async_load_selected_site_clients(log_context="UniFi site client discovery") == "cannot_connect"
+    assert error == "cannot_connect"
     assert flow._available_clients == {}
-    flow._async_validate_login.assert_awaited_once()
-    flow._async_discover_clients_from_controller.assert_not_awaited()
+    create_controller.assert_awaited_once()
 
 
 # ── Reconfigure flow: legacy / migration ─────────────────────────────────
@@ -460,14 +444,11 @@ async def test_reconfigure_flow_matches_stored_site_for_legacy_or_missing_unique
     hass: HomeAssistant, initial_unique_id: str | None
 ) -> None:
     """Test reconfigure accepts the existing site when unique_id is missing or legacy."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
+    entry = add_mock_config_entry(
+        hass,
         data={**MOCK_CONFIG_DATA, "site": DEFAULT_SITE_ID},
         unique_id=initial_unique_id,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
     )
-    entry.add_to_hass(hass)
 
     controller = _mock_controller()
     client_controller = _mock_controller()
@@ -498,14 +479,7 @@ async def test_reconfigure_flow_matches_stored_site_for_legacy_or_missing_unique
 
 async def test_reconfigure_flow_migrates_legacy_tracker_entity_unique_ids(hass: HomeAssistant) -> None:
     """Test reconfigure updates entity-registry tracker IDs for legacy entries."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
-        data=MOCK_CONFIG_DATA,
-        unique_id="192.168.1.1_default",
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
-    )
-    entry.add_to_hass(hass)
+    entry = add_mock_config_entry(hass, unique_id="192.168.1.1_default")
 
     entity_registry = er.async_get(hass)
     legacy_entity = entity_registry.async_get_or_create(
@@ -600,14 +574,11 @@ async def test_reconfigure_flow_recovers_legacy_site_identity_when_single_site_i
     hass: HomeAssistant, initial_unique_id: str | None
 ) -> None:
     """Test reconfigure recovers legacy entries when exactly one site is accessible."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
+    entry = add_mock_config_entry(
+        hass,
         data={**MOCK_CONFIG_DATA, "site": "stale-site-token"},
         unique_id=initial_unique_id,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
     )
-    entry.add_to_hass(hass)
 
     controller = _mock_controller(sites=[_make_mock_site(DEFAULT_SITE_ID, "default", "Home")])
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
@@ -628,14 +599,11 @@ async def test_reconfigure_flow_does_not_guess_legacy_site_identity_with_multipl
     hass: HomeAssistant, initial_unique_id: str | None
 ) -> None:
     """Test reconfigure keeps aborting when multiple sites fit a legacy recovery."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Home",
+    entry = add_mock_config_entry(
+        hass,
         data={**MOCK_CONFIG_DATA, "site": "stale-site-token"},
         unique_id=initial_unique_id,
-        options={CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]},
     )
-    entry.add_to_hass(hass)
 
     controller = _mock_controller(
         sites=[
@@ -652,3 +620,5 @@ async def test_reconfigure_flow_does_not_guess_legacy_site_identity_with_multipl
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "different_site_selected"
+    assert entry.data == {**MOCK_CONFIG_DATA, "site": "stale-site-token"}
+    assert entry.unique_id == initial_unique_id

@@ -1,12 +1,12 @@
 """Tests for WebSocket watchdog and stale-session detection."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
 
-from .websocket_helpers import make_websocket, wait_for_websocket_start
+from .websocket_helpers import block_websocket, make_websocket
 
 
 @pytest.mark.parametrize(
@@ -18,13 +18,8 @@ async def test_watchdog_reauths_on_expiry(hass: HomeAssistant, available: bool, 
     """Test watchdog reconnects unhealthy sessions."""
     ws, _controller, _ = make_websocket(hass)
     ws.available = available
-    if task_done:
-        finished_task = hass.async_create_task(asyncio.sleep(0))
-        await finished_task
-        ws.ws_task = finished_task
-    else:
-        ws.ws_task = MagicMock()
-        ws.ws_task.done.return_value = False
+    ws.ws_task = MagicMock()
+    ws.ws_task.done.return_value = task_done
 
     with patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart:
         ws._handle_watchdog_expiry(None)
@@ -56,11 +51,10 @@ async def test_watchdog_expiry_noop_when_stopped(hass: HomeAssistant) -> None:
 async def test_inbound_frame_resets_watchdog_deadline(hass: HomeAssistant) -> None:
     """Test each inbound frame replaces the watchdog timer and marks the socket healthy."""
     ws, controller, _ = make_websocket(hass)
-    hang = asyncio.Event()
-    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+    started = block_websocket(controller)
 
     ws.start()
-    await wait_for_websocket_start(controller)
+    await asyncio.wait_for(started.wait(), timeout=1)
     initial_handle = ws._cancel_watchdog
     assert initial_handle is not None
 
@@ -70,4 +64,4 @@ async def test_inbound_frame_resets_watchdog_deadline(hass: HomeAssistant) -> No
     assert ws._cancel_watchdog is not None
     assert ws._cancel_watchdog is not initial_handle
 
-    ws.stop()
+    await ws.stop_and_wait()

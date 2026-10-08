@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
-from .websocket_helpers import make_websocket, wait_for_task, wait_for_websocket_start
+from .websocket_helpers import block_websocket, make_websocket, wait_for_task
 
 
 async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
@@ -31,14 +31,13 @@ async def test_start_subscribes_and_creates_task(hass: HomeAssistant) -> None:
 async def test_start_websocket_is_idempotent_while_runner_active(hass: HomeAssistant) -> None:
     """Test _start_websocket_runner() does not create a second runner while active."""
     ws, controller, _ = make_websocket(hass)
-    hang = asyncio.Event()
-    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+    started = block_websocket(controller)
 
     ws._start_websocket_runner()
     first_task = ws.ws_task
 
     ws._start_websocket_runner()
-    await wait_for_websocket_start(controller)
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     assert ws.ws_task is first_task
     controller.start_websocket.assert_awaited_once()
@@ -63,27 +62,27 @@ async def test_stop_cancels_task_and_unsubscribes(hass: HomeAssistant) -> None:
 
 async def test_stop_and_wait(hass: HomeAssistant) -> None:
     """Test that stop_and_wait awaits the WS task."""
-    ws, _, _ = make_websocket(hass)
+    ws, controller, _ = make_websocket(hass)
+    started = block_websocket(controller)
 
     ws.start()
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task = ws.ws_task
+    assert task is not None
+
     await ws.stop_and_wait()
 
+    assert task.done()
     assert ws._unsub_messages is None
 
 
 async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant, caplog: pytest.LogCaptureFixture) -> None:
     """Test that stop_and_wait logs a warning when the WS task won't finish."""
     ws, controller, _ = make_websocket(hass)
-
-    # Make start_websocket block forever
-    hang = asyncio.Event()
-
-    async def _block_forever() -> None:
-        await hang.wait()
-
-    controller.start_websocket = AsyncMock(side_effect=_block_forever)
+    started = block_websocket(controller)
 
     ws.start()
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     # Patch asyncio.wait to simulate timeout (return the task as pending)
     real_task = ws.ws_task
@@ -95,9 +94,9 @@ async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant, caplog: p
 
     assert "did not complete in time" in caplog.text
 
-    # The task is still pending — clean up
-    hang.set()
-    await asyncio.sleep(0)
+    # Await cancellation cleanup even though the timeout is simulated.
+    with pytest.raises(asyncio.CancelledError):
+        await wait_for_task(real_task)
 
 
 async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None:
@@ -116,7 +115,7 @@ async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None
 
     on_message.assert_called_once_with(mock_msg)
 
-    ws.stop()
+    await ws.stop_and_wait()
 
 
 async def test_websocket_becomes_available_after_runner_confirms_session(hass: HomeAssistant) -> None:
@@ -138,22 +137,20 @@ async def test_websocket_becomes_available_after_runner_confirms_session(hass: H
 
     assert ws.available is True
 
-    ws.stop()
+    await ws.stop_and_wait()
 
 
 async def test_websocket_startup_without_messages_stays_unavailable(hass: HomeAssistant) -> None:
     """Test that startup does not mark available until a frame is received."""
     ws, controller, _ = make_websocket(hass)
-    hang = asyncio.Event()
-    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+    started = block_websocket(controller)
 
     ws.start()
-    await wait_for_websocket_start(controller)
-    await asyncio.sleep(0.02)
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     assert ws.available is False
 
-    ws.stop()
+    await ws.stop_and_wait()
 
 
 async def test_websocket_runner_restores_new_data_after_exit(hass: HomeAssistant) -> None:
@@ -176,12 +173,11 @@ async def test_websocket_runner_restores_new_data_after_exit(hass: HomeAssistant
 async def test_websocket_runner_restores_new_data_after_cancel(hass: HomeAssistant) -> None:
     """Test the temporary WebSocket health wrapper is restored after cancellation."""
     ws, controller, _ = make_websocket(hass)
-    hang = asyncio.Event()
-    controller.start_websocket = AsyncMock(side_effect=hang.wait)
+    started = block_websocket(controller)
     original_new_data = controller.messages.new_data
 
     ws.start()
-    await wait_for_websocket_start(controller)
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     assert controller.messages.new_data is not original_new_data
 
@@ -200,7 +196,7 @@ async def test_start_with_none_controller_skips_subscribe(hass: HomeAssistant) -
     # No subscription should have been created
     assert ws._unsub_messages is None
 
-    ws.stop()
+    await ws.stop_and_wait()
 
 
 async def test_websocket_runner_returns_when_controller_none(hass: HomeAssistant) -> None:
@@ -259,15 +255,17 @@ async def test_mark_connected_noop_when_already_available(hass: HomeAssistant) -
 async def test_async_restart_runner_noop_when_stop_occurs_after_cancel(hass: HomeAssistant) -> None:
     """Test restart does not resubscribe after stopping during cancellation."""
     ws, _, _ = make_websocket(hass)
+    started = asyncio.Event()
 
     async def _stop_when_cancelled() -> None:
+        started.set()
         try:
             await asyncio.Event().wait()
         finally:
             ws._stopped = True
 
     ws.ws_task = hass.async_create_task(_stop_when_cancelled())
-    await asyncio.sleep(0)
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     with (
         patch.object(ws, "_replace_message_subscription") as replace_subscription,

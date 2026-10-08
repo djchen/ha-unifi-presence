@@ -99,13 +99,16 @@ def test_tracker_metadata_contract() -> None:
     assert tracker.source_type is SourceType.ROUTER
     assert tracker.unique_id == f"office-{MAC}"
     assert tracker.mac_address == MAC
-    assert tracker._attr_has_entity_name is True
+    assert tracker.has_entity_name is True
     assert tracker.entity_registry_enabled_default is True
 
 
 @pytest.mark.parametrize("device_timing", ["never", "before_setup", "after_setup"])
 async def test_trackers_remain_entity_only(
-    hass: HomeAssistant, enable_custom_integrations: None, device_timing: str
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    freezer: FrozenDateTimeFactory,
+    device_timing: str,
 ) -> None:
     """A matching MAC from another integration must not create or link a device."""
     device_registry = dr.async_get(hass)
@@ -126,7 +129,7 @@ async def test_trackers_remain_entity_only(
 
     if device_timing == "before_setup":
         register_other_device()
-    original_devices = list(device_registry.devices)
+    original_devices = {device.id: device for device in device_registry.devices}
 
     def assert_entity_only() -> None:
         entities = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
@@ -141,7 +144,7 @@ async def test_trackers_remain_entity_only(
         assert state.attributes["mac"] == MAC
         assert state.attributes["source_type"] == "router"
         assert not dr.async_entries_for_config_entry(device_registry, entry.entry_id)
-        assert list(device_registry.devices) == original_devices
+        assert {device.id: device for device in device_registry.devices} == original_devices
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -150,7 +153,7 @@ async def test_trackers_remain_entity_only(
 
         if device_timing == "after_setup":
             register_other_device()
-            original_devices = list(device_registry.devices)
+            original_devices = {device.id: device for device in device_registry.devices}
             await hass.async_block_till_done()
             assert_entity_only()
 
@@ -160,7 +163,7 @@ async def test_trackers_remain_entity_only(
 
         assert await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
-        assert list(device_registry.devices) == original_devices
+        assert {device.id: device for device in device_registry.devices} == original_devices
 
 
 @pytest.mark.parametrize(
@@ -284,11 +287,11 @@ async def test_previously_linked_tracker_is_detached_without_removing_devices(
         suggested_object_id="my_phone",
     )
     entity_registry.async_update_entity(tracker_entry.entity_id, name="My presence")
-    original_devices = list(device_registry.devices)
+    original_devices = {device.id: device for device in device_registry.devices}
     controller = make_mock_controller()
 
     def assert_devices_preserved() -> None:
-        assert list(device_registry.devices) == original_devices
+        assert {device.id: device for device in device_registry.devices} == original_devices
         preserved_device = device_registry.async_get(previous_device.id)
         assert preserved_device is not None
         assert preserved_device.name_by_user == "My phone"
