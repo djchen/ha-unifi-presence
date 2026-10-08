@@ -2,6 +2,7 @@
 
 import inspect
 from collections.abc import AsyncGenerator, Callable, Generator
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -112,6 +113,7 @@ def _build_controller(
     controller.connectivity = MagicMock()
     controller.connectivity.ws_message_received = None
     controller.start_websocket = AsyncMock()
+    controller._unifi_presence_owned_session = None
     return controller
 
 
@@ -247,11 +249,11 @@ def add_mock_config_entry(
     entry = MockConfigEntry(
         domain=DOMAIN,
         title=title,
-        data=cast(dict[str, Any], MOCK_CONFIG_DATA if data is None else data),
+        data=cast(dict[str, Any], dict(MOCK_CONFIG_DATA if data is None else data)),
         unique_id=unique_id,
         options=cast(
             dict[str, Any],
-            {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]} if options is None else options,
+            {CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"]} if options is None else deepcopy(options),
         ),
     )
     entry.add_to_hass(hass)
@@ -262,7 +264,7 @@ def add_mock_config_entry(
 
 
 @pytest.fixture
-def _bypass_setup(hass: HomeAssistant, enable_custom_integrations: None) -> Generator[None]:
+def _bypass_setup(enable_custom_integrations: None) -> Generator[None]:
     """Enable custom integrations and prevent actual setup after config flow."""
     with patch(
         "custom_components.unifi_presence.async_setup_entry",
@@ -282,8 +284,9 @@ async def coordinator_config_entry(hass: HomeAssistant) -> AsyncGenerator[MagicM
 
     entry = MagicMock()
     entry.entry_id = "test_entry_id"
-    entry.data = MOCK_CONFIG_DATA
-    entry.options = MOCK_OPTIONS
+    entry.unique_id = DEFAULT_SITE_ID
+    entry.data = MOCK_CONFIG_DATA.copy()
+    entry.options = deepcopy(MOCK_OPTIONS)
     entry.async_on_unload = MagicMock(side_effect=_async_on_unload)
 
     yield entry

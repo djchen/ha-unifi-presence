@@ -1,7 +1,7 @@
 """Shared helpers for UniFi Presence WebSocket tests."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from homeassistant.core import HomeAssistant
 
@@ -16,7 +16,7 @@ def make_websocket(
 ) -> tuple[UnifiPresenceWebsocket, MagicMock, MagicMock]:
     """Create a WebSocket manager with a mock controller."""
     controller = make_mock_controller()
-    controller.start_websocket = AsyncMock(side_effect=start_websocket_side_effect)
+    controller.start_websocket.side_effect = start_websocket_side_effect
 
     on_message = MagicMock()
 
@@ -28,15 +28,19 @@ def make_websocket(
     return ws, controller, on_message
 
 
+def block_websocket(controller: MagicMock) -> asyncio.Event:
+    """Block the mocked WebSocket runner, returning its startup event."""
+    started = asyncio.Event()
+
+    async def _start_websocket() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    controller.start_websocket.side_effect = _start_websocket
+    return started
+
+
 async def wait_for_task(task: asyncio.Task[object] | None, *, timeout: float = 1.0) -> None:
     """Wait for a task to finish without relying on repeated loop yields."""
     assert task is not None
     await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-
-
-async def wait_for_websocket_start(controller: MagicMock, *, count: int = 1, timeout: float = 1.0) -> None:
-    """Wait until the mocked controller websocket runner has started."""
-    async with asyncio.timeout(timeout):
-        while controller.start_websocket.await_count < count:
-            await asyncio.sleep(0)
-        await asyncio.sleep(0)

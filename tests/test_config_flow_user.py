@@ -1,7 +1,6 @@
 """Tests for the UniFi Presence config flow — user step, site selection, and device selection."""
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import aiohttp
 import aiounifi
@@ -14,8 +13,12 @@ from homeassistant.helpers.selector import SelectSelectorMode
 
 from custom_components.unifi_presence.config_flow import UnifiPresenceConfigFlow
 from custom_components.unifi_presence.const import (
+    CONF_AWAY_SECONDS,
+    CONF_FALLBACK_POLL_INTERVAL,
     CONF_SITE,
     CONF_TRACKED_DEVICES,
+    DEFAULT_AWAY_SECONDS,
+    DEFAULT_FALLBACK_POLL_INTERVAL,
     DOMAIN,
 )
 
@@ -70,6 +73,7 @@ async def test_user_step_controller_errors(
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
     assert result["errors"] == {"base": expected_error}
 
 
@@ -80,8 +84,8 @@ async def test_user_step_client_fetch_failure_shows_discovery_error(hass: HomeAs
     """Test that setup shows a discovery error if both client sources fail after login."""
     site_controller = _mock_controller(clients_all_items=[])
     client_controller = _mock_controller(clients_all_items=[])
-    client_controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical fetch failed"))
-    client_controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
+    client_controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("historical fetch failed")
+    client_controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active fetch failed")
     site_session = _attach_mock_session(site_controller)
     client_session = _attach_mock_session(client_controller)
 
@@ -130,13 +134,14 @@ async def test_user_step_historical_client_failure_uses_active_clients(
     """Test that setup still proceeds when historical client refresh fails but active succeeds."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_items=[("aa:bb:cc:dd:ee:ff", client1)])
-    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical clients unavailable"))
+    controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("historical clients unavailable")
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
+    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
 
 
 async def test_user_step_active_client_refresh_failure_uses_historical_clients(
@@ -145,25 +150,24 @@ async def test_user_step_active_client_refresh_failure_uses_historical_clients(
     """Test that setup still proceeds when active client refresh fails."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
-    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active clients unavailable"))
+    controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active clients unavailable")
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
+    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
 
 
 async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: HomeAssistant) -> None:
     """Test single-site client discovery errors are retried on the next submit."""
     site_controller = _mock_controller(clients_all_items=[])
     failed_client_controller = _mock_controller(clients_all_items=[])
-    failed_client_controller.clients_all.update = AsyncMock(
-        side_effect=aiounifi.AiounifiException("historical clients unavailable")
+    failed_client_controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException(
+        "historical clients unavailable"
     )
-    failed_client_controller.clients.update = AsyncMock(
-        side_effect=aiounifi.AiounifiException("active clients unavailable")
-    )
+    failed_client_controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active clients unavailable")
 
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
     retry_controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
@@ -182,6 +186,7 @@ async def test_user_step_single_site_retries_client_discovery_on_resubmit(hass: 
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
+    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
     assert create_controller.await_count == 3
 
 
@@ -232,14 +237,15 @@ async def test_user_step_both_updates_fail_but_cached_data_proceeds(hass: HomeAs
     """Test that setup proceeds when both update() calls fail but stores have cached data."""
     client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone")
     controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
-    controller.clients_all.update = AsyncMock(side_effect=aiounifi.AiounifiException("historical fetch failed"))
-    controller.clients.update = AsyncMock(side_effect=aiounifi.AiounifiException("active fetch failed"))
+    controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("historical fetch failed")
+    controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active fetch failed")
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
+    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Cached Phone (aa:bb:cc:dd:ee:ff)"}
 
 
 # ── Site selection ───────────────────────────────────────────────────────
@@ -259,7 +265,7 @@ async def test_user_step_multiple_sites_shows_friendly_selector(hass: HomeAssist
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
-    site_field = next(iter(result["data_schema"].schema))
+    site_field = next(key for key in result["data_schema"].schema if str(key) == CONF_SITE)
     assert result["data_schema"].schema[site_field].container == {
         DEFAULT_SITE_ID: "Home",
         OFFICE_SITE_ID: "Office",
@@ -275,18 +281,13 @@ async def test_user_step_site_picker_does_not_assume_default_site(hass: HomeAssi
         ]
     )
 
-    def _create_controller_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        site = args[1].site
-        if site == "default":
-            raise aiounifi.Unauthorized
-        return controller
-
-    with patch(PATCH_CREATE_CONTROLLER, side_effect=_create_controller_side_effect) as mock_create_controller:
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller:
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "site"
-    assert not any(call.args[1].site == "default" for call in mock_create_controller.call_args_list)
+    create_controller.assert_awaited_once()
+    assert create_controller.await_args.args[1].site == ""
 
 
 @pytest.mark.parametrize("site_value", ["missing-site", 123])
@@ -374,10 +375,13 @@ async def test_devices_step_creates_entry(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Home (192.168.1.1)"
-    assert result["data"][CONF_HOST] == "192.168.1.1"
-    assert result["data"]["site"] == "default"
+    assert result["data"] == {**USER_STEP_INPUT, CONF_SITE: "default"}
     assert result["result"].unique_id == DEFAULT_SITE_ID
-    assert "aa:bb:cc:dd:ee:ff" in result["options"][CONF_TRACKED_DEVICES]
+    assert result["options"] == {
+        CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
+        CONF_AWAY_SECONDS: DEFAULT_AWAY_SECONDS,
+        CONF_FALLBACK_POLL_INTERVAL: DEFAULT_FALLBACK_POLL_INTERVAL,
+    }
 
 
 async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
@@ -390,6 +394,7 @@ async def test_devices_step_no_devices(hass: HomeAssistant) -> None:
         result = await async_configure_flow_step(hass, result, {})
 
     assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "devices"
     assert result["errors"] == {"base": "no_devices"}
 
 
@@ -438,24 +443,23 @@ async def test_fetch_all_clients_active_wins_on_key_collision(hass: HomeAssistan
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
 
-    # The multi-select should show the active name, not the historical one
-    options = _get_tracked_device_options(result)
-    assert "aa:bb:cc:dd:ee:ff" in options
-    assert "Current Name" in options["aa:bb:cc:dd:ee:ff"]
+    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Current Name (aa:bb:cc:dd:ee:ff)"}
 
 
 async def test_finish_single_site_user_selection_keeps_retry_form_on_repeat_failure(hass: HomeAssistant) -> None:
     """Test repeated single-site discovery failures keep the dedicated retry form."""
-    flow = UnifiPresenceConfigFlow()
-    flow.hass = hass
-    flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
-    flow._site = "default"
-    flow._site_title = "Home"
-    flow._async_load_selected_site_clients = AsyncMock(return_value="cannot_discover_devices")
-    flow.context = {}
-    flow._site_id = DEFAULT_SITE_ID
+    site_controller = _mock_controller()
+    client_controller = _mock_controller()
+    client_controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("historical fetch failed")
+    client_controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active fetch failed")
 
-    result = await flow.async_step_single_site_retry({})
+    with patch(PATCH_CREATE_CONTROLLER, side_effect=[site_controller, client_controller, client_controller]):
+        result = await async_run_user_step(hass, USER_STEP_INPUT)
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "single_site_retry"
+        assert result["errors"] == {"base": "cannot_discover_devices"}
+
+        result = await async_configure_flow_step(hass, result, {})
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "single_site_retry"
@@ -529,10 +533,9 @@ async def test_single_site_retry_without_input_shows_retry_form(hass: HomeAssist
     flow = UnifiPresenceConfigFlow()
     flow.hass = hass
     flow._available_sites = {DEFAULT_SITE_ID: _make_mock_site(DEFAULT_SITE_ID, "default", "Home")}
-    flow._site = "default"
-    flow._site_title = "Home"
 
     result = await flow.async_step_single_site_retry()
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "single_site_retry"
+    assert result["description_placeholders"] == {"site": "Home"}

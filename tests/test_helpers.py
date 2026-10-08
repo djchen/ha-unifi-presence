@@ -2,11 +2,14 @@
 
 import asyncio
 import ssl
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import CookieJar
 from homeassistant.core import HomeAssistant
+from yarl import URL
 
 from custom_components.unifi_presence.helpers import (
     ControllerConnectionParams,
@@ -20,7 +23,7 @@ from custom_components.unifi_presence.helpers import (
     tracker_unique_id,
 )
 
-from .conftest import _make_mock_client, _mock_controller
+from .conftest import _assert_session_cleanup, _attach_mock_session, _make_mock_client, make_mock_controller
 
 _SSL_PARAMS = ControllerConnectionParams(
     host="192.168.1.1", port=443, username="admin", password="password", site="default", ssl_verify=True
@@ -85,17 +88,18 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     assert call_kwargs["auto_cleanup"] is False
     assert "cookie_jar" in call_kwargs
     jar = call_kwargs["cookie_jar"]
-    assert getattr(jar, "_unsafe", False) is True
+    assert isinstance(jar, CookieJar)
+    controller_url = URL("https://192.168.1.1")
+    jar.update_cookies({"session": "test-token"}, response_url=controller_url)
+    assert jar.filter_cookies(controller_url)["session"].value == "test-token"
     assert configuration.call_args.kwargs["ssl_context"] is False
 
 
 async def test_create_controller_closes_ssl_false_owned_session(hass: HomeAssistant) -> None:
     """Test SSL-disabled controllers detach their owned session on cleanup."""
-    session = MagicMock()
-    session.closed = False
-    session.detach = MagicMock()
     controller = MagicMock()
     controller.login = AsyncMock()
+    session = _attach_mock_session(controller, owned=False)
 
     with (
         patch(
@@ -112,7 +116,7 @@ async def test_create_controller_closes_ssl_false_owned_session(hass: HomeAssist
 
     assert result is controller
     assert create_session.call_args.kwargs["auto_cleanup"] is False
-    session.detach.assert_called_once_with()
+    _assert_session_cleanup(session)
 
 
 def test_normalize_macs_deduplicates_and_preserves_order() -> None:
@@ -144,14 +148,7 @@ def test_site_title_prefers_description_then_name() -> None:
 
 async def test_create_controller_for_params_uses_legacy_site_resolution(hass: HomeAssistant) -> None:
     """Test the shared controller helper resolves a legacy site on one controller."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="site-office-id",
-        ssl_verify=False,
-    )
+    params = replace(_SSL_PARAMS, site="site-office-id", ssl_verify=False)
     controller = MagicMock()
     controller.connectivity = SimpleNamespace(config=SimpleNamespace(site=""))
     controller.sites.update = AsyncMock()
@@ -176,14 +173,7 @@ async def test_create_controller_for_params_uses_legacy_site_resolution(hass: Ho
 
 async def test_create_controller_for_params_skips_resolution_for_new_setup(hass: HomeAssistant) -> None:
     """Test the shared controller helper can create a site-scoped controller directly."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="office",
-        ssl_verify=False,
-    )
+    params = replace(_SSL_PARAMS, site="office", ssl_verify=False)
     controller = MagicMock()
 
     with patch("custom_components.unifi_presence.helpers.create_controller", return_value=controller) as create_ctrl:
@@ -195,14 +185,7 @@ async def test_create_controller_for_params_skips_resolution_for_new_setup(hass:
 
 async def test_create_controller_for_params_keeps_default_site_without_refresh(hass: HomeAssistant) -> None:
     """Test legacy resolution passes the default site directly without loading sites."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="default",
-        ssl_verify=False,
-    )
+    params = replace(_SSL_PARAMS, ssl_verify=False)
     controller = MagicMock()
     controller.sites.update = AsyncMock()
 
@@ -221,26 +204,26 @@ async def test_create_controller_for_params_keeps_default_site_without_refresh(h
 
 async def test_async_refresh_client_stores_allows_cached_discovery_data() -> None:
     """Test setup/options refresh can proceed from cache when both sources fail."""
-    controller = _mock_controller(
+    controller = make_mock_controller(
         clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone"))]
     )
-    controller.clients_all.update = AsyncMock(side_effect=TimeoutError)
-    controller.clients.update = AsyncMock(side_effect=TimeoutError)
+    controller.clients_all.update_mock.side_effect = TimeoutError
+    controller.clients.update_mock.side_effect = TimeoutError
 
     await async_refresh_client_stores(
         controller,
         require_active_refresh=False,
     )
 
-    controller.clients_all.update.assert_awaited_once()
-    controller.clients.update.assert_awaited_once()
+    controller.clients_all.update_mock.assert_awaited_once_with()
+    controller.clients.update_mock.assert_awaited_once_with()
 
 
 async def test_async_refresh_client_stores_raises_without_cached_discovery_data() -> None:
     """Test setup/options refresh fails when both sources fail with no cache."""
-    controller = _mock_controller(clients_all_items=[], clients_items=[])
-    controller.clients_all.update = AsyncMock(side_effect=TimeoutError)
-    controller.clients.update = AsyncMock(side_effect=TimeoutError)
+    controller = make_mock_controller()
+    controller.clients_all.update_mock.side_effect = TimeoutError
+    controller.clients.update_mock.side_effect = TimeoutError
 
     with pytest.raises(RuntimeError):
         await async_refresh_client_stores(
@@ -251,8 +234,8 @@ async def test_async_refresh_client_stores_raises_without_cached_discovery_data(
 
 async def test_async_refresh_client_stores_requires_active_runtime_refresh() -> None:
     """Test runtime refresh keeps active clients as a required source."""
-    controller = _mock_controller(clients_all_items=[])
-    controller.clients.update = AsyncMock(side_effect=TimeoutError)
+    controller = make_mock_controller()
+    controller.clients.update_mock.side_effect = TimeoutError
 
     with pytest.raises(TimeoutError):
         await async_refresh_client_stores(
@@ -267,11 +250,9 @@ async def test_create_controller_closes_owned_session_on_login_failure(
     error: type[BaseException],
 ) -> None:
     """Test SSL-disabled sessions are detached if login does not complete."""
-    session = MagicMock()
-    session.closed = False
-    session.detach = MagicMock()
     controller = MagicMock()
     controller.login = AsyncMock(side_effect=error)
+    session = _attach_mock_session(controller, owned=False)
 
     with (
         patch("custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session),
@@ -284,19 +265,12 @@ async def test_create_controller_closes_owned_session_on_login_failure(
             _NO_SSL_PARAMS,
         )
 
-    session.detach.assert_called_once_with()
+    _assert_session_cleanup(session)
 
 
 async def test_create_controller_for_params_keeps_modern_site_name_without_refresh(hass: HomeAssistant) -> None:
     """Test modern site names bypass extra site resolution work."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="office",
-        ssl_verify=False,
-    )
+    params = replace(_SSL_PARAMS, site="office", ssl_verify=False)
     controller = MagicMock()
     controller.connectivity = SimpleNamespace(config=SimpleNamespace(site=""))
     controller.sites = MagicMock()
@@ -320,14 +294,7 @@ async def test_create_controller_for_params_closes_controller_on_resolution_fail
     error: type[BaseException],
 ) -> None:
     """Test incomplete site resolution closes the already-created controller."""
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="site-office-id",
-        ssl_verify=False,
-    )
+    params = replace(_SSL_PARAMS, site="site-office-id", ssl_verify=False)
     controller = MagicMock()
     controller.sites = MagicMock()
     controller.sites.update = AsyncMock(side_effect=error)
@@ -361,14 +328,7 @@ async def test_create_controller_for_params_closes_controller_on_site_assignment
         def site(self, _value: str) -> None:
             raise RuntimeError("assignment failed")
 
-    params = ControllerConnectionParams(
-        host="192.168.1.1",
-        port=443,
-        username="admin",
-        password="password",
-        site="site-office-id",
-        ssl_verify=False,
-    )
+    params = replace(_SSL_PARAMS, site="site-office-id", ssl_verify=False)
     controller = MagicMock()
     controller.connectivity = SimpleNamespace(config=FailingConfig())
     controller.sites.update = AsyncMock()

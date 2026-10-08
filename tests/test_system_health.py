@@ -1,39 +1,36 @@
 """Tests for UniFi Presence system health."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.unifi_presence.const import DOMAIN
 from custom_components.unifi_presence.system_health import (
     async_register,
     system_health_info,
 )
 
-from .conftest import MOCK_OPTIONS, add_mock_config_entry
-
-PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
+from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, add_mock_config_entry
 
 
-async def test_system_health_info_reports_loaded_entry(
-    hass: HomeAssistant,
-    enable_custom_integrations,
-    mock_controller: MagicMock,
-) -> None:
+async def test_system_health_info_reports_loaded_entry(hass: HomeAssistant) -> None:
     """Test system health summarizes the loaded integration state."""
-    entry = add_mock_config_entry(
-        hass,
-        title="UniFi Presence (192.168.1.1)",
-        unique_id="192.168.1.1_default",
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CONFIG_DATA,
         options=MOCK_OPTIONS,
+        state=ConfigEntryState.LOADED,
     )
+    entry.runtime_data = SimpleNamespace(last_update_success=True, websocket=SimpleNamespace(available=True))
 
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
+    # Exercise aggregation without starting unrelated platforms and background tasks.
+    with patch.object(hass.config_entries, "async_entries", return_value=[entry]) as get_entries:
+        result = await system_health_info(hass)
 
-    entry.runtime_data.websocket.available = True
-
-    result = await system_health_info(hass)
+    get_entries.assert_called_once_with(DOMAIN)
 
     assert result == {
         "config_entry_count": 1,

@@ -1,7 +1,9 @@
 """Tests for the UniFi Presence coordinator — identity, naming, timestamp ordering, and controller lifecycle."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import timedelta
+from unittest.mock import MagicMock, patch
 
+import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -9,7 +11,14 @@ from homeassistant.util import dt as dt_util
 from custom_components.unifi_presence.const import CONF_SITE, CONF_TRACKED_DEVICES
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client
+from .conftest import (
+    MOCK_CONFIG_DATA,
+    MOCK_OPTIONS,
+    _assert_session_cleanup,
+    _attach_mock_session,
+    _make_mock_client,
+    make_mock_controller,
+)
 
 # ── Naming fallback tests ────────────────────────────────────────────────
 
@@ -17,7 +26,7 @@ from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client
 async def test_coordinator_uses_hostname_when_name_missing(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
+    mock_coordinator_controller: MagicMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that hostname is used as the runtime display name fallback."""
@@ -34,7 +43,7 @@ async def test_coordinator_uses_hostname_when_name_missing(
 async def test_coordinator_uses_mac_when_name_and_hostname_missing(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
+    mock_coordinator_controller: MagicMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that MAC remains the last-resort tracker name fallback."""
@@ -89,7 +98,7 @@ async def test_ensure_controller_reuses_existing_controller(
     """Test that _ensure_controller returns cached controller without re-creating it."""
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
 
-    existing_controller = AsyncMock()
+    existing_controller = make_mock_controller()
     coordinator._controller = existing_controller
 
     with patch("custom_components.unifi_presence.coordinator.create_controller_for_params") as create_controller:
@@ -106,7 +115,7 @@ async def test_ensure_controller_normalizes_legacy_stored_site_id(
     coordinator_config_entry.data = {**MOCK_CONFIG_DATA, CONF_SITE: "site-office-id"}
     coordinator_config_entry.unique_id = "192.168.1.1_office"
 
-    runtime_controller = AsyncMock()
+    runtime_controller = make_mock_controller()
 
     with patch(
         "custom_components.unifi_presence.coordinator.create_controller_for_params",
@@ -116,6 +125,8 @@ async def test_ensure_controller_normalizes_legacy_stored_site_id(
         controller = await coordinator._ensure_controller()
 
     assert controller is runtime_controller
+    create_controller_for_params.assert_awaited_once()
+    assert create_controller_for_params.await_args.args[0] is hass
     assert create_controller_for_params.await_args.args[1].site == "site-office-id"
     assert create_controller_for_params.await_args.kwargs == {
         "unique_id": "192.168.1.1_office",
@@ -127,18 +138,15 @@ async def test_coordinator_async_shutdown_detaches_owned_runtime_session(
     hass: HomeAssistant, coordinator_config_entry: MagicMock
 ) -> None:
     """Test coordinator shutdown detaches an owned runtime session."""
-    owned_session = MagicMock()
-    owned_session.closed = False
-    owned_session.detach = MagicMock()
-    controller = MagicMock()
-    controller._unifi_presence_owned_session = owned_session
+    controller = make_mock_controller()
+    owned_session = _attach_mock_session(controller)
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     coordinator._controller = controller
 
     await coordinator.async_shutdown()
 
     assert coordinator.controller is None
-    owned_session.detach.assert_called_once_with()
+    _assert_session_cleanup(owned_session)
 
 
 async def test_update_single_device_state_adds_new_runtime_state_and_notifies_on_first_public_state(
@@ -158,8 +166,8 @@ async def test_update_single_device_state_adds_new_runtime_state_and_notifies_on
         expiry_ts=None,
     )
 
-    assert coordinator.data is not None
-    assert coordinator.data["aa:bb:cc:dd:ee:ff"][1] == "Dan Phone"
+    assert coordinator.data == {"aa:bb:cc:dd:ee:ff": (False, "Dan Phone")}
+    assert coordinator._client_states["aa:bb:cc:dd:ee:ff"].name == "Dan Phone"
     assert coordinator.last_update_success is True
     coordinator.async_update_listeners.assert_called_once_with()
 
@@ -181,7 +189,6 @@ async def test_controller_property(hass: HomeAssistant, coordinator_config_entry
 async def test_set_last_seen_rejects_stale_timestamp(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that _set_last_seen keeps the newer cached value when a stale timestamp arrives."""
@@ -207,7 +214,6 @@ async def test_set_last_seen_rejects_stale_timestamp(
 async def test_out_of_order_ws_does_not_regress_presence(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that out-of-order WebSocket frames cannot move last_seen backwards."""
@@ -232,7 +238,7 @@ async def test_out_of_order_ws_does_not_regress_presence(
 async def test_stale_poll_does_not_regress_ws_last_seen(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
+    mock_coordinator_controller: MagicMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that a REST poll with an older last_seen does not overwrite a newer WS value."""
@@ -246,7 +252,7 @@ async def test_stale_poll_does_not_regress_ws_last_seen(
     assert coordinator.data[mac][0] is True
 
     # REST poll returns an older last_seen (e.g. stale cache on controller)
-    stale = now - 10
+    stale = now - coordinator.away_seconds - 10
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=stale)
     data = await coordinator._async_update_data()
 
@@ -255,11 +261,13 @@ async def test_stale_poll_does_not_regress_ws_last_seen(
     assert coordinator._get_known_last_seen(mac) == now
 
 
+@pytest.mark.parametrize("last_seen", [None, 0], ids=["null", "zero"])
 async def test_poll_with_missing_last_seen_uses_cached(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
+    mock_coordinator_controller: MagicMock,
     coordinator_config_entry: MagicMock,
+    last_seen: int | None,
 ) -> None:
     """Test that a poll with None/0 last_seen falls back to cached value."""
     now = int(dt_util.utcnow().timestamp())
@@ -271,11 +279,13 @@ async def test_poll_with_missing_last_seen_uses_cached(
     coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
     assert coordinator.data[mac][0] is True
 
-    # REST poll returns last_seen=0 (missing/null from controller)
-    mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=0)
+    # REST poll returns a missing timestamp instead of a fresh observation.
+    client = _make_mock_client(mac, name="Dan Phone")
+    client.last_seen = last_seen
+    mock_coordinator_controller.clients[mac] = client
     data = await coordinator._async_update_data()
 
-    # Should still be home — 0 is treated as None and the cached timestamp is used
+    # The cached timestamp still keeps the client home.
     assert data[mac][0] is True
     assert coordinator._get_known_last_seen(mac) == now
 
@@ -283,7 +293,7 @@ async def test_poll_with_missing_last_seen_uses_cached(
 async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
-    mock_coordinator_controller: AsyncMock,
+    mock_coordinator_controller: MagicMock,
     coordinator_config_entry: MagicMock,
 ) -> None:
     """Test that a newer timestamp that's still past the away threshold is accepted and marks away."""
@@ -291,23 +301,16 @@ async def test_newer_but_expired_last_seen_updates_cache_and_marks_away(
     mac = "aa:bb:cc:dd:ee:ff"
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
 
-    # WS message: device seen a while ago but within threshold
-    initial_ts = now - 30
-    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": initial_ts}))
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Dan Phone", "last_seen": now}))
     assert coordinator.data[mac][0] is True
 
-    # REST poll returns a newer timestamp, but it's past the away threshold
-    newer_but_expired = now - coordinator.away_seconds - 5
-    # This is only newer if initial_ts < newer_but_expired
-    # initial_ts = now - 30, newer_but_expired = now - 65 → NOT newer
-    # So let's use a scenario where the initial was even older
-    old_ts = now - coordinator.away_seconds - 100
-    coordinator._client_states[mac].last_seen_ts = old_ts  # simulate very old cache
+    # The poll reports later activity, but both observations have since expired.
+    freezer.tick(timedelta(seconds=coordinator.away_seconds + 10))
+    newer_but_expired = now + 5
 
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, name="Dan Phone", last_seen=newer_but_expired)
     data = await coordinator._async_update_data()
 
-    # The newer timestamp should be accepted (it's > old_ts)
     assert coordinator._get_known_last_seen(mac) == newer_but_expired
-    # But it's still past the away threshold, so device is away
     assert data[mac][0] is False
+    assert coordinator.heartbeat_expiry_count == 0

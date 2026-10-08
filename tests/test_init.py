@@ -1,11 +1,11 @@
 """Tests for the UniFi Presence integration setup and unload."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME, EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import CONF_USERNAME, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
@@ -27,7 +27,16 @@ from custom_components.unifi_presence.const import (
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_mock_client, _mock_controller, add_mock_config_entry
+from .conftest import (
+    MOCK_CONFIG_DATA,
+    MOCK_OPTIONS,
+    _assert_session_cleanup,
+    _attach_mock_session,
+    _make_mock_client,
+    add_mock_config_entry,
+    make_mock_controller,
+    make_reconfigure_input,
+)
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
 
@@ -43,37 +52,42 @@ def _make_config_entry(hass: HomeAssistant) -> MockConfigEntry:
     )
 
 
-async def test_async_setup_entry(hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock) -> None:
-    """Test that async_setup_entry creates coordinator, starts WS, and forwards platforms."""
+@pytest.fixture
+async def loaded_entry(
+    hass: HomeAssistant, enable_custom_integrations: None, mock_controller: MagicMock
+) -> MockConfigEntry:
+    """Set up an entry through Home Assistant's real integration lifecycle."""
     entry = _make_config_entry(hass)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
+        assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
+    return entry
+
+
+async def test_async_setup_entry(loaded_entry: MockConfigEntry, mock_controller: MagicMock) -> None:
+    """Test that async_setup_entry creates coordinator, starts WS, and forwards platforms."""
+    entry = loaded_entry
     assert entry.state is ConfigEntryState.LOADED
     assert isinstance(entry.runtime_data, UnifiPresenceCoordinator)
     assert isinstance(entry.runtime_data.websocket, UnifiPresenceWebsocket)
+    assert entry.runtime_data.controller is mock_controller
+    mock_controller.start_websocket.assert_awaited_once_with()
 
 
-async def test_async_unload_entry(hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock) -> None:
+async def test_async_unload_entry(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
     """Test that async_unload_entry stops WS and unloads platforms."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
-    assert entry.state is ConfigEntryState.LOADED
+    entry = loaded_entry
     assert entry.runtime_data.websocket is not None
 
-    await hass.config_entries.async_unload(entry.entry_id)
+    assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.NOT_LOADED
 
 
-async def test_async_unload_entry_releases_resources_even_when_platform_unload_fails(hass: HomeAssistant) -> None:
+async def test_async_unload_entry_preserves_runtime_when_platform_unload_fails(hass: HomeAssistant) -> None:
     """Test unload leaves runtime resources intact when platform unload fails."""
     entry = _make_config_entry(hass)
     websocket = MagicMock()
@@ -98,33 +112,29 @@ async def test_async_unload_entry_shuts_down_coordinator(hass: HomeAssistant) ->
     runtime_data = MagicMock(websocket=websocket)
     runtime_data.async_shutdown = AsyncMock()
     entry.runtime_data = runtime_data
+    cleanup = MagicMock()
+    cleanup.attach_mock(websocket.stop_and_wait, "stop_websocket")
+    cleanup.attach_mock(runtime_data.async_shutdown, "shutdown")
 
     with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)):
         unloaded = await async_unload_entry(hass, entry)
 
     assert unloaded is True
-    websocket.stop_and_wait.assert_awaited_once()
-    runtime_data.async_shutdown.assert_awaited_once()
+    websocket.stop_and_wait.assert_awaited_once_with()
+    runtime_data.async_shutdown.assert_awaited_once_with()
+    assert cleanup.mock_calls == [call.stop_websocket(), call.shutdown()]
 
 
 async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
     hass: HomeAssistant,
+    mock_controller: MagicMock,
 ) -> None:
     """Test setup releases the controller if platform setup fails after refresh."""
     entry = _make_config_entry(hass)
-    owned_session = MagicMock()
-    owned_session.closed = False
-    owned_session.detach = MagicMock()
-    controller = MagicMock()
-    controller.clients.get = MagicMock(return_value=None)
-    controller.clients.update = AsyncMock()
-    controller.clients_all.get = MagicMock(return_value=None)
-    controller.clients_all.update = AsyncMock()
+    owned_session = _attach_mock_session(mock_controller)
 
     async def _first_refresh(coordinator: UnifiPresenceCoordinator) -> None:
-        coordinator._controller = controller
-
-    controller._unifi_presence_owned_session = owned_session
+        coordinator._controller = mock_controller
 
     with (
         patch.object(
@@ -138,55 +148,42 @@ async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
     ):
         await async_setup_entry(hass, entry)
 
-    owned_session.detach.assert_called_once_with()
+    _assert_session_cleanup(owned_session)
 
 
-async def test_shutdown_event_stops_websocket(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
-) -> None:
+async def test_shutdown_event_stops_websocket(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
     """Test that shutdown stops the websocket and releases the controller."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
+    coordinator = loaded_entry.runtime_data
+    ws = coordinator.websocket
+    assert ws is not None
+    with (
+        patch.object(ws, "stop", wraps=ws.stop) as stop,
+        patch.object(coordinator, "async_shutdown", wraps=coordinator.async_shutdown) as shutdown,
+    ):
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
         await hass.async_block_till_done()
 
-    ws = entry.runtime_data.websocket
-    assert ws is not None
-    ws.stop = MagicMock(wraps=ws.stop)
-    entry.runtime_data.async_shutdown = AsyncMock()
-
-    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
-    await hass.async_block_till_done()
-
-    ws.stop.assert_called_once()
-    entry.runtime_data.async_shutdown.assert_awaited_once()
+    stop.assert_called_once_with()
+    shutdown.assert_awaited_once_with()
+    assert coordinator.controller is None
 
 
 async def test_unload_unregisters_shutdown_listener(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, mock_controller: MagicMock
 ) -> None:
     """Test normal unload removes the HA stop listener."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
+    entry = loaded_entry
     coordinator = entry.runtime_data
     ws = coordinator.websocket
     assert ws is not None
     ws.stop = MagicMock(wraps=ws.stop)
-    owned_session = MagicMock()
-    owned_session.closed = False
-    owned_session.detach = MagicMock()
-    mock_controller._unifi_presence_owned_session = owned_session
+    owned_session = _attach_mock_session(mock_controller)
 
-    await hass.config_entries.async_unload(entry.entry_id)
+    assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
     assert ws.stop.call_count == 1
-    owned_session.detach.assert_called_once_with()
+    _assert_session_cleanup(owned_session)
 
     ws.stop.reset_mock()
     owned_session.detach.reset_mock()
@@ -204,42 +201,46 @@ async def test_websocket_starts_after_shutdown_registration(
     """Test that websocket startup is deferred until teardown hooks are registered."""
     entry = _make_config_entry(hass)
 
-    forward_complete = False
-    shutdown_registered = False
-    forward_started_after_shutdown_registration = False
+    setup_events: list[str] = []
     original_forward = hass.config_entries.async_forward_entry_setups
     original_listen_once = type(hass.bus).async_listen_once
 
     async def _forward_and_record(*args, **kwargs):
-        nonlocal forward_complete, forward_started_after_shutdown_registration
-        forward_started_after_shutdown_registration = shutdown_registered
+        setup_events.append("forward-start")
         result = await original_forward(*args, **kwargs)
-        forward_complete = True
+        setup_events.append("forward-complete")
         return result
 
     def _async_listen_once_and_record(bus, *args, **kwargs):
-        nonlocal shutdown_registered
-        if bus is hass.bus and args and args[0] == EVENT_HOMEASSISTANT_STOP:
-            shutdown_registered = True
+        # Forwarded HA platforms can register additional shutdown listeners.
+        if (
+            bus is hass.bus
+            and args
+            and args[0] == EVENT_HOMEASSISTANT_STOP
+            and "shutdown-registration" not in setup_events
+        ):
+            setup_events.append("shutdown-registration")
         return original_listen_once(bus, *args, **kwargs)
-
-    def _assert_start_after_setup(_websocket: UnifiPresenceWebsocket) -> None:
-        assert forward_complete is True
-        assert shutdown_registered is True
-        assert forward_started_after_shutdown_registration is True
 
     with (
         patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller),
         patch.object(hass.config_entries, "async_forward_entry_setups", side_effect=_forward_and_record),
         patch.object(type(hass.bus), "async_listen_once", new=_async_listen_once_and_record),
-        patch.object(UnifiPresenceWebsocket, "start", autospec=True, side_effect=_assert_start_after_setup),
+        patch.object(
+            UnifiPresenceWebsocket,
+            "start",
+            autospec=True,
+            side_effect=lambda _ws: setup_events.append("websocket-start"),
+        ),
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
+    assert setup_events == ["shutdown-registration", "forward-start", "forward-complete", "websocket-start"]
+
 
 async def test_setup_while_stopping_releases_runtime_without_starting_websocket(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant, mock_controller: MagicMock
 ) -> None:
     """Test setup during HA shutdown cleans up and skips WebSocket start."""
     entry = _make_config_entry(hass)
@@ -275,7 +276,7 @@ async def test_setup_while_stopping_releases_runtime_without_starting_websocket(
 
 
 async def test_setup_stopping_after_platform_forward_unloads_platforms(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant, mock_controller: MagicMock
 ) -> None:
     """Test setup unloads forwarded platforms if HA stops during forwarding."""
     entry = _make_config_entry(hass)
@@ -307,6 +308,8 @@ async def test_setup_stopping_after_platform_forward_unloads_platforms(
     assert loaded is False
     unload_platforms.assert_awaited_once_with(entry, PLATFORMS)
     start.assert_not_called()
+    assert entry.runtime_data.controller is None
+    assert entry.runtime_data.websocket._stopped is True
 
 
 async def test_entity_states_reflect_coordinator_data(
@@ -327,11 +330,8 @@ async def test_entity_states_reflect_coordinator_data(
         "11:22:33:44:55:66", name="Jane Phone", hostname="jane-phone", ip="192.168.1.101", last_seen=now - 120
     )
 
-    def _get_client(mac: str) -> MagicMock | None:
-        clients = {"aa:bb:cc:dd:ee:ff": home_client, "11:22:33:44:55:66": away_client}
-        return clients.get(mac)
-
-    mock_controller.clients.get = MagicMock(side_effect=_get_client)
+    mock_controller.clients[home_client.mac] = home_client
+    mock_controller.clients[away_client.mac] = away_client
 
     entry = _make_config_entry(hass)
 
@@ -368,11 +368,7 @@ async def test_offline_tracked_client_entity_is_not_home(
         "aa:bb:cc:dd:ee:ff", name="Dan Phone", hostname="dan-phone", ip="192.168.1.100", last_seen=now
     )
 
-    def _get_client(mac: str) -> MagicMock | None:
-        clients = {"aa:bb:cc:dd:ee:ff": home_client}
-        return clients.get(mac)
-
-    mock_controller.clients.get = MagicMock(side_effect=_get_client)
+    mock_controller.clients[home_client.mac] = home_client
 
     entry = _make_config_entry(hass)
 
@@ -395,15 +391,10 @@ async def test_offline_tracked_client_entity_is_not_home(
 
 
 async def test_options_flow_removes_explicitly_deselected_entity_registry_entries(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant, loaded_entry: MockConfigEntry
 ) -> None:
     """Test options flow removes entities for deselected tracked clients."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
+    entry = loaded_entry
     entity_registry = er.async_get(hass)
     kept_entry = entity_registry.async_get_or_create(
         "device_tracker",
@@ -439,15 +430,10 @@ async def test_options_flow_removes_explicitly_deselected_entity_registry_entrie
 
 
 async def test_options_flow_keeps_still_selected_missing_entity_registry_entries(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant, loaded_entry: MockConfigEntry
 ) -> None:
     """Test options flow does not remove still-selected missing tracked clients."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
+    entry = loaded_entry
     entity_registry = er.async_get(hass)
     missing_entry = entity_registry.async_get_or_create(
         "device_tracker",
@@ -475,15 +461,10 @@ async def test_options_flow_keeps_still_selected_missing_entity_registry_entries
 
 
 async def test_data_update_does_not_schedule_listener_reload(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
+    hass: HomeAssistant, loaded_entry: MockConfigEntry
 ) -> None:
     """Test reauth/reconfigure data updates rely on their own reload scheduling."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
+    entry = loaded_entry
     with patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload:
         hass.config_entries.async_update_entry(
             entry,
@@ -494,17 +475,10 @@ async def test_data_update_does_not_schedule_listener_reload(
     schedule_reload.assert_not_called()
 
 
-async def test_reconfigure_schedules_one_reload(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
-) -> None:
+async def test_reconfigure_schedules_one_reload(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
     """Test reconfigure schedules a single reload after updating entry data."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
-    flow_controller = _mock_controller()
+    entry = loaded_entry
+    flow_controller = make_mock_controller()
     with (
         patch(
             "custom_components.unifi_presence.config_flow.create_controller_for_params",
@@ -515,12 +489,7 @@ async def test_reconfigure_schedules_one_reload(
         result = await entry.start_reconfigure_flow(hass)
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input={
-                CONF_HOST: MOCK_CONFIG_DATA[CONF_HOST],
-                CONF_PORT: MOCK_CONFIG_DATA[CONF_PORT],
-                CONF_USERNAME: "new-admin",
-                CONF_PASSWORD: "new-pass",
-            },
+            user_input=make_reconfigure_input(username="new-admin"),
         )
         await hass.async_block_till_done()
 
@@ -529,31 +498,26 @@ async def test_reconfigure_schedules_one_reload(
     schedule_reload.assert_called_once_with(entry.entry_id)
 
 
-async def test_options_flow_saves_loaded_entry_and_reloads(
-    hass: HomeAssistant, enable_custom_integrations, mock_controller: MagicMock
-) -> None:
+async def test_options_flow_saves_loaded_entry_and_reloads(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
     """Test options flow saves options and schedules a reload."""
-    entry = _make_config_entry(hass)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
+    entry = loaded_entry
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
 
+    new_options = {
+        CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
+        CONF_AWAY_SECONDS: 120,
+        CONF_FALLBACK_POLL_INTERVAL: 600,
+    }
     with patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload:
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            user_input={
-                CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
-                CONF_AWAY_SECONDS: 120,
-                CONF_FALLBACK_POLL_INTERVAL: 600,
-            },
+            user_input=new_options,
         )
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == new_options
     schedule_reload.assert_called_once_with(entry.entry_id)
 
 

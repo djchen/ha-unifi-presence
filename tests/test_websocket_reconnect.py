@@ -13,7 +13,7 @@ from custom_components.unifi_presence.websocket import (
     UnifiPresenceWebsocket,
 )
 
-from .websocket_helpers import make_websocket, wait_for_task
+from .websocket_helpers import block_websocket, make_websocket, wait_for_task
 
 
 async def test_websocket_error_sets_unavailable_and_schedules_reauth_restart(
@@ -65,6 +65,7 @@ async def test_connector_error_sets_unavailable(hass: HomeAssistant) -> None:
 async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAssistant) -> None:
     """Test that _schedule_reauth_and_restart re-authenticates and restarts the WebSocket."""
     ws, controller, _ = make_websocket(hass)
+    first_started = asyncio.Event()
     second_started = asyncio.Event()
 
     # Make start_websocket block forever so the WS runner stays alive
@@ -75,11 +76,14 @@ async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAs
         if expect_reconnect:
             controller.messages.new_data(b"frame")
             second_started.set()
+        else:
+            first_started.set()
         await hang_forever.wait()
 
     controller.start_websocket = AsyncMock(side_effect=_block_forever)
 
     ws.start()
+    await asyncio.wait_for(first_started.wait(), timeout=1)
     # Simulate a reconnect
     ws.available = False
     expect_reconnect = True
@@ -87,7 +91,8 @@ async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAs
 
     await asyncio.wait_for(second_started.wait(), timeout=1)
 
-    controller.login.assert_awaited()
+    controller.login.assert_awaited_once()
+    assert controller.start_websocket.await_count == 2
     # Should have restarted WS (available should be True again)
     assert ws.available is True
 
@@ -97,10 +102,11 @@ async def test_schedule_reauth_and_restart_relogins_and_restarts_ws(hass: HomeAs
 async def test_schedule_reauth_and_restart_reschedules_on_auth_failure(hass: HomeAssistant) -> None:
     """Test that _schedule_reauth_and_restart reschedules itself on login failure."""
     ws, controller, _ = make_websocket(hass)
+    started = block_websocket(controller)
     controller.login = AsyncMock(side_effect=aiounifi.AiounifiException("auth failed"))
 
     ws.start()
-    ws.available = False
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     with patch(
         "custom_components.unifi_presence.websocket.async_call_later",
@@ -110,10 +116,11 @@ async def test_schedule_reauth_and_restart_reschedules_on_auth_failure(hass: Hom
         await wait_for_task(ws._reconnect_task)
 
     # Should have scheduled another reconnect
-    mock_call_later.assert_called()
+    controller.login.assert_awaited_once()
+    mock_call_later.assert_called_once()
     assert ws.available is False
 
-    ws.stop()
+    await ws.stop_and_wait()
 
 
 async def test_schedule_reauth_and_restart_blocked_after_stop(hass: HomeAssistant) -> None:
@@ -121,7 +128,7 @@ async def test_schedule_reauth_and_restart_blocked_after_stop(hass: HomeAssistan
     ws, _controller, _ = make_websocket(hass)
 
     ws.start()
-    ws.stop()
+    await ws.stop_and_wait()
 
     # _schedule_reauth_and_restart should bail out immediately due to _stopped flag
     with patch(
@@ -218,21 +225,18 @@ async def test_websocket_runner_returns_when_stopped(hass: HomeAssistant) -> Non
 async def test_schedule_retry_clears_handle_when_callback_runs(hass: HomeAssistant) -> None:
     """Test that the pending retry handle is cleared before reconnect executes."""
     ws, _, _ = make_websocket(hass)
-    scheduled_callback = None
-
-    def _call_later(_hass: HomeAssistant, _delay: float, callback):
-        nonlocal scheduled_callback
-        scheduled_callback = callback
-        return MagicMock()
 
     with (
-        patch("custom_components.unifi_presence.websocket.async_call_later", side_effect=_call_later),
+        patch(
+            "custom_components.unifi_presence.websocket.async_call_later",
+            return_value=MagicMock(),
+        ) as mock_call_later,
         patch.object(ws, "_schedule_reauth_and_restart") as mock_schedule_reauth_and_restart,
     ):
         ws._schedule_retry()
         assert ws._cancel_retry is not None
 
-        assert scheduled_callback is not None
+        scheduled_callback = mock_call_later.call_args.args[2]
         scheduled_callback(None)
 
     assert ws._cancel_retry is None
