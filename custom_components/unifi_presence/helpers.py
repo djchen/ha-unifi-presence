@@ -16,10 +16,7 @@ from aiounifi.models.site import Site
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import (
-    async_create_clientsession,
-    async_get_clientsession,
-)
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.util.ssl import client_context as ha_client_context
 
 from .const import (
@@ -216,17 +213,14 @@ async def create_controller(
     params: ControllerConnectionParams,
 ) -> Controller:
     """Create, authenticate, and return an aiounifi Controller."""
-    if params.ssl_verify:
-        session = async_get_clientsession(hass)
-        ssl_context = ha_client_context()
-    else:
-        session = async_create_clientsession(
-            hass,
-            verify_ssl=False,
-            auto_cleanup=False,
-            cookie_jar=CookieJar(unsafe=True),
-        )
-        ssl_context = None
+    ssl_context = ha_client_context() if params.ssl_verify else None
+    # Share HA's connection pool, but never its authentication cookies.
+    session = async_create_clientsession(
+        hass,
+        verify_ssl=params.ssl_verify,
+        auto_cleanup=False,
+        cookie_jar=CookieJar(unsafe=True),
+    )
 
     config = Configuration(
         session,
@@ -238,8 +232,7 @@ async def create_controller(
         ssl_context=ssl_context if ssl_context is not None else False,
     )
     controller = Controller(config)
-    if not params.ssl_verify:
-        cast(Any, controller)._unifi_presence_owned_session = session
+    cast(Any, controller)._unifi_presence_owned_session = session
 
     login_succeeded = False
     try:
