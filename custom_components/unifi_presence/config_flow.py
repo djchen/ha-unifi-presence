@@ -115,6 +115,9 @@ def _find_reconfigure_site(
     stored_site: object,
 ) -> Site | None:
     """Return the already-configured site from the fetched site list."""
+    if isinstance(entry_unique_id, str) and "_" not in entry_unique_id:
+        return available_sites.get(entry_unique_id)
+
     if isinstance(entry_unique_id, str) and (site := available_sites.get(entry_unique_id)) is not None:
         return site
 

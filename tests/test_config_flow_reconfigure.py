@@ -237,6 +237,80 @@ async def test_reconfigure_flow_aborts_when_existing_site_is_no_longer_accessibl
     assert entry.unique_id == DEFAULT_SITE_ID
 
 
+@pytest.mark.parametrize("multiple_sites", [False, True], ids=["single-site", "multiple-sites"])
+async def test_reconfigure_flow_rejects_same_named_site_with_different_modern_id(
+    hass: HomeAssistant, multiple_sites: bool
+) -> None:
+    """A matching short name must not change a modern entry's site identity."""
+    entry = add_mock_config_entry(hass, options=deepcopy(MOCK_OPTIONS))
+    original_entry = deepcopy((dict(entry.data), dict(entry.options), entry.title, entry.unique_id))
+    registry = er.async_get(hass)
+    for mac in entry.options[CONF_TRACKED_DEVICES]:
+        registry.async_get_or_create("device_tracker", DOMAIN, f"{DEFAULT_SITE_ID}-{mac}", config_entry=entry)
+    original_entities = er.async_entries_for_config_entry(registry, entry.entry_id)
+    sites = [_make_mock_site(OFFICE_SITE_ID, "default", "Other Home")]
+    if multiple_sites:
+        sites.append(_make_mock_site("another-site-id", "office", "Office"))
+    controller = _mock_controller(sites=sites)
+    session = _attach_mock_session(controller)
+
+    with (
+        patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller,
+        patch(
+            "custom_components.unifi_presence.config_flow._async_migrate_tracker_unique_ids",
+            wraps=_async_migrate_tracker_unique_ids,
+        ) as migrate,
+        patch.object(
+            hass.config_entries, "async_update_entry", wraps=hass.config_entries.async_update_entry
+        ) as persist,
+        patch.object(hass.config_entries, "async_reload", return_value=True) as reload_entry,
+    ):
+        result = await async_run_reconfigure_step(hass, entry, _validation_input())
+        await hass.async_block_till_done()
+
+        assert result["type"] is FlowResultType.ABORT
+        assert result["reason"] == "different_site_selected"
+        assert (dict(entry.data), dict(entry.options), entry.title, entry.unique_id) == original_entry
+        assert er.async_entries_for_config_entry(registry, entry.entry_id) == original_entities
+        migrate.assert_not_called()
+        persist.assert_not_called()
+        reload_entry.assert_not_called()
+        create_controller.assert_awaited_once()
+    controller.clients.update_mock.assert_not_awaited()
+    controller.clients_all.update_mock.assert_not_awaited()
+    _assert_session_cleanup(session)
+
+
+async def test_reconfigure_flow_accepts_matching_modern_id_with_renamed_site(hass: HomeAssistant) -> None:
+    """A modern site ID remains authoritative even when its short name changes."""
+    entry = add_mock_config_entry(hass, options=deepcopy(MOCK_OPTIONS))
+    original_options = deepcopy(dict(entry.options))
+    registry = er.async_get(hass)
+    entities = [
+        registry.async_get_or_create("device_tracker", DOMAIN, f"{DEFAULT_SITE_ID}-{mac}", config_entry=entry)
+        for mac in entry.options[CONF_TRACKED_DEVICES]
+    ]
+    controller = _mock_controller(
+        sites=[
+            _make_mock_site(OFFICE_SITE_ID, "default", "Other Home"),
+            _make_mock_site(DEFAULT_SITE_ID, "renamed", "Renamed Home"),
+        ]
+    )
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller:
+        result = await async_run_reconfigure_step(hass, entry, _validation_input())
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.unique_id == DEFAULT_SITE_ID
+    assert entry.data["site"] == "renamed"
+    assert entry.data["host"] == "10.0.0.1"
+    assert entry.title == "Renamed Home (10.0.0.1)"
+    assert dict(entry.options) == original_options
+    assert [registry.async_get(entity.entity_id) for entity in entities] == entities
+    assert [acquisition.args[1].site for acquisition in create_controller.await_args_list] == ["default", "renamed"]
+
+
 async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that reconfigure returns an error if the site list cannot be loaded."""
     entry = add_mock_config_entry(hass)
@@ -440,17 +514,23 @@ async def test_load_selected_site_clients_returns_login_error(hass: HomeAssistan
 
 
 @pytest.mark.parametrize("initial_unique_id", [None, "192.168.1.1_default"])
+@pytest.mark.parametrize("stored_site", [DEFAULT_SITE_ID, "default"], ids=["site-id", "short-name"])
 async def test_reconfigure_flow_matches_stored_site_for_legacy_or_missing_unique_id(
-    hass: HomeAssistant, initial_unique_id: str | None
+    hass: HomeAssistant, initial_unique_id: str | None, stored_site: str
 ) -> None:
     """Test reconfigure accepts the existing site when unique_id is missing or legacy."""
     entry = add_mock_config_entry(
         hass,
-        data={**MOCK_CONFIG_DATA, "site": DEFAULT_SITE_ID},
+        data={**MOCK_CONFIG_DATA, "site": stored_site},
         unique_id=initial_unique_id,
     )
 
-    controller = _mock_controller()
+    controller = _mock_controller(
+        sites=[
+            _make_mock_site(OFFICE_SITE_ID, "office", "Office"),
+            _make_mock_site(DEFAULT_SITE_ID, "default", "Home"),
+        ]
+    )
     client_controller = _mock_controller()
     new_data = make_reconfigure_input(username="newadmin", password="newpass", ssl_verify=False)
     with patch(PATCH_CREATE_CONTROLLER, side_effect=[controller, client_controller]) as create_controller:
@@ -466,7 +546,7 @@ async def test_reconfigure_flow_matches_stored_site_for_legacy_or_missing_unique
     assert entry.data["password"] == "newpass"
     assert entry.data["site"] == "default"
     assert create_controller.await_count == 2
-    for acquisition, site in zip(create_controller.await_args_list, [DEFAULT_SITE_ID, "default"], strict=True):
+    for acquisition, site in zip(create_controller.await_args_list, [stored_site, "default"], strict=True):
         assert acquisition.args == (hass, ControllerConnectionParams(**new_data, site=site))
         assert acquisition.kwargs == {"unique_id": None, "resolve_legacy_site": False}
     controller.sites.update.assert_awaited_once_with()
