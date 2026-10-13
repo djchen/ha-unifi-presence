@@ -2,6 +2,7 @@
 
 import inspect
 from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any, cast
@@ -9,8 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import SelectSelector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -258,6 +261,31 @@ def add_mock_config_entry(
     )
     entry.add_to_hass(hass)
     return entry
+
+
+@contextmanager
+def assert_no_reconfigure_mutations(hass: HomeAssistant, *entries: ConfigEntry) -> Generator[None]:
+    """Assert rejection leaves entries and the entire registry unchanged, without reload."""
+    original_entries = [
+        deepcopy((dict(entry.data), dict(entry.options), entry.title, entry.unique_id)) for entry in entries
+    ]
+    registry = er.async_get(hass)
+    original_entities = dict(registry.entities)
+    with (
+        patch.object(
+            hass.config_entries, "async_update_entry", wraps=hass.config_entries.async_update_entry
+        ) as persist,
+        patch.object(hass.config_entries, "async_reload", return_value=True) as reload_entry,
+        patch.object(registry, "async_update_entity", wraps=registry.async_update_entity) as migrate,
+    ):
+        yield
+        assert [
+            (dict(entry.data), dict(entry.options), entry.title, entry.unique_id) for entry in entries
+        ] == original_entries
+        assert dict(registry.entities) == original_entities
+        persist.assert_not_called()
+        reload_entry.assert_not_called()
+        migrate.assert_not_called()
 
 
 # ── Shared fixtures ──────────────────────────────────────────────────────
