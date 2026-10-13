@@ -215,6 +215,12 @@ Assign the device tracker to a [Person](https://www.home-assistant.io/integratio
 
 For persistent issues, [download diagnostics](#diagnostics) and open an issue on [GitHub](https://github.com/djchen/ha-unifi-presence/issues).
 
+### Debug logging safety
+
+UniFi Presence debug logging remains useful for troubleshooting and does not automatically enable `aiounifi` debug logging. Until upstream comprehensively redacts secrets, avoid explicit `aiounifi` or global DEBUG logging: the library can log passwords, authentication headers, and session cookies, including unrelated cookies in a shared session. Another integration enabling `aiounifi` DEBUG can also expose them.
+
+After upgrading, restart Home Assistant or reset previous `aiounifi` logging overrides; remove any persistent DEBUG settings as well. Review logs before sharing them. If credentials or tokens were exposed, rotate the credentials and invalidate the affected sessions.
+
 ## Diagnostics
 
 The integration includes diagnostics data for troubleshooting:
