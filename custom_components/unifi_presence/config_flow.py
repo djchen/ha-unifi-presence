@@ -157,13 +157,15 @@ def _async_migrate_tracker_unique_ids(
     *,
     old_site_id: str,
     new_site_id: str,
-) -> None:
-    """Migrate tracker entity unique IDs when a legacy entry gains a site_id."""
+) -> bool:
+    """Preflight and migrate legacy tracker IDs, returning False on any conflict."""
     if old_site_id == new_site_id:
-        return
+        return True
 
     entity_registry = er.async_get(hass)
     legacy_prefix = f"{old_site_id}-"
+    migration_plan: list[tuple[str, str]] = []
+    target_ids: set[tuple[str, str, str]] = set()
 
     for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         if not registry_entry.unique_id.startswith(legacy_prefix):
@@ -173,10 +175,21 @@ def _async_migrate_tracker_unique_ids(
         if not mac:
             continue
 
+        new_unique_id = tracker_unique_id(new_site_id, mac)
+        target_id = (registry_entry.domain, registry_entry.platform, new_unique_id)
+        existing_entity_id = entity_registry.async_get_entity_id(*target_id)
+        if target_id in target_ids or existing_entity_id not in (None, registry_entry.entity_id):
+            return False
+        target_ids.add(target_id)
+        migration_plan.append((registry_entry.entity_id, new_unique_id))
+
+    for entity_id, new_unique_id in migration_plan:
         entity_registry.async_update_entity(
-            registry_entry.entity_id,
-            new_unique_id=tracker_unique_id(new_site_id, mac),
+            entity_id,
+            new_unique_id=new_unique_id,
         )
+
+    return True
 
 
 def _build_client_options(
@@ -399,12 +412,19 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         if error is not None:
             return self._show_reconfigure_form(errors={"base": error})
 
-        _async_migrate_tracker_unique_ids(
+        # Keep the ownership check, registry migration, and entry update synchronous
+        # after validation and controller cleanup so another flow cannot claim an ID.
+        existing_entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, self._site_id)
+        if existing_entry is not None and existing_entry.entry_id != reconfigure_entry.entry_id:
+            return self.async_abort(reason="already_configured")
+
+        if not _async_migrate_tracker_unique_ids(
             self.hass,
             reconfigure_entry,
             old_site_id=reconfigure_entry.unique_id or reconfigure_entry.entry_id,
             new_site_id=self._site_id,
-        )
+        ):
+            return self.async_abort(reason="already_configured")
 
         return self.async_update_reload_and_abort(
             reconfigure_entry,
@@ -594,6 +614,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             if not tracked:
                 errors["base"] = "no_devices"
             else:
+                self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=f"{self._site_title} ({self._host})",
                     data={
