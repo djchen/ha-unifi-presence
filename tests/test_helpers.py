@@ -41,7 +41,9 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
     controller.login = AsyncMock()
 
     with (
-        patch("custom_components.unifi_presence.helpers.async_get_clientsession", return_value=session) as get_session,
+        patch(
+            "custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session
+        ) as create_session,
         patch("custom_components.unifi_presence.helpers.Configuration", return_value=config) as configuration,
         patch(
             "custom_components.unifi_presence.helpers.Controller",
@@ -54,7 +56,12 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
         )
 
     assert result is controller
-    get_session.assert_called_once_with(hass)
+    create_session.assert_called_once()
+    assert create_session.call_args.args == (hass,)
+    assert create_session.call_args.kwargs["verify_ssl"] is True
+    assert create_session.call_args.kwargs["auto_cleanup"] is False
+    assert isinstance(create_session.call_args.kwargs["cookie_jar"], CookieJar)
+    assert controller._unifi_presence_owned_session is session
     # ssl_verify=True should produce a real SSLContext, not the boolean True
     call_kwargs = configuration.call_args.kwargs
     assert isinstance(call_kwargs["ssl_context"], ssl.SSLContext)
@@ -95,8 +102,9 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     assert configuration.call_args.kwargs["ssl_context"] is False
 
 
-async def test_create_controller_closes_ssl_false_owned_session(hass: HomeAssistant) -> None:
-    """Test SSL-disabled controllers detach their owned session on cleanup."""
+@pytest.mark.parametrize("ssl_verify", [True, False])
+async def test_create_controller_closes_owned_session(hass: HomeAssistant, ssl_verify: bool) -> None:
+    """Test controllers detach their owned session in both SSL modes."""
     controller = MagicMock()
     controller.login = AsyncMock()
     session = _attach_mock_session(controller, owned=False)
@@ -110,8 +118,9 @@ async def test_create_controller_closes_ssl_false_owned_session(hass: HomeAssist
     ):
         result = await create_controller(
             hass,
-            _NO_SSL_PARAMS,
+            replace(_SSL_PARAMS, ssl_verify=ssl_verify),
         )
+        await async_close_controller(result)
         await async_close_controller(result)
 
     assert result is controller
@@ -245,11 +254,13 @@ async def test_async_refresh_client_stores_requires_active_runtime_refresh() -> 
 
 
 @pytest.mark.parametrize("error", [TimeoutError, asyncio.CancelledError])
+@pytest.mark.parametrize("ssl_verify", [True, False])
 async def test_create_controller_closes_owned_session_on_login_failure(
     hass: HomeAssistant,
     error: type[BaseException],
+    ssl_verify: bool,
 ) -> None:
-    """Test SSL-disabled sessions are detached if login does not complete."""
+    """Test sessions in both SSL modes are detached if login does not complete."""
     controller = MagicMock()
     controller.login = AsyncMock(side_effect=error)
     session = _attach_mock_session(controller, owned=False)
@@ -262,7 +273,7 @@ async def test_create_controller_closes_owned_session_on_login_failure(
     ):
         await create_controller(
             hass,
-            _NO_SSL_PARAMS,
+            replace(_SSL_PARAMS, ssl_verify=ssl_verify),
         )
 
     _assert_session_cleanup(session)
