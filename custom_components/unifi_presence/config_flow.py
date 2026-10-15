@@ -114,12 +114,11 @@ def _find_reconfigure_site(
     entry_unique_id: str | None,
     stored_site: object,
 ) -> Site | None:
-    """Return the already-configured site from the fetched site list."""
-    if isinstance(entry_unique_id, str) and "_" not in entry_unique_id:
-        return available_sites.get(entry_unique_id)
-
-    if isinstance(entry_unique_id, str) and (site := available_sites.get(entry_unique_id)) is not None:
-        return site
+    """Match by unique ID, allowing stored-site fallback only for legacy entries."""
+    if isinstance(entry_unique_id, str):
+        site = available_sites.get(entry_unique_id)
+        if site is not None or "_" not in entry_unique_id:
+            return site
 
     if not isinstance(stored_site, str):
         return None
@@ -593,12 +592,10 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
                 if current_site is None:
                     # Legacy IDs contain an underscore; modern site IDs do not.
-                    if (reconfigure_entry.unique_id is None or "_" in reconfigure_entry.unique_id) and len(
-                        self._available_sites
-                    ) == 1:
-                        current_site = next(iter(self._available_sites.values()))
-                    else:
+                    is_legacy_entry = reconfigure_entry.unique_id is None or "_" in reconfigure_entry.unique_id
+                    if not is_legacy_entry or len(self._available_sites) != 1:
                         return self.async_abort(reason="different_site_selected")
+                    current_site = next(iter(self._available_sites.values()))
 
                 self._set_selected_site(current_site)
                 return await self._async_finish_reconfigure(current_site)
