@@ -248,11 +248,9 @@ async def test_reconfigure_flow_rejects_same_named_site_with_different_modern_id
 ) -> None:
     """A matching short name must not change a modern entry's site identity."""
     entry = add_mock_config_entry(hass, options=deepcopy(MOCK_OPTIONS))
-    original_entry = deepcopy((dict(entry.data), dict(entry.options), entry.title, entry.unique_id))
     registry = er.async_get(hass)
     for mac in entry.options[CONF_TRACKED_DEVICES]:
         registry.async_get_or_create("device_tracker", DOMAIN, f"{DEFAULT_SITE_ID}-{mac}", config_entry=entry)
-    original_entities = er.async_entries_for_config_entry(registry, entry.entry_id)
     sites = [_make_mock_site(OFFICE_SITE_ID, "default", "Other Home")]
     if multiple_sites:
         sites.append(_make_mock_site("another-site-id", "office", "Office"))
@@ -265,21 +263,14 @@ async def test_reconfigure_flow_rejects_same_named_site_with_different_modern_id
             "custom_components.unifi_presence.config_flow._async_migrate_tracker_unique_ids",
             wraps=_async_migrate_tracker_unique_ids,
         ) as migrate,
-        patch.object(
-            hass.config_entries, "async_update_entry", wraps=hass.config_entries.async_update_entry
-        ) as persist,
-        patch.object(hass.config_entries, "async_reload", return_value=True) as reload_entry,
+        assert_no_reconfigure_mutations(hass, entry),
     ):
         result = await async_run_reconfigure_step(hass, entry, _validation_input())
         await hass.async_block_till_done()
 
         assert result["type"] is FlowResultType.ABORT
         assert result["reason"] == "different_site_selected"
-        assert (dict(entry.data), dict(entry.options), entry.title, entry.unique_id) == original_entry
-        assert er.async_entries_for_config_entry(registry, entry.entry_id) == original_entities
         migrate.assert_not_called()
-        persist.assert_not_called()
-        reload_entry.assert_not_called()
         create_controller.assert_awaited_once()
     controller.clients.update_mock.assert_not_awaited()
     controller.clients_all.update_mock.assert_not_awaited()
