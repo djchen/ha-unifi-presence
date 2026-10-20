@@ -81,6 +81,7 @@ ignore = [
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "__future__.annotations".msg = "It should not be needed because Home Assistant requires Python 3.14+"
+"voluptuous".msg = "Use probatio directly; Home Assistant 2026.9+ uses Probatio schemas and types."
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
