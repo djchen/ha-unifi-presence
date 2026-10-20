@@ -4,8 +4,7 @@ import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Literal, SupportsInt, cast
 
-import homeassistant.helpers.config_validation as cv
-import voluptuous as vol
+import probatio
 from aiounifi.models.site import Site
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -71,25 +70,31 @@ def _as_int(value: object) -> int:
     return int(cast(SupportsInt | str, value))
 
 
-def _build_credentials_schema(defaults: Mapping[str, object] | None = None) -> vol.Schema:
+def _build_credentials_schema(defaults: Mapping[str, object] | None = None) -> probatio.Schema:
     """Build the initial or defaults-aware reconfigure credential schema."""
-    host = vol.Required(CONF_HOST) if defaults is None else vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, ""))
-    port = vol.Required(CONF_PORT, default=DEFAULT_PORT if defaults is None else defaults.get(CONF_PORT, DEFAULT_PORT))
-    username = (
-        vol.Required(CONF_USERNAME)
+    host = (
+        probatio.Required(CONF_HOST)
         if defaults is None
-        else vol.Required(CONF_USERNAME, default=defaults.get(CONF_USERNAME, ""))
+        else probatio.Required(CONF_HOST, default=defaults.get(CONF_HOST, ""))
     )
-    ssl_verify = vol.Optional(
+    port = probatio.Required(
+        CONF_PORT, default=DEFAULT_PORT if defaults is None else defaults.get(CONF_PORT, DEFAULT_PORT)
+    )
+    username = (
+        probatio.Required(CONF_USERNAME)
+        if defaults is None
+        else probatio.Required(CONF_USERNAME, default=defaults.get(CONF_USERNAME, ""))
+    )
+    ssl_verify = probatio.Optional(
         CONF_SSL_VERIFY,
         default=DEFAULT_SSL_VERIFY if defaults is None else defaults[CONF_SSL_VERIFY],
     )
-    return vol.Schema(
+    return probatio.Schema(
         {
             host: str,
-            port: cv.port,
+            port: probatio.Port(),
             username: str,
-            vol.Required(CONF_PASSWORD): str,
+            probatio.Required(probatio.Secret(CONF_PASSWORD)): str,
             ssl_verify: bool,
         }
     )
@@ -363,9 +368,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         """Show the site selection form."""
         return self.async_show_form(
             step_id="site",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(CONF_SITE): vol.In(
+                    probatio.Required(CONF_SITE): probatio.In(
                         {site_id: site_title(site) for site_id, site in self._available_sites.items()}
                     )
                 }
@@ -377,7 +382,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         """Show the single-site retry form after client discovery fails."""
         return self.async_show_form(
             step_id="single_site_retry",
-            data_schema=vol.Schema({}),
+            data_schema=probatio.Schema({}),
             errors=errors,
             description_placeholders={"site": self._site_title or self._site},
         )
@@ -553,10 +558,10 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(CONF_USERNAME): str,
-                    vol.Required(CONF_PASSWORD): str,
+                    probatio.Required(CONF_USERNAME): str,
+                    probatio.Required(probatio.Secret(CONF_PASSWORD)): str,
                 }
             ),
             description_placeholders={"site": site_label, "host": self._host},
@@ -635,9 +640,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         client_options = _build_client_options(self._available_clients)
         return self.async_show_form(
             step_id="devices",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Optional(CONF_TRACKED_DEVICES, default=[]): _build_tracked_device_selector(client_options),
+                    probatio.Optional(CONF_TRACKED_DEVICES, default=[]): _build_tracked_device_selector(client_options),
                 }
             ),
             errors=errors,
@@ -707,15 +712,17 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
             return self.async_abort(reason="cannot_discover_devices" if discovery_failed else "no_devices_discovered")
 
         schema_fields: dict[object, object] = {
-            vol.Optional(CONF_TRACKED_DEVICES, default=current_tracked): _build_tracked_device_selector(client_options),
-            vol.Optional(
+            probatio.Optional(CONF_TRACKED_DEVICES, default=current_tracked): _build_tracked_device_selector(
+                client_options
+            ),
+            probatio.Optional(
                 CONF_AWAY_SECONDS,
                 default=current_options.get(CONF_AWAY_SECONDS, DEFAULT_AWAY_SECONDS),
-            ): vol.All(int, vol.Range(min=1)),
-            vol.Optional(
+            ): probatio.All(int, probatio.Range(min=1)),
+            probatio.Optional(
                 CONF_FALLBACK_POLL_INTERVAL,
                 default=current_options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL),
-            ): vol.All(int, vol.Range(min=60)),
+            ): probatio.All(int, probatio.Range(min=60)),
         }
 
         if discovery_failed and "base" not in errors:
@@ -723,6 +730,6 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(schema_fields),
+            data_schema=probatio.Schema(schema_fields),
             errors=errors,
         )

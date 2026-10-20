@@ -8,8 +8,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import aiounifi
+import probatio
 import pytest
-import voluptuous as vol
 from attr import evolve
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
@@ -90,8 +90,8 @@ def _assert_reconfigure_error(result: dict[str, Any], expected_error: str) -> No
     fields = {str(key): key for key in result["data_schema"].schema}
     for name, value in {"host": "10.0.0.1", "port": 8443, "username": "newadmin", "ssl_verify": False}.items():
         assert fields[name].default() == value
-    assert isinstance(fields["password"], vol.Required)
-    assert fields["password"].default is vol.UNDEFINED
+    assert isinstance(fields["password"], probatio.Required)
+    assert fields["password"].default is probatio.UNDEFINED
 
 
 def _validation_input() -> dict[str, object]:
