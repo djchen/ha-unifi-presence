@@ -441,6 +441,10 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
         async with self._client_store_lock:
+            # Shutdown may have completed while this refresh waited for discovery.
+            if self._shutdown_complete:
+                raise asyncio.CancelledError
+
             controller = await self._async_refresh_with_reauth()
             _LOGGER.debug("Fallback poll for tracked device(s)")
 

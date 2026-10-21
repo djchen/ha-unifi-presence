@@ -365,3 +365,21 @@ async def test_runtime_discovery_distinguishes_empty_from_unavailable(
     with patch("custom_components.unifi_presence.coordinator.create_controller_for_params") as create:
         assert await coordinator.async_fetch_available_clients() is None
         create.assert_not_called()
+
+
+async def test_poll_after_shutdown_aborts_before_refresh(coordinator: UnifiPresenceCoordinator) -> None:
+    """Stopped runtimes reject polling while discovery still signals unavailability."""
+    controller = coordinator.controller
+    await coordinator.async_shutdown()
+
+    with patch.object(coordinator, "_async_refresh_with_reauth", return_value=controller) as refresh:
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator._async_update_data()
+
+        assert not coordinator._client_store_lock.locked()
+        assert await coordinator.async_fetch_available_clients() is None
+        refresh.assert_not_called()
+
+    assert coordinator.controller is None
+    assert coordinator._client_states == {}
+    assert coordinator._cancel_heartbeat_check is None
