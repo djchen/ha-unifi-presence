@@ -139,7 +139,9 @@ async def test_offline_tracked_client_uses_clients_all_name_on_cold_start(
 ) -> None:
     """Test that cold-start offline clients recover their UniFi display name."""
     mac = "aa:bb:cc:dd:ee:ff"
-    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Dan Phone")
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(
+        mac, name="Dan Phone", last_seen=int(dt_util.utcnow().timestamp())
+    )
 
     coordinator = UnifiPresenceCoordinator(hass, coordinator_config_entry)
     data = await coordinator._async_update_data()
@@ -163,6 +165,7 @@ async def test_active_client_with_blank_metadata_preserves_previous_info(
     await coordinator.async_refresh()
 
     mock_coordinator_controller.clients[mac] = _make_mock_client(mac, last_seen=int(now.timestamp()))
+    mock_coordinator_controller.clients_all[mac] = _make_mock_client(mac, name="Historical Name")
     data = await coordinator._async_update_data()
 
     assert data[mac] == (True, "Dan Phone")

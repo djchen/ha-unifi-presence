@@ -1,8 +1,9 @@
 """Tests for the UniFi Presence config flow — options flow."""
 
+import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiounifi
 import pytest
@@ -68,10 +69,9 @@ def test_build_client_options_normalizes_available_and_tracked_clients() -> None
 async def test_options_flow(hass: HomeAssistant, options_entry: MockConfigEntry) -> None:
     """Test that options flow shows form with current values and saves new options."""
     mock_coordinator = MagicMock()
-    mock_coordinator.controller = _mock_controller(
-        clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
+    mock_coordinator.async_fetch_available_clients = AsyncMock(
+        return_value={"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
     )
-    session = _attach_mock_session(mock_coordinator.controller)
     options_entry.runtime_data = mock_coordinator
     options_entry.mock_state(hass, ConfigEntryState.LOADED)
 
@@ -79,7 +79,7 @@ async def test_options_flow(hass: HomeAssistant, options_entry: MockConfigEntry)
         result = await hass.config_entries.options.async_init(options_entry.entry_id)
 
     create_controller.assert_not_called()
-    _assert_session_cleanup(session, owned=False)
+    mock_coordinator.async_fetch_available_clients.assert_awaited_once_with()
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
     assert result["data_schema"]({}) == MOCK_OPTIONS
@@ -238,8 +238,8 @@ async def test_options_flow_fallback_login_normalizes_legacy_stored_site_id(
 async def test_options_flow_rejects_empty_tracked_devices(hass: HomeAssistant, options_entry: MockConfigEntry) -> None:
     """Test that options flow shows error when submitting with no tracked devices."""
     mock_coordinator = MagicMock()
-    mock_coordinator.controller = _mock_controller(
-        clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone"))]
+    mock_coordinator.async_fetch_available_clients = AsyncMock(
+        return_value={"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
     )
     options_entry.runtime_data = mock_coordinator
     options_entry.mock_state(hass, ConfigEntryState.LOADED)
@@ -267,7 +267,7 @@ async def test_options_flow_runtime_data_no_controller_falls_back(
 ) -> None:
     """Test options flow falls back to login when runtime_data exists but controller is None."""
     mock_coordinator = MagicMock()
-    mock_coordinator.controller = None
+    mock_coordinator.async_fetch_available_clients = AsyncMock(return_value=None)
     config_entry.runtime_data = mock_coordinator
     config_entry.mock_state(hass, ConfigEntryState.LOADED)
 
@@ -280,6 +280,43 @@ async def test_options_flow_runtime_data_no_controller_falls_back(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
     create_ctrl.assert_awaited_once()
+
+
+async def test_options_flow_runtime_discovery_error_does_not_fall_back(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Unexpected runtime discovery errors reach flow handling, not fallback login."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.async_fetch_available_clients = AsyncMock(side_effect=ValueError("unexpected response"))
+    config_entry.runtime_data = mock_coordinator
+    config_entry.mock_state(hass, ConfigEntryState.LOADED)
+
+    with patch(PATCH_CREATE_CONTROLLER) as create_controller:
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_discover_devices"}
+    create_controller.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [ValueError, asyncio.CancelledError])
+async def test_options_flow_fallback_discovery_failure_closes_controller(
+    hass: HomeAssistant, config_entry: MockConfigEntry, error: type[BaseException]
+) -> None:
+    """Flow-owned controllers are released on discovery errors and cancellation."""
+    controller = _mock_controller()
+    session = _attach_mock_session(controller)
+    controller.clients.update_mock.side_effect = error
+
+    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
+        if error is asyncio.CancelledError:
+            with pytest.raises(asyncio.CancelledError):
+                await hass.config_entries.options.async_init(config_entry.entry_id)
+        else:
+            result = await hass.config_entries.options.async_init(config_entry.entry_id)
+            assert result["errors"] == {"base": "cannot_discover_devices"}
+
+    _assert_session_cleanup(session)
 
 
 async def test_options_flow_active_client_refresh_failure_uses_historical_clients(

@@ -183,6 +183,25 @@ async def async_refresh_client_stores(
             raise RuntimeError(msg)
 
 
+async def async_fetch_all_clients(controller: Controller) -> dict[str, str]:
+    """Refresh client stores and return detached discovery labels.
+
+    Callers sharing a runtime controller must serialize this entire operation
+    with polling, including the synchronous reads after refresh.
+    """
+    await async_refresh_client_stores(
+        controller,
+        require_active_refresh=False,
+    )
+    clients: dict[str, str] = {}
+    for store in (controller.clients_all, controller.clients):
+        for mac, client in store.items():
+            normalized_mac = normalize_mac(mac)
+            name = resolve_client_display_name(normalized_mac, current=client)
+            clients[normalized_mac] = f"{name} ({normalized_mac})"
+    return clients
+
+
 def _client_store_refresh_succeeded(result: object) -> bool:
     """Return success for expected refresh results and re-raise unexpected errors."""
     if not isinstance(result, BaseException):

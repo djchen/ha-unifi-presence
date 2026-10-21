@@ -1,5 +1,6 @@
 """Tests for the UniFi Presence integration setup and unload."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -9,6 +10,7 @@ from homeassistant.const import CONF_USERNAME, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -24,7 +26,7 @@ from custom_components.unifi_presence.const import (
     CONF_TRACKED_DEVICES,
     DOMAIN,
 )
-from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
+from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator, UnifiPresenceData
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
 
 from .conftest import (
@@ -85,6 +87,93 @@ async def test_async_unload_entry(hass: HomeAssistant, loaded_entry: MockConfigE
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+async def test_unload_with_refresh_queued_behind_options_discovery(  # noqa: PLR0915 - Keep lifecycle ordering together.
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    loaded_entry: MockConfigEntry,
+    mock_controller: MagicMock,
+    scheduled: bool,
+) -> None:
+    """Queued refreshes must not recreate runtime resources after full entry unload."""
+    coordinator = loaded_entry.runtime_data
+    session = _attach_mock_session(mock_controller)
+    mac = coordinator.tracked_devices[0]
+    now = int(dt_util.utcnow().timestamp())
+    mock_controller.clients[mac] = _make_mock_client(mac, name="Phone", last_seen=now)
+    coordinator.process_message(MagicMock(data={"mac": mac, "name": "Phone", "last_seen": now}))
+    previous_data = coordinator.data
+    assert coordinator._cancel_heartbeat_check is not None
+    entity_id = er.async_get(hass).async_get_entity_id("device_tracker", DOMAIN, f"{loaded_entry.unique_id}-{mac}")
+    assert entity_id is not None
+
+    discovery_started = asyncio.Event()
+    release_discovery = asyncio.Event()
+    refresh_started = asyncio.Event()
+    update_data = coordinator._async_update_data
+
+    async def discover() -> None:
+        discovery_started.set()
+        await release_discovery.wait()
+
+    async def update() -> UnifiPresenceData:
+        refresh_started.set()
+        return await update_data()
+
+    async def refresh() -> None:
+        if scheduled:
+            # A fired interval is entry-owned background work, canceled on unload.
+            coordinator._async_unsub_refresh()
+            task = loaded_entry.async_create_background_task(
+                hass, coordinator._handle_refresh_interval(), "queued scheduled refresh", eager_start=True
+            )
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            # This is the same path as homeassistant.update_entity, not an entry task.
+            await async_update_entity(hass, entity_id)
+
+    try:
+        with (
+            patch.object(mock_controller.clients, "update_mock", side_effect=discover),
+            patch.object(coordinator, "_async_update_data", side_effect=update),
+            patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller) as create_controller,
+        ):
+            async with asyncio.timeout(5), asyncio.TaskGroup() as tasks:
+                options = tasks.create_task(hass.config_entries.options.async_init(loaded_entry.entry_id))
+                await discovery_started.wait()
+                queued_refresh = tasks.create_task(refresh())
+                await refresh_started.wait()
+                assert coordinator._client_store_lock.locked()
+
+                assert await hass.config_entries.async_unload(loaded_entry.entry_id)
+                assert loaded_entry.state is ConfigEntryState.NOT_LOADED
+                assert not hasattr(loaded_entry, "runtime_data")
+                release_discovery.set()
+                await options
+                await queued_refresh
+
+            await hass.async_block_till_done()
+            create_controller.assert_not_called()
+
+        assert coordinator.controller is None
+        assert coordinator._client_states == {}
+        assert coordinator.data is previous_data
+        assert coordinator.last_update_success is False
+        assert isinstance(coordinator.last_exception, asyncio.CancelledError)
+        assert coordinator._cancel_heartbeat_check is None
+        assert coordinator._scheduled_heartbeat_ts is None
+        assert coordinator._unsub_refresh is None
+        assert coordinator._debounced_refresh._timer_task is None
+        assert not coordinator._client_store_lock.locked()
+        await coordinator.async_shutdown()
+        _assert_session_cleanup(session)
+    finally:
+        # Also clean up resources if a regression resurrects the stopped runtime.
+        coordinator._clear_heartbeat_check()
+        await coordinator._async_close_runtime_controller()
 
 
 async def test_async_unload_entry_preserves_runtime_when_platform_unload_fails(hass: HomeAssistant) -> None:
