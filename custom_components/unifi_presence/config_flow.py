@@ -43,12 +43,11 @@ from .helpers import (
     UNIFI_COMMUNICATION_EXCEPTIONS,
     ControllerConnectionParams,
     async_close_controller,
-    async_refresh_client_stores,
+    async_fetch_all_clients,
     config_entry_site_id,
     create_controller_for_params,
     normalize_mac,
     normalize_macs,
-    resolve_client_display_name,
     site_title,
     tracker_unique_id,
 )
@@ -208,21 +207,6 @@ def _build_client_options(
     return client_options
 
 
-async def _fetch_all_clients(controller: Controller) -> dict[str, str]:
-    """Fetch all known clients from the UniFi controller."""
-    await async_refresh_client_stores(
-        controller,
-        require_active_refresh=False,
-    )
-    clients: dict[str, str] = {}
-    for store in (controller.clients_all, controller.clients):
-        for mac, client in store.items():
-            normalized_mac = normalize_mac(mac)
-            name = resolve_client_display_name(normalized_mac, current=client)
-            clients[normalized_mac] = f"{name} ({normalized_mac})"
-    return clients
-
-
 class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for UniFi Presence."""
 
@@ -300,7 +284,7 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_discover_clients_from_controller(self, controller: Controller) -> FlowErrorKey | None:
         """Fetch available clients for the currently selected site."""
         try:
-            self._available_clients = await _fetch_all_clients(controller)
+            self._available_clients = await async_fetch_all_clients(controller)
         except Exception:
             _LOGGER.exception("Failed to fetch client list")
             self._available_clients = {}
@@ -651,29 +635,28 @@ class UnifiPresenceOptionsFlow(OptionsFlowWithReload):
     async def _async_fetch_available_clients(self) -> tuple[dict[str, str], bool]:
         """Fetch available clients for the options flow."""
         controller: Controller | None = None
-        close_controller = False
         try:
             if self.config_entry.state is ConfigEntryState.LOADED:
                 coordinator = getattr(self.config_entry, "runtime_data", None)
-                if coordinator is not None and getattr(coordinator, "controller", None) is not None:
-                    controller = cast("Controller | None", coordinator.controller)
+                if coordinator is not None:
+                    clients = await coordinator.async_fetch_available_clients()
+                    if clients is not None:
+                        return clients, False
 
-            if controller is None:
-                data = self.config_entry.data
-                controller = await create_controller_for_params(
-                    self.hass,
-                    ControllerConnectionParams.from_mapping(data),
-                    unique_id=self.config_entry.unique_id,
-                    resolve_legacy_site=True,
-                )
-                close_controller = True
+            data = self.config_entry.data
+            controller = await create_controller_for_params(
+                self.hass,
+                ControllerConnectionParams.from_mapping(data),
+                unique_id=self.config_entry.unique_id,
+                resolve_legacy_site=True,
+            )
 
-            return await _fetch_all_clients(controller), False
+            return await async_fetch_all_clients(controller), False
         except Exception:  # noqa: BLE001 - Keep options usable when client fetching fails.
             _LOGGER.warning("Could not fetch UniFi clients for options flow")
             return {}, True
         finally:
-            if close_controller and controller is not None:
+            if controller is not None:
                 await async_close_controller(controller)
 
     async def async_step_init(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:

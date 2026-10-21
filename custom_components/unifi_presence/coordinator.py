@@ -1,5 +1,6 @@
 """DataUpdateCoordinator for UniFi Presence."""
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -27,6 +28,7 @@ from .helpers import (
     UNIFI_COMMUNICATION_EXCEPTIONS,
     ControllerConnectionParams,
     async_close_controller,
+    async_fetch_all_clients,
     async_refresh_client_stores,
     config_entry_site_id,
     create_controller_for_params,
@@ -67,6 +69,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
         self._controller: Controller | None = None
+        self._client_store_lock = asyncio.Lock()
         self.websocket: UnifiPresenceWebsocket | None = None
 
         self._tracked_macs = normalize_macs(config_entry.options.get(CONF_TRACKED_DEVICES, []))
@@ -391,7 +394,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._reschedule_heartbeat_check()
 
     async def _async_refresh_with_reauth(self) -> Controller:
-        """Refresh client stores, re-authenticating once on session expiry."""
+        """Refresh stores with one auth retry; caller must hold the store lock."""
         reauth_attempted = False
 
         for _attempt in range(2):
@@ -426,40 +429,50 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
         raise RuntimeError("Unreachable reauthentication state")
 
+    async def async_fetch_available_clients(self) -> dict[str, str] | None:
+        """Discover using the current runtime controller, or signal flow fallback."""
+        async with self._client_store_lock:
+            # Reauthentication may replace the controller while discovery waits.
+            controller = self._controller
+            if controller is None:
+                return None
+            return await async_fetch_all_clients(controller)
+
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
-        controller = await self._async_refresh_with_reauth()
-        _LOGGER.debug("Fallback poll for tracked device(s)")
+        async with self._client_store_lock:
+            controller = await self._async_refresh_with_reauth()
+            _LOGGER.debug("Fallback poll for tracked device(s)")
 
-        new_states: dict[str, TrackedClientState] = {}
+            new_states: dict[str, TrackedClientState] = {}
 
-        for mac in self._tracked_macs:
-            previous_state = self._client_states.get(mac)
-            previous_name = previous_state.name if previous_state is not None else None
-            client = controller.clients.get(mac)
-            if client is not None:
-                last_seen = client.last_seen or None
-                name = resolve_client_display_name(
-                    mac,
-                    current=client,
-                    previous_name=previous_name,
+            for mac in self._tracked_macs:
+                previous_state = self._client_states.get(mac)
+                previous_name = previous_state.name if previous_state is not None else None
+                client = controller.clients.get(mac)
+                if client is not None:
+                    last_seen = client.last_seen or None
+                    name = resolve_client_display_name(
+                        mac,
+                        current=client,
+                        previous_name=previous_name,
+                    )
+                else:
+                    last_seen = None
+                    name = resolve_client_display_name(
+                        mac,
+                        historical=controller.clients_all.get(mac),
+                        previous_name=previous_name,
+                    )
+
+                is_home, effective_last_seen, expiry_ts = self._apply_presence_observation(mac, last_seen=last_seen)
+                new_states[mac] = TrackedClientState(
+                    is_home=is_home,
+                    name=name,
+                    last_seen_ts=effective_last_seen,
+                    expiry_ts=expiry_ts,
                 )
-            else:
-                last_seen = None
-                name = resolve_client_display_name(
-                    mac,
-                    historical=controller.clients_all.get(mac),
-                    previous_name=previous_name,
-                )
 
-            is_home, effective_last_seen, expiry_ts = self._apply_presence_observation(mac, last_seen=last_seen)
-            new_states[mac] = TrackedClientState(
-                is_home=is_home,
-                name=name,
-                last_seen_ts=effective_last_seen,
-                expiry_ts=expiry_ts,
-            )
-
-        self._client_states = new_states
-        self._reschedule_heartbeat_check()
-        return {mac: (state.is_home, state.name) for mac, state in new_states.items()}
+            self._client_states = new_states
+            self._reschedule_heartbeat_check()
+            return {mac: (state.is_home, state.name) for mac, state in new_states.items()}
