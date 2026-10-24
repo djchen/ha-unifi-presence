@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiohttp import CookieJar
+from aiohttp import ClientTimeout, CookieJar
 from homeassistant.core import HomeAssistant
 from yarl import URL
 
@@ -61,6 +61,7 @@ async def test_create_controller_logs_in_with_ssl_verify(hass: HomeAssistant) ->
     assert create_session.call_args.kwargs["verify_ssl"] is True
     assert create_session.call_args.kwargs["auto_cleanup"] is False
     assert isinstance(create_session.call_args.kwargs["cookie_jar"], CookieJar)
+    assert create_session.call_args.kwargs["timeout"] == ClientTimeout(total=10)
     assert controller._unifi_presence_owned_session is session
     # ssl_verify=True should produce a real SSLContext, not the boolean True
     call_kwargs = configuration.call_args.kwargs
@@ -93,6 +94,7 @@ async def test_create_controller_passes_ssl_false(hass: HomeAssistant) -> None:
     call_kwargs = call_args.kwargs
     assert call_kwargs["verify_ssl"] is False
     assert call_kwargs["auto_cleanup"] is False
+    assert call_kwargs["timeout"] == ClientTimeout(total=10)
     assert "cookie_jar" in call_kwargs
     jar = call_kwargs["cookie_jar"]
     assert isinstance(jar, CookieJar)
@@ -251,6 +253,108 @@ async def test_async_refresh_client_stores_requires_active_runtime_refresh() -> 
             controller,
             require_active_refresh=True,
         )
+
+
+async def test_async_refresh_client_stores_active_update_times_out() -> None:
+    """A real active-store timeout fails polling even when cached clients exist."""
+    controller = make_mock_controller(clients_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff"))])
+    controller.clients.update_mock.side_effect = asyncio.Event().wait
+
+    with (
+        patch("custom_components.unifi_presence.helpers.CONTROLLER_STORE_REFRESH_TIMEOUT", 0.01),
+        pytest.raises(TimeoutError),
+    ):
+        await async_refresh_client_stores(controller, require_active_refresh=True)
+
+    controller.clients_all.update_mock.assert_awaited_once_with()
+    controller.clients.update_mock.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize("require_active_refresh", [True, False])
+async def test_async_refresh_client_stores_history_timeout_is_best_effort(require_active_refresh: bool) -> None:
+    """A real historical-store timeout does not discard a successful active update."""
+    controller = make_mock_controller()
+    controller.clients_all.update_mock.side_effect = asyncio.Event().wait
+
+    with patch("custom_components.unifi_presence.helpers.CONTROLLER_STORE_REFRESH_TIMEOUT", 0.01):
+        await async_refresh_client_stores(controller, require_active_refresh=require_active_refresh)
+
+    controller.clients_all.update_mock.assert_awaited_once_with()
+    controller.clients.update_mock.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize("cached_store", ["clients", "clients_all", None])
+async def test_async_refresh_client_stores_discovery_timeouts_preserve_cache_policy(cached_store: str | None) -> None:
+    """Two real timeouts allow either store's cache, but fail without cached data."""
+    controller = make_mock_controller()
+    if cached_store is not None:
+        getattr(controller, cached_store)["aa:bb:cc:dd:ee:ff"] = _make_mock_client("aa:bb:cc:dd:ee:ff")
+    controller.clients_all.update_mock.side_effect = asyncio.Event().wait
+    controller.clients.update_mock.side_effect = asyncio.Event().wait
+
+    with patch("custom_components.unifi_presence.helpers.CONTROLLER_STORE_REFRESH_TIMEOUT", 0.01):
+        if cached_store is None:
+            with pytest.raises(RuntimeError, match="Both active and historical client sources failed"):
+                await async_refresh_client_stores(controller, require_active_refresh=False)
+        else:
+            await async_refresh_client_stores(controller, require_active_refresh=False)
+
+    controller.clients_all.update_mock.assert_awaited_once_with()
+    controller.clients.update_mock.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize("caller_cancelled", [True, False])
+async def test_async_refresh_client_stores_drains_cancelled_updates(caller_cancelled: bool) -> None:
+    """Timeouts and caller cancellation await cleanup of both concurrent updates."""
+    controller = make_mock_controller()
+    both_started = asyncio.Event()
+    both_cancelled = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    blocked = asyncio.Event()
+    started: list[asyncio.Task[object]] = []
+    cancelled: list[asyncio.Task[object]] = []
+    cleaned: list[asyncio.Task[object]] = []
+
+    async def update() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        started.append(task)
+        if len(started) == 2:
+            both_started.set()
+        try:
+            await blocked.wait()
+        finally:
+            cancelled.append(task)
+            if len(cancelled) == 2:
+                both_cancelled.set()
+            await release_cleanup.wait()
+            cleaned.append(task)
+
+    controller.clients_all.update_mock.side_effect = update
+    controller.clients.update_mock.side_effect = update
+
+    with patch(
+        "custom_components.unifi_presence.helpers.CONTROLLER_STORE_REFRESH_TIMEOUT", 10 if caller_cancelled else 0.01
+    ):
+        async with asyncio.timeout(5):
+            refresh = asyncio.create_task(async_refresh_client_stores(controller, require_active_refresh=True))
+            try:
+                await both_started.wait()
+                if caller_cancelled:
+                    refresh.cancel()
+                await both_cancelled.wait()
+                assert not refresh.done()
+                assert cleaned == []
+                release_cleanup.set()
+                with pytest.raises(asyncio.CancelledError if caller_cancelled else TimeoutError):
+                    await refresh
+                assert set(cleaned) == set(started)
+                assert all(task.done() for task in started)
+            finally:
+                release_cleanup.set()
+                if not refresh.done():
+                    refresh.cancel()
+                await asyncio.gather(refresh, return_exceptions=True)
 
 
 @pytest.mark.parametrize("error", [TimeoutError, asyncio.CancelledError])

@@ -78,7 +78,8 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._client_states = {}
         self._cancel_heartbeat_check = None
         self._scheduled_heartbeat_ts = None
-        self._shutdown_complete = False
+        self._stopping = False
+        self._shutdown_task: asyncio.Task[None] | None = None
 
         fallback_interval = config_entry.options.get(CONF_FALLBACK_POLL_INTERVAL, DEFAULT_FALLBACK_POLL_INTERVAL)
 
@@ -124,17 +125,37 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         self._scheduled_heartbeat_ts = None
 
     async def async_shutdown(self) -> None:
-        """Release the current controller session, if owned by this integration."""
-        if self._shutdown_complete:
-            return
+        """Join shared cleanup without letting a cancelled waiter interrupt it."""
+        if self._shutdown_task is None:
+            self._stopping = True
+            self.update_interval = None
+            self._clear_heartbeat_check()
+            self._shutdown_task = self.hass.async_create_task(
+                self._async_shutdown_runtime(), name="unifi_presence_shutdown"
+            )
 
-        self._shutdown_complete = True
-        self._clear_heartbeat_check()
+        await asyncio.shield(self._shutdown_task)
 
-        self._client_states.clear()
-
-        await self._async_close_runtime_controller()
+    async def _async_shutdown_runtime(self) -> None:
+        """Stop producers, drain store operations, then release their controller."""
         await super().async_shutdown()
+        if self.websocket is not None:
+            await self.websocket.stop_and_wait()
+
+        async with self._client_store_lock:
+            await self._async_close_runtime_controller()
+            self._client_states.clear()
+
+    @callback
+    def async_update_listeners(self) -> None:
+        """Do not publish outstanding refresh results after shutdown begins."""
+        if not self._stopping:
+            super().async_update_listeners()
+
+    def _raise_if_stopping(self) -> None:
+        """Discard stopped work without cancelling its caller task."""
+        if self._stopping:
+            raise asyncio.CancelledError
 
     async def _async_close_runtime_controller(self) -> None:
         """Release the current controller session without stopping heartbeat tracking."""
@@ -187,6 +208,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         precisely when the first device should transition to ``not_home``,
         avoiding unnecessary periodic polling.
         """
+        if self._stopping:
+            return
+
         earliest: int | None = None
         for state in self._client_states.values():
             expiry_ts = state.expiry_ts
@@ -306,6 +330,9 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
     @callback
     def _async_check_heartbeat_expiry(self, *_: datetime) -> None:
         """Expire tracked clients whose away deadline has elapsed."""
+        if self._stopping:
+            return
+
         self._clear_heartbeat_check()
         if not self._client_states:
             return
@@ -338,21 +365,29 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def _ensure_controller(self) -> Controller:
         """Create or re-authenticate the controller connection."""
+        self._raise_if_stopping()
         if self._controller is not None:
             return self._controller
 
         data = self.config_entry.data
-        self._controller = await create_controller_for_params(
+        controller = await create_controller_for_params(
             self.hass,
             ControllerConnectionParams.from_mapping(data),
             unique_id=self.config_entry.unique_id,
             resolve_legacy_site=True,
         )
+        if self._stopping:
+            await async_close_controller(controller)
+            raise asyncio.CancelledError
 
-        return self._controller
+        self._controller = controller
+        return controller
 
     def process_message(self, message: Message) -> None:
         """Handle a sta:sync WebSocket message for a tracked client."""
+        if self._stopping:
+            return
+
         raw: object = message.data
         if not isinstance(raw, dict):
             return
@@ -405,6 +440,7 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                     require_active_refresh=True,
                 )
             except UNIFI_AUTH_EXCEPTIONS as err:
+                self._raise_if_stopping()
                 if reauth_attempted:
                     raise ConfigEntryAuthFailed(
                         translation_domain=DOMAIN,
@@ -416,12 +452,14 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
                 reauth_attempted = True
                 continue
             except UNIFI_COMMUNICATION_EXCEPTIONS as err:
+                self._raise_if_stopping()
                 raise UpdateFailed(
                     translation_domain=DOMAIN,
                     translation_key="cannot_connect",
                     translation_placeholders={"host": self.config_entry.data[CONF_HOST]},
                 ) from err
 
+            self._raise_if_stopping()
             if reauth_attempted and self.websocket is not None:
                 self.websocket.restart_with_current_controller()
 
@@ -431,21 +469,26 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
 
     async def async_fetch_available_clients(self) -> dict[str, str] | None:
         """Discover using the current runtime controller, or signal flow fallback."""
+        if bool(self._stopping):
+            return None
         async with self._client_store_lock:
+            if self._stopping:
+                return None
             # Reauthentication may replace the controller while discovery waits.
             controller = self._controller
             if controller is None:
                 return None
-            return await async_fetch_all_clients(controller)
+            clients = await async_fetch_all_clients(controller)
+            return None if self._stopping else clients
 
     async def _async_update_data(self) -> UnifiPresenceData:
         """Fallback REST poll — fetch data from the UniFi controller."""
+        self._raise_if_stopping()
         async with self._client_store_lock:
-            # Shutdown may have completed while this refresh waited for discovery.
-            if self._shutdown_complete:
-                raise asyncio.CancelledError
+            self._raise_if_stopping()
 
             controller = await self._async_refresh_with_reauth()
+            self._raise_if_stopping()
             _LOGGER.debug("Fallback poll for tracked device(s)")
 
             new_states: dict[str, TrackedClientState] = {}

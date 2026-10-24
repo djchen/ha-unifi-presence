@@ -3,7 +3,6 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.unifi_presence.websocket import UnifiPresenceWebsocket
@@ -60,43 +59,113 @@ async def test_stop_cancels_task_and_unsubscribes(hass: HomeAssistant) -> None:
     assert ws._stopped is True
 
 
-async def test_stop_and_wait(hass: HomeAssistant) -> None:
-    """Test that stop_and_wait awaits the WS task."""
+async def test_stop_and_wait_joins_cleanup_after_prior_stop(hass: HomeAssistant) -> None:
+    """Repeated stops must retain tasks and must not cancel cleanup twice."""
     ws, controller, _ = make_websocket(hass)
-    started = block_websocket(controller)
+    started = asyncio.Event()
+    cancelling = asyncio.Event()
+    release = asyncio.Event()
+    original_new_data = controller.messages.new_data
+
+    async def socket() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    controller.start_websocket.side_effect = socket
 
     ws.start()
     await asyncio.wait_for(started.wait(), timeout=1)
-    task = ws.ws_task
-    assert task is not None
 
-    await ws.stop_and_wait()
+    real_task = ws.ws_task
+    ws.stop()
+    await cancelling.wait()
+    shutdown = hass.async_create_task(ws.stop_and_wait())
+    assert not shutdown.done()
+    assert ws.ws_task is real_task
+    assert controller.messages.new_data is not original_new_data
+    release.set()
+    await shutdown
 
-    assert task.done()
+    assert real_task.done()
+    assert controller.messages.new_data is original_new_data
+    assert ws.ws_task is None
     assert ws._unsub_messages is None
 
 
-async def test_stop_and_wait_timeout_logs_warning(hass: HomeAssistant, caplog: pytest.LogCaptureFixture) -> None:
-    """Test that stop_and_wait logs a warning when the WS task won't finish."""
+async def test_stop_joins_retiring_and_current_reconnect_cleanup(hass: HomeAssistant) -> None:
+    """Replacing a reconnect cannot orphan its asynchronous cancellation cleanup."""
     ws, controller, _ = make_websocket(hass)
-    started = block_websocket(controller)
+    first_started = asyncio.Event()
+    retiring = asyncio.Event()
+    release_old = asyncio.Event()
+    second_started = asyncio.Event()
+    current_cleanup = asyncio.Event()
+    release_current = asyncio.Event()
 
-    ws.start()
-    await asyncio.wait_for(started.wait(), timeout=1)
+    async def old_reconnect() -> None:
+        first_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            retiring.set()
+            await release_old.wait()
 
-    # Patch asyncio.wait to simulate timeout (return the task as pending)
-    real_task = ws.ws_task
-    with (
-        patch("custom_components.unifi_presence.websocket.asyncio.wait", return_value=(set(), {real_task})),
-        caplog.at_level("WARNING"),
-    ):
-        await ws.stop_and_wait()
+    async def new_reconnect() -> None:
+        second_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            current_cleanup.set()
+            await release_current.wait()
 
-    assert "did not complete in time" in caplog.text
+    ws._start_reconnect_task(old_reconnect)
+    await first_started.wait()
+    old_task = ws._reconnect_task
+    ws._start_reconnect_task(new_reconnect)
+    await retiring.wait()
+    await second_started.wait()
+    new_task = ws._reconnect_task
+    ws.stop()
+    await current_cleanup.wait()
+    shutdown = hass.async_create_task(ws.stop_and_wait())
+    assert not shutdown.done()
+    assert old_task in ws._retiring_reconnect_tasks
+    release_current.set()
+    await asyncio.wait({new_task})
+    assert not shutdown.done()
+    release_old.set()
+    await shutdown
 
-    # Await cancellation cleanup even though the timeout is simulated.
-    with pytest.raises(asyncio.CancelledError):
-        await wait_for_task(real_task)
+    assert old_task.done()
+    assert new_task.done()
+    assert not ws._retiring_reconnect_tasks
+    assert ws._reconnect_task is None
+    assert ws._cancel_retry is None
+    controller.start_websocket.assert_not_called()
+
+
+async def test_late_reconnect_failure_cannot_schedule_retry_after_stop(hass: HomeAssistant) -> None:
+    """A login handling cancellation as a connection failure must stay stopped."""
+    ws, controller, _ = make_websocket(hass)
+    started = asyncio.Event()
+
+    async def login() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise TimeoutError from None
+
+    controller.login.side_effect = login
+    ws._schedule_reauth_and_restart()
+    await started.wait()
+    await ws.stop_and_wait()
+    assert ws._cancel_retry is None
+    assert ws._cancel_watchdog is None
 
 
 async def test_message_handler_forwards_to_callback(hass: HomeAssistant) -> None:

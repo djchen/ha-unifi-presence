@@ -1,7 +1,7 @@
 """Tests for the UniFi Presence coordinator — reauth and error handling."""
 
 from json import JSONDecodeError
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiounifi
 import pytest
@@ -31,7 +31,7 @@ async def test_coordinator_successful_reauth_lifecycle(
     )
     owned_session = _attach_mock_session(initial_controller)
     replacement_controller = make_mock_controller(clients_items=[(mac, _make_mock_client(mac, last_seen=now))])
-    websocket = MagicMock()
+    websocket = MagicMock(stop_and_wait=AsyncMock())
 
     with patch(
         "custom_components.unifi_presence.coordinator.create_controller_for_params",

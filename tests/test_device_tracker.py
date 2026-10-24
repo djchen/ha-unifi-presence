@@ -107,7 +107,6 @@ def test_tracker_metadata_contract() -> None:
 async def test_trackers_remain_entity_only(
     hass: HomeAssistant,
     enable_custom_integrations: None,
-    freezer: FrozenDateTimeFactory,
     device_timing: str,
 ) -> None:
     """A matching MAC from another integration must not create or link a device."""

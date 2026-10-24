@@ -14,8 +14,6 @@ from aiounifi.models.message import Message, MessageKey
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
 
-from .const import DOMAIN
-
 if TYPE_CHECKING:
     from aiounifi.controller import Controller
 
@@ -45,6 +43,7 @@ class UnifiPresenceWebsocket:
         self._cancel_retry: CALLBACK_TYPE | None = None
         self._cancel_watchdog: CALLBACK_TYPE | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
+        self._retiring_reconnect_tasks: set[asyncio.Task[None]] = set()
         self._unsub_messages: Callable[[], None] | None = None
         self.available = False
         self._stopped = False
@@ -110,24 +109,30 @@ class UnifiPresenceWebsocket:
 
         self._clear_message_subscription()
 
-        if self._reconnect_task is not None:
-            self._reconnect_task.cancel()
-        self._reconnect_task = None
-        if self.ws_task is not None:
-            self.ws_task.cancel()
-        self.ws_task = None
+        for task in (self.ws_task, self._reconnect_task, *self._retiring_reconnect_tasks):
+            if task is not None:
+                self._cancel_task(task)
+
+    @staticmethod
+    def _cancel_task(task: asyncio.Task[None]) -> None:
+        """Request cancellation once, preserving cancellation cleanup awaits."""
+        if not task.done() and not task.cancelling():
+            task.cancel()
 
     async def stop_and_wait(self) -> None:
         """Stop WebSocket and await task completion."""
-        # Capture task references before stop() clears them, so we can await
-        # their completion after the synchronous stop has fired cancellation.
-        tasks = [task for task in (self.ws_task, self._reconnect_task) if task is not None]
         self.stop()
+        tasks = {
+            task for task in (self.ws_task, self._reconnect_task, *self._retiring_reconnect_tasks) if task is not None
+        }
 
         if tasks:
-            _, pending = await asyncio.wait(tasks, timeout=10)
-            if pending:
-                _LOGGER.warning("Unloading %s - WebSocket task did not complete in time", DOMAIN)
+            await asyncio.wait(tasks)
+            for task in tasks:
+                with suppress(asyncio.CancelledError):
+                    task.result()
+        self.ws_task = None
+        self._reconnect_task = None
 
     @callback
     def _start_websocket_runner(self) -> None:
@@ -162,7 +167,7 @@ class UnifiPresenceWebsocket:
             except aiounifi.WebsocketError:
                 _LOGGER.error("WebSocket disconnected")
             except asyncio.CancelledError:
-                websocket_task.cancel()
+                self._cancel_task(websocket_task)
                 with suppress(asyncio.CancelledError):
                     await websocket_task
                 raise
@@ -205,7 +210,7 @@ class UnifiPresenceWebsocket:
     @callback
     def _schedule_retry(self) -> None:
         """Schedule a reconnect with exponential backoff."""
-        if self._cancel_retry is not None:
+        if self._stopped or self._cancel_retry is not None:
             return
 
         delay = max(1.0, self._retry_delay * random.uniform(1 - RETRY_JITTER, 1 + RETRY_JITTER))
@@ -240,9 +245,10 @@ class UnifiPresenceWebsocket:
         """Cancel the current runner and start a replacement after it settles."""
         previous_task = self.ws_task
         if previous_task is not None:
-            previous_task.cancel()
+            self._cancel_task(previous_task)
             with suppress(asyncio.CancelledError):
-                await previous_task
+                # Cancelling a reconnect must not cancel runner cleanup again.
+                await asyncio.shield(previous_task)
         if self._stopped:
             return
 
@@ -253,8 +259,13 @@ class UnifiPresenceWebsocket:
     @callback
     def _start_reconnect_task(self, coro_factory: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Replace any existing reconnect task with a new one."""
+        if self._stopped:
+            return
         if self._reconnect_task is not None:
-            self._reconnect_task.cancel()
+            retiring = self._reconnect_task
+            self._retiring_reconnect_tasks.add(retiring)
+            retiring.add_done_callback(self._retiring_reconnect_tasks.discard)
+            self._cancel_task(retiring)
 
         async def _run() -> None:
             await asyncio.sleep(0)
