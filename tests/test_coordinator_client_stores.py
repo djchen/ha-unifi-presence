@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiounifi
 import pytest
@@ -29,7 +29,6 @@ from .conftest import (
 )
 
 MAC = "aa:bb:cc:dd:ee:ff"
-pytestmark = pytest.mark.usefixtures("_bypass_setup", "freezer")
 
 
 def _real_controller() -> Controller:
@@ -53,6 +52,7 @@ async def coordinator(hass: HomeAssistant) -> AsyncGenerator[UnifiPresenceCoordi
         await runtime.async_shutdown()
 
 
+@pytest.mark.usefixtures("_bypass_setup", "freezer")
 @pytest.mark.parametrize("options_first", [True, False])
 async def test_options_and_poll_serialize_refresh_and_reads(  # noqa: PLR0915 - Keep event ordering together.
     hass: HomeAssistant,
@@ -155,6 +155,7 @@ async def test_options_and_poll_serialize_refresh_and_reads(  # noqa: PLR0915 - 
     _assert_session_cleanup(controller._unifi_presence_owned_session, owned=False)
 
 
+@pytest.mark.usefixtures("freezer")
 async def test_discovery_waiting_for_reauth_uses_replacement(
     coordinator: UnifiPresenceCoordinator,
 ) -> None:
@@ -166,7 +167,7 @@ async def test_discovery_waiting_for_reauth_uses_replacement(
     release_auth = asyncio.Event()
     discovery_started = asyncio.Event()
     now = int(dt_util.utcnow().timestamp())
-    coordinator.websocket = MagicMock()
+    coordinator.websocket = MagicMock(stop_and_wait=AsyncMock())
 
     async def expired_request(api_request: ApiRequest) -> dict[str, object]:
         if api_request is original.clients.api_request:
@@ -207,6 +208,7 @@ async def test_discovery_waiting_for_reauth_uses_replacement(
     _assert_session_cleanup(replacement._unifi_presence_owned_session, owned=False)
 
 
+@pytest.mark.usefixtures("freezer")
 async def test_websocket_observation_during_locked_refresh_stays_monotonic(
     coordinator: UnifiPresenceCoordinator,
 ) -> None:
@@ -346,6 +348,7 @@ async def test_runtime_discovery_blank_active_overrides_historical_label(
         assert (await coordinator._async_update_data())[MAC] == (False, MAC)
 
 
+@pytest.mark.usefixtures("_bypass_setup")
 async def test_runtime_discovery_distinguishes_empty_from_unavailable(
     hass: HomeAssistant, coordinator: UnifiPresenceCoordinator
 ) -> None:

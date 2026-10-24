@@ -17,7 +17,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
     coordinator = UnifiPresenceCoordinator(hass, entry)
     websocket: UnifiPresenceWebsocket | None = None
     shutdown_unsub: CALLBACK_TYPE | None = None
-    shutdown_handled = False
+
+    @callback
+    def _unsubscribe_shutdown() -> None:
+        """Remove the stop listener only if it has not already fired."""
+        nonlocal shutdown_unsub
+        if shutdown_unsub is not None:
+            shutdown_unsub()
+            shutdown_unsub = None
+
     try:
         await coordinator.async_config_entry_first_refresh()
 
@@ -32,39 +40,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntry
         entry.runtime_data = coordinator
 
         if bool(hass.is_stopping):
-            websocket.stop()
             await coordinator.async_shutdown()
             return False
 
-        @callback
-        def _async_shutdown(_event: object) -> None:
+        async def _async_shutdown(_event: object) -> None:
             """Stop runtime listeners and release owned sessions on shutdown."""
-            nonlocal shutdown_handled
-            shutdown_handled = True
-            websocket.stop()
-            hass.async_create_task(coordinator.async_shutdown())
+            nonlocal shutdown_unsub
+            shutdown_unsub = None  # The one-shot listener has removed itself.
+            await coordinator.async_shutdown()
 
         shutdown_unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown)
+        entry.async_on_unload(_unsubscribe_shutdown)
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         if bool(hass.is_stopping):
-            if not shutdown_handled:
-                shutdown_unsub()
-                websocket.stop()
-                await coordinator.async_shutdown()
+            _unsubscribe_shutdown()
+            await coordinator.async_shutdown()
             await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
             return False
 
-        entry.async_on_unload(shutdown_unsub)
         websocket.start()
     except Exception:
-        if shutdown_unsub is not None and not shutdown_handled:
-            shutdown_unsub()
-        if not shutdown_handled:
-            if websocket is not None:
-                websocket.stop()
-            await coordinator.async_shutdown()
+        _unsubscribe_shutdown()
+        await coordinator.async_shutdown()
         raise
 
     return True
@@ -76,9 +75,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: UnifiPresenceConfigEntr
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unload_ok:
         return False
-
-    if coordinator.websocket is not None:
-        await coordinator.websocket.stop_and_wait()
 
     await coordinator.async_shutdown()
 

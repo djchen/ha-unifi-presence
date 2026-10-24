@@ -26,6 +26,8 @@ from .const import (
 )
 
 CONTROLLER_LOGIN_TIMEOUT = 10
+CONTROLLER_REQUEST_TIMEOUT = 10
+CONTROLLER_STORE_REFRESH_TIMEOUT = 10
 NO_LONGER_IN_UNIFI_CLIENT_DEVICES_LABEL = "No longer in UniFi Client Devices"
 
 UNIFI_AUTH_EXCEPTIONS: tuple[type[Exception], ...] = (aiounifi.LoginRequired, aiounifi.Unauthorized)
@@ -164,8 +166,9 @@ async def async_refresh_client_stores(
 ) -> None:
     """Refresh UniFi client stores while preserving caller-specific policy."""
     historical_result, active_result = await asyncio.gather(
-        controller.clients_all.update(),
-        controller.clients.update(),
+        # Bound the entire update, including aiounifi's login/request retries.
+        asyncio.wait_for(controller.clients_all.update(), timeout=CONTROLLER_STORE_REFRESH_TIMEOUT),
+        asyncio.wait_for(controller.clients.update(), timeout=CONTROLLER_STORE_REFRESH_TIMEOUT),
         return_exceptions=True,
     )
 
@@ -239,6 +242,8 @@ async def create_controller(
         verify_ssl=params.ssl_verify,
         auto_cleanup=False,
         cookie_jar=CookieJar(unsafe=True),
+        # Shutdown drains active store requests before detaching this session.
+        timeout=aiohttp.ClientTimeout(total=CONTROLLER_REQUEST_TIMEOUT),
     )
 
     config = Configuration(
