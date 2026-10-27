@@ -1,5 +1,6 @@
 """Regression tests for controller authentication session isolation."""
 
+import socket
 import ssl
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from aiohttp import TCPConnector, web
+from aiohttp.abc import AbstractResolver, ResolveResult
 from aiounifi.controller import Controller
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -40,6 +42,7 @@ async def unifi_server(
     aiohttp_server: AiohttpServer,
     monkeypatch: pytest.MonkeyPatch,
     socket_enabled: None,
+    other_port: bool,
 ) -> AsyncGenerator[_UnifiServer]:
     """Run a local trusted TLS controller with account-specific dummy tokens."""
     key = ec.generate_private_key(ec.SECP256R1())
@@ -100,12 +103,27 @@ async def unifi_server(
     app.router.add_get("/proxy/network/api/s/{site}/stat/sta", clients)
     app.router.add_get("/proxy/network/wss/s/{site}/events", websocket)
     first = await aiohttp_server(app, ssl=server_context)
-    second = await aiohttp_server(app, ssl=server_context)
+    second = await aiohttp_server(app, ssl=server_context) if other_port else first
     assert first.port is not None
     assert second.port is not None
 
-    # Retain real HA session creation, but avoid its mDNS resolver in this local test.
-    connector = TCPConnector(ssl=client_context)
+    class LocalResolver(AbstractResolver):
+        """Resolve the certificate's hostname directly to the IPv4 test server."""
+
+        async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET) -> list[ResolveResult]:
+            assert host == "localhost"
+            return [
+                ResolveResult(
+                    hostname=host, host="127.0.0.1", port=port, family=family, proto=0, flags=socket.AI_NUMERICHOST
+                )
+            ]
+
+        async def close(self) -> None:
+            """No DNS resources are opened."""
+
+    # Retain real HA sessions, cookies and TLS, without mDNS or external DNS setup.
+    # This immediate resolver needs no cache or background DNS-throttling tasks.
+    connector = TCPConnector(ssl=client_context, resolver=LocalResolver(), family=socket.AF_INET, use_dns_cache=False)
     monkeypatch.setattr(ha_http, "_async_get_connector", lambda *args, **kwargs: connector)
     monkeypatch.setattr("custom_components.unifi_presence.helpers.ha_client_context", lambda: client_context)
     try:

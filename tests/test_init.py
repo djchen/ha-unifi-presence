@@ -1,8 +1,9 @@
 """Tests for the UniFi Presence integration setup and unload."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiounifi
 import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import ConfigEntryState
@@ -23,6 +24,7 @@ from custom_components.unifi_presence.config_flow import _async_remove_deselecte
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
+    CONF_SITE,
     CONF_TRACKED_DEVICES,
     DOMAIN,
 )
@@ -39,6 +41,7 @@ from .conftest import (
     make_mock_controller,
     make_reconfigure_input,
 )
+from .test_coordinator_shutdown import assert_stopped
 
 PATCH_CREATE_CONTROLLER = "custom_components.unifi_presence.coordinator.create_controller_for_params"
 
@@ -112,7 +115,9 @@ async def test_unload_with_refresh_queued_behind_options_discovery(  # noqa: PLR
     discovery_started = asyncio.Event()
     release_discovery = asyncio.Event()
     refresh_started = asyncio.Event()
+    stopping = asyncio.Event()
     update_data = coordinator._async_update_data
+    cleanup_runtime = coordinator._async_shutdown_runtime
 
     async def discover() -> None:
         discovery_started.set()
@@ -122,6 +127,10 @@ async def test_unload_with_refresh_queued_behind_options_discovery(  # noqa: PLR
         refresh_started.set()
         return await update_data()
 
+    async def cleanup() -> None:
+        stopping.set()
+        await cleanup_runtime()
+
     async def refresh() -> None:
         if scheduled:
             # A fired interval is entry-owned background work, canceled on unload.
@@ -129,8 +138,7 @@ async def test_unload_with_refresh_queued_behind_options_discovery(  # noqa: PLR
             task = loaded_entry.async_create_background_task(
                 hass, coordinator._handle_refresh_interval(), "queued scheduled refresh", eager_start=True
             )
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            await task
         else:
             # This is the same path as homeassistant.update_entity, not an entry task.
             await async_update_entity(hass, entity_id)
@@ -139,35 +147,36 @@ async def test_unload_with_refresh_queued_behind_options_discovery(  # noqa: PLR
         with (
             patch.object(mock_controller.clients, "update_mock", side_effect=discover),
             patch.object(coordinator, "_async_update_data", side_effect=update),
+            patch.object(coordinator, "_async_shutdown_runtime", side_effect=cleanup),
             patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller) as create_controller,
         ):
             async with asyncio.timeout(5), asyncio.TaskGroup() as tasks:
-                options = tasks.create_task(hass.config_entries.options.async_init(loaded_entry.entry_id))
+                options = tasks.create_task(coordinator.async_fetch_available_clients())
                 await discovery_started.wait()
                 queued_refresh = tasks.create_task(refresh())
                 await refresh_started.wait()
                 assert coordinator._client_store_lock.locked()
 
-                assert await hass.config_entries.async_unload(loaded_entry.entry_id)
-                assert loaded_entry.state is ConfigEntryState.NOT_LOADED
-                assert not hasattr(loaded_entry, "runtime_data")
+                unloading = hass.async_create_task(hass.config_entries.async_unload(loaded_entry.entry_id))
+                await stopping.wait()
+                assert coordinator._stopping
+                assert not coordinator._shutdown_task.done()
+                assert not unloading.done()
+                session.detach.assert_not_called()
                 release_discovery.set()
                 await options
                 await queued_refresh
+                assert await unloading
+                assert loaded_entry.state is ConfigEntryState.NOT_LOADED
+                assert not hasattr(loaded_entry, "runtime_data")
 
             await hass.async_block_till_done()
             create_controller.assert_not_called()
 
-        assert coordinator.controller is None
-        assert coordinator._client_states == {}
+        assert_stopped(coordinator)
         assert coordinator.data is previous_data
         assert coordinator.last_update_success is False
         assert isinstance(coordinator.last_exception, asyncio.CancelledError)
-        assert coordinator._cancel_heartbeat_check is None
-        assert coordinator._scheduled_heartbeat_ts is None
-        assert coordinator._unsub_refresh is None
-        assert coordinator._debounced_refresh._timer_task is None
-        assert not coordinator._client_store_lock.locked()
         await coordinator.async_shutdown()
         _assert_session_cleanup(session)
     finally:
@@ -176,21 +185,29 @@ async def test_unload_with_refresh_queued_behind_options_discovery(  # noqa: PLR
         await coordinator._async_close_runtime_controller()
 
 
-async def test_async_unload_entry_preserves_runtime_when_platform_unload_fails(hass: HomeAssistant) -> None:
-    """Test unload leaves runtime resources intact when platform unload fails."""
-    entry = _make_config_entry(hass)
-    websocket = MagicMock()
-    websocket.stop_and_wait = AsyncMock()
-    runtime_data = MagicMock(websocket=websocket)
-    runtime_data.async_shutdown = AsyncMock()
-    entry.runtime_data = runtime_data
-
-    with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=False)):
-        unloaded = await async_unload_entry(hass, entry)
-
-    assert unloaded is False
-    websocket.stop_and_wait.assert_not_awaited()
-    runtime_data.async_shutdown.assert_not_awaited()
+async def test_failed_platform_unload_keeps_real_runtime_active(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, mock_controller: MagicMock
+) -> None:
+    """A failed unload preserves polling, heartbeat, WebSocket and session ownership."""
+    coordinator = loaded_entry.runtime_data
+    session = _attach_mock_session(mock_controller)
+    coordinator.process_message(
+        MagicMock(data={"mac": coordinator.tracked_devices[0], "last_seen": int(dt_util.utcnow().timestamp())})
+    )
+    heartbeat = coordinator._cancel_heartbeat_check
+    poll = coordinator._unsub_refresh
+    ws = coordinator.websocket
+    with patch.object(hass.config_entries, "async_unload_platforms", return_value=False):
+        assert not await async_unload_entry(hass, loaded_entry)
+    assert not coordinator._stopping
+    assert coordinator._shutdown_task is None
+    assert coordinator.controller is mock_controller
+    assert coordinator._cancel_heartbeat_check is heartbeat
+    assert heartbeat is not None
+    assert coordinator._unsub_refresh is poll
+    assert poll is not None
+    assert not ws._stopped
+    session.detach.assert_not_called()
 
 
 async def test_async_unload_entry_shuts_down_coordinator(hass: HomeAssistant) -> None:
@@ -201,17 +218,13 @@ async def test_async_unload_entry_shuts_down_coordinator(hass: HomeAssistant) ->
     runtime_data = MagicMock(websocket=websocket)
     runtime_data.async_shutdown = AsyncMock()
     entry.runtime_data = runtime_data
-    cleanup = MagicMock()
-    cleanup.attach_mock(websocket.stop_and_wait, "stop_websocket")
-    cleanup.attach_mock(runtime_data.async_shutdown, "shutdown")
 
     with patch.object(hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)):
         unloaded = await async_unload_entry(hass, entry)
 
     assert unloaded is True
-    websocket.stop_and_wait.assert_awaited_once_with()
+    websocket.stop_and_wait.assert_not_awaited()
     runtime_data.async_shutdown.assert_awaited_once_with()
-    assert cleanup.mock_calls == [call.stop_websocket(), call.shutdown()]
 
 
 async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
@@ -240,21 +253,274 @@ async def test_async_setup_entry_cleans_up_controller_when_platform_setup_fails(
     _assert_session_cleanup(owned_session)
 
 
-async def test_shutdown_event_stops_websocket(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
-    """Test that shutdown stops the websocket and releases the controller."""
-    coordinator = loaded_entry.runtime_data
-    ws = coordinator.websocket
-    assert ws is not None
+@pytest.mark.parametrize("stage", ["login", "legacy_site", "forward"])
+@pytest.mark.parametrize("full_stop", [False, True])
+async def test_real_setup_cancellation_releases_owned_session(
+    hass: HomeAssistant, enable_custom_integrations: None, stage: str, full_stop: bool
+) -> None:
+    """HA's setup cleanup joins runtime shutdown and preserves factory cancellation cleanup."""
+    entry = add_mock_config_entry(hass, data={**MOCK_CONFIG_DATA, CONF_SITE: "legacy-id"}, unique_id="legacy-id")
+    controller = make_mock_controller()
+    session = _attach_mock_session(controller)
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+    original_forward = hass.config_entries.async_forward_entry_setups
+
+    async def block() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+            await release.wait()
+
+    async def forward(*args, **kwargs) -> None:
+        await original_forward(*args, **kwargs)
+        await block()
+
+    if stage == "login":
+        controller.login.side_effect = block
+    elif stage == "legacy_site":
+        controller.sites.update.side_effect = block
+
     with (
-        patch.object(ws, "stop", wraps=ws.stop) as stop,
-        patch.object(coordinator, "async_shutdown", wraps=coordinator.async_shutdown) as shutdown,
+        patch("custom_components.unifi_presence.helpers.Controller", return_value=controller),
+        patch("custom_components.unifi_presence.helpers.async_create_clientsession", return_value=session),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            side_effect=forward if stage == "forward" else original_forward,
+        ),
     ):
+        async with asyncio.timeout(5):
+            setup = hass.async_create_background_task(hass.config_entries.async_setup(entry.entry_id), "test setup")
+            await started.wait()
+            runtime = entry.runtime_data if stage == "forward" else None
+            if full_stop:
+                exiting = hass.async_create_task(hass.async_stop())
+            else:
+                setup.cancel()
+                exiting = None
+            await cancelled.wait()
+            # In forwarding, the stop listener can independently finish cleanup.
+            if not (stage == "forward" and full_stop):
+                session.detach.assert_not_called()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await setup
+            if exiting is not None:
+                await exiting
+
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    _assert_session_cleanup(session)
+    if runtime is not None:
+        assert_stopped(runtime)
+    # Cancellation during forwarding must remove the immediately registered listener.
+    if not full_stop:
+        session.detach.reset_mock()
         hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
         await hass.async_block_till_done()
+        session.detach.assert_not_called()
 
-    stop.assert_called_once_with()
-    shutdown.assert_awaited_once_with()
-    assert coordinator.controller is None
+
+async def test_setup_error_joins_stop_cleanup_already_in_progress(
+    hass: HomeAssistant, enable_custom_integrations: None, mock_controller: MagicMock
+) -> None:
+    """An already scheduled stop is not mistaken for completed setup-error cleanup."""
+    entry = _make_config_entry(hass)
+    session = _attach_mock_session(mock_controller)
+    closing = asyncio.Event()
+    release = asyncio.Event()
+    close_runtime = UnifiPresenceCoordinator._async_close_runtime_controller
+
+    async def close(coordinator: UnifiPresenceCoordinator) -> None:
+        closing.set()
+        await release.wait()
+        await close_runtime(coordinator)
+
+    async def forward(*args, **kwargs) -> None:
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+        await closing.wait()
+        raise RuntimeError("forward failed during stop")
+
+    with (
+        patch(PATCH_CREATE_CONTROLLER, return_value=mock_controller),
+        patch.object(UnifiPresenceCoordinator, "_async_close_runtime_controller", new=close),
+        patch.object(hass.config_entries, "async_forward_entry_setups", side_effect=forward),
+    ):
+        setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
+        await closing.wait()
+        runtime = entry.runtime_data
+        assert runtime._stopping
+        assert not setup.done()
+        session.detach.assert_not_called()
+        release.set()
+        assert not await setup
+        await hass.async_block_till_done()
+    assert_stopped(runtime)
+    _assert_session_cleanup(session)
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+@pytest.mark.parametrize("route", ["unload", "stop_event"])
+async def test_lifecycle_drains_outstanding_runtime_work(  # noqa: PLR0915 - Keep barriers and lifecycle assertions together.
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    mock_controller: MagicMock,
+    replacement: bool,
+    route: str,
+) -> None:
+    """Real unload and HA-stop join refresh/factory work without late publication."""
+    coordinator = loaded_entry.runtime_data
+    original_session = _attach_mock_session(mock_controller)
+    late = make_mock_controller()
+    late_session = _attach_mock_session(late)
+    mac = coordinator.tracked_devices[0]
+    now = int(dt_util.utcnow().timestamp())
+    coordinator.process_message(MagicMock(data={"mac": mac, "last_seen": now}))
+    previous = coordinator.data
+    started = asyncio.Event()
+    release = asyncio.Event()
+    stopping = asyncio.Event()
+    cleanup_runtime = coordinator._async_shutdown_runtime
+
+    async def cleanup() -> None:
+        stopping.set()
+        await cleanup_runtime()
+
+    async def create(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return late
+
+    async def update() -> None:
+        if replacement:
+            raise aiounifi.LoginRequired
+        started.set()
+        await release.wait()
+        mock_controller.clients[mac] = _make_mock_client(mac, name="Late", last_seen=now)
+
+    with (
+        patch(PATCH_CREATE_CONTROLLER, side_effect=create) as factory,
+        patch.object(mock_controller.clients, "update_mock", side_effect=update),
+        patch.object(coordinator, "_async_shutdown_runtime", side_effect=cleanup),
+    ):
+        async with asyncio.timeout(5):
+            refresh = hass.async_create_task(coordinator.async_refresh())
+            await started.wait()
+            if route == "unload":
+                exiting = hass.async_create_task(hass.config_entries.async_unload(loaded_entry.entry_id))
+            else:
+                hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+                exiting = None
+            await stopping.wait()
+            assert coordinator._stopping
+            assert not coordinator._shutdown_task.done()
+            late_session.detach.assert_not_called()
+            if not replacement:
+                original_session.detach.assert_not_called()
+            release.set()
+            await refresh
+            if exiting is not None:
+                assert await exiting
+            await coordinator.async_shutdown()
+            await hass.async_block_till_done()
+
+    assert coordinator.data is previous
+    assert_stopped(coordinator)
+    _assert_session_cleanup(original_session)
+    _assert_session_cleanup(late_session, owned=replacement)
+    assert factory.await_count == int(replacement)
+
+
+@pytest.mark.parametrize("full_stop", [False, True])
+async def test_shutdown_joins_socket_cleanup_before_session_detach(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, mock_controller: MagicMock, full_stop: bool
+) -> None:
+    """Both stop-event and full HA stop wait for the socket child and health wrapper."""
+    coordinator = loaded_entry.runtime_data
+    ws = coordinator.websocket
+    await ws.stop_and_wait()
+    started = asyncio.Event()
+    cancelling = asyncio.Event()
+    release = asyncio.Event()
+    original_new_data = mock_controller.messages.new_data
+    session = _attach_mock_session(mock_controller)
+    detach = session.detach.side_effect
+
+    def detach_after_wrapper() -> None:
+        assert mock_controller.messages.new_data is original_new_data
+        assert ws._unsub_messages is None
+        detach()
+
+    session.detach.side_effect = detach_after_wrapper
+
+    async def socket() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    mock_controller.start_websocket.side_effect = socket
+    ws.start()
+    await started.wait()
+    runner = ws.ws_task
+    if full_stop:
+        exiting = hass.async_create_task(hass.async_stop())
+    else:
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+        # Stop and real entry unload must join the same pending socket cleanup.
+        exiting = hass.async_create_task(hass.config_entries.async_unload(loaded_entry.entry_id))
+    await cancelling.wait()
+    assert not runner.done()
+    session.detach.assert_not_called()
+    assert not coordinator._shutdown_task.done()
+    release.set()
+    if exiting is not None:
+        await exiting
+    await coordinator.async_shutdown()
+    assert runner.done()
+    assert_stopped(coordinator)
+    _assert_session_cleanup(session)
+
+
+async def test_full_stop_drains_cancelled_background_refresh(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, mock_controller: MagicMock
+) -> None:
+    """HA cancels scheduled work before its stop event, but cleanup still owns it."""
+    coordinator = loaded_entry.runtime_data
+    session = _attach_mock_session(mock_controller)
+    started = asyncio.Event()
+    cancelling = asyncio.Event()
+    release = asyncio.Event()
+
+    async def update() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    with patch.object(mock_controller.clients, "update_mock", side_effect=update):
+        coordinator._async_unsub_refresh()
+        refresh = loaded_entry.async_create_background_task(
+            hass, coordinator._handle_refresh_interval(), "shutdown scheduled refresh", eager_start=True
+        )
+        await started.wait()
+        exiting = hass.async_create_task(hass.async_stop())
+        await cancelling.wait()
+        assert coordinator._stopping
+        assert not exiting.done()
+        session.detach.assert_not_called()
+        release.set()
+        await exiting
+        assert refresh.cancelled()
+    assert_stopped(coordinator)
+    _assert_session_cleanup(session)
 
 
 async def test_unload_unregisters_shutdown_listener(

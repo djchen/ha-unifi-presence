@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from homeassistant import config_entries
@@ -91,7 +91,7 @@ class _MockClientStore(dict[str, Any]):
 
     def __init__(self, items: list[tuple[str, Any]] | None = None) -> None:
         super().__init__(items or [])
-        self.update_mock = AsyncMock()
+        self.update_mock = AsyncMock(return_value=None)
 
     async def update(self) -> None:
         await self.update_mock()
@@ -101,19 +101,19 @@ def _build_controller(
     *,
     clients: MagicMock | _MockClientStore,
     clients_all: MagicMock | _MockClientStore | None = None,
-) -> MagicMock:
+) -> Mock:
     """Create a fully wired controller mock with shared defaults."""
-    controller = MagicMock()
+    controller = Mock()
     controller.clients = clients
     if clients_all is not None:
         controller.clients_all = clients_all
     else:
         controller.clients_all = _MockClientStore()
     controller.login = AsyncMock()
-    controller.messages = MagicMock()
-    controller.messages.subscribe = MagicMock(return_value=MagicMock())
-    controller.messages.new_data = MagicMock()
-    controller.connectivity = MagicMock()
+    controller.messages = Mock()
+    controller.messages.subscribe = Mock(return_value=Mock())
+    controller.messages.new_data = Mock()
+    controller.connectivity = Mock()
     controller.connectivity.ws_message_received = None
     controller.start_websocket = AsyncMock()
     controller._unifi_presence_owned_session = None
@@ -125,13 +125,13 @@ def make_mock_controller(
     clients_all_items: list[tuple[str, Any]] | None = None,
     clients_items: list[tuple[str, Any]] | None = None,
     sites: list[Any] | None = None,
-) -> MagicMock:
+) -> Mock:
     """Create a fully-wired controller mock for flow and integration tests."""
     controller = _build_controller(
         clients=_MockClientStore(clients_items),
         clients_all=_MockClientStore(clients_all_items),
     )
-    controller.sites = MagicMock()
+    controller.sites = Mock()
     controller.sites.update = AsyncMock()
     controller.sites.values.return_value = (
         sites if sites is not None else [_make_mock_site(DEFAULT_SITE_ID, "default", "Home")]
@@ -142,11 +142,11 @@ def make_mock_controller(
 _mock_controller = make_mock_controller
 
 
-def _attach_mock_session(controller: MagicMock, *, owned: bool = True) -> MagicMock:
+def _attach_mock_session(controller: Mock, *, owned: bool = True) -> Mock:
     """Attach an explicit session wrapper sharing a connector with Home Assistant."""
-    connector = MagicMock()
+    connector = Mock()
     connector.close = AsyncMock()
-    session = MagicMock(closed=False, connector=connector)
+    session = Mock(closed=False, connector=connector)
     session.close = AsyncMock()
     session.shared_connector = connector
 
@@ -160,7 +160,7 @@ def _attach_mock_session(controller: MagicMock, *, owned: bool = True) -> MagicM
     return session
 
 
-def _assert_session_cleanup(session: MagicMock, *, owned: bool = True) -> None:
+def _assert_session_cleanup(session: Mock, *, owned: bool = True) -> None:
     """Verify only an owned wrapper detached, without closing the shared connector."""
     assert session.closed is owned
     assert session.detach.call_count == int(owned)
@@ -326,7 +326,7 @@ async def coordinator_config_entry(hass: HomeAssistant) -> AsyncGenerator[MagicM
 
 
 @pytest.fixture
-def mock_coordinator_controller() -> Generator[MagicMock]:
+def mock_coordinator_controller() -> Generator[Mock]:
     """Fixture to mock the aiounifi Controller for coordinator tests."""
     controller = _build_controller(
         clients=_MockClientStore(),
@@ -341,7 +341,7 @@ def mock_coordinator_controller() -> Generator[MagicMock]:
 
 
 @pytest.fixture
-def mock_controller() -> MagicMock:
+def mock_controller() -> Mock:
     """Fully-wired mock aiounifi controller for integration tests."""
     clients = _MockClientStore()
     return _build_controller(clients=clients)

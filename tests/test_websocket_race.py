@@ -118,8 +118,7 @@ async def test_restart_with_current_controller_cancels_inflight_reconnect_task(
     await asyncio.wait_for(started.wait(), timeout=1)
 
     # Simulate an in-flight _reconnect_task (e.g. from a prior health-check reconnect)
-    stale_task = MagicMock()
-    stale_task.cancel = MagicMock()
+    stale_task = hass.async_create_background_task(asyncio.Event().wait(), "stale reconnect")
     ws._reconnect_task = stale_task
 
     started.clear()
@@ -128,7 +127,7 @@ async def test_restart_with_current_controller_cancels_inflight_reconnect_task(
     await asyncio.wait_for(started.wait(), timeout=1)
 
     # The stale _reconnect_task should have been cancelled and cleared
-    stale_task.cancel.assert_called_once()
+    assert stale_task.cancelled()
     # After reconnect(), _reconnect_task should be None (not the stale one)
     assert ws._reconnect_task is None
 
