@@ -80,6 +80,10 @@
       "no_devices": "You must select at least one device to track"
     },
     "abort": {
+      "configuration_changed": "The configuration changed during validation. Please retry.",
+      "settings_saved_reload_scheduled": "Settings saved; reload scheduled. Site identity verification is not yet complete.",
+      "site_identity_conflict": "The upgraded site's identity conflicts with another entry or entity. Resolve the conflict, then reload this entry. Do not delete and re-add it.",
+      "site_identity_pending": "Use the existing entry instead of adding another. Reload it, enable it if disabled, or restart Home Assistant after resolving a failed unload.",
       "already_configured": "This UniFi controller and site are already configured",
       "no_clients_available": "No UniFi clients are available for this site. Ensure the client appears in UniFi Client Devices, then try again.",
       "no_sites_available": "No UniFi sites are available for this controller. Ensure the account can access a site, then try again.",
@@ -125,6 +129,12 @@
     }
   },
   "exceptions": {
+    "cannot_verify_site_identity": {
+      "message": "Unable to verify the current UniFi site identity. Setup will retry."
+    },
+    "site_identity_conflict": {
+      "message": "The upgraded site's identity conflicts with another entry or entity. Resolve the conflict, then reload this entry. Do not delete and re-add it."
+    },
     "credentials_rejected": {
       "message": "Credentials rejected by the UniFi controller"
     },

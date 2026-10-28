@@ -136,6 +136,14 @@ def make_mock_controller(
     controller.sites.values.return_value = (
         sites if sites is not None else [_make_mock_site(DEFAULT_SITE_ID, "default", "Home")]
     )
+    controller.request = AsyncMock(
+        return_value={
+            "data": [
+                {"_id": site.site_id, "name": site.name, "desc": site.description}
+                for site in controller.sites.values.return_value
+            ]
+        }
+    )
     return controller
 
 

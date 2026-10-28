@@ -10,9 +10,10 @@ import aiohttp
 import aiounifi
 from aiohttp import CookieJar
 from aiounifi.controller import Controller
+from aiounifi.models.api import TypedApiResponse
 from aiounifi.models.client import Client
 from aiounifi.models.configuration import Configuration
-from aiounifi.models.site import Site
+from aiounifi.models.site import Site, SiteListRequest
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -37,6 +38,62 @@ UNIFI_COMMUNICATION_EXCEPTIONS: tuple[type[Exception], ...] = (
     aiohttp.ClientError,
     JSONDecodeError,
 )
+
+
+class SiteSnapshotError(ValueError):
+    """The current site response cannot safely establish identity evidence."""
+
+
+class _SiteSnapshotRequest(SiteListRequest):
+    """Retain public site request behavior, guarding only decoder structure."""
+
+    def decode(self, raw: bytes) -> TypedApiResponse:
+        """Keep auth/JSON errors intact and narrowly classify structural errors."""
+        try:
+            return super().decode(raw)
+        except (KeyError, TypeError) as err:
+            raise SiteSnapshotError("Invalid site response structure") from err
+
+
+async def async_fetch_site_snapshot(controller: Controller) -> tuple[Site, ...]:
+    """Fetch validated, detached response-only sites, never accumulated cache."""
+    async with asyncio.timeout(CONTROLLER_REQUEST_TIMEOUT):
+        connectivity = controller.connectivity
+        can_retry_login = connectivity.can_retry_login
+        try:
+            # aiounifi 96 login resets this flag, making its request retry recursive.
+            # Own the single retry here, including login in the total deadline.
+            connectivity.can_retry_login = False
+            try:
+                response = await controller.request(_SiteSnapshotRequest.create())
+            except aiounifi.LoginRequired:
+                if not can_retry_login:
+                    raise
+                await controller.login()
+                connectivity.can_retry_login = False
+                response = await controller.request(_SiteSnapshotRequest.create())
+        finally:
+            connectivity.can_retry_login = can_retry_login
+        if not isinstance(response, Mapping) or not isinstance(response.get("data"), list):
+            raise SiteSnapshotError("Invalid site response data")
+        sites: list[Site] = []
+        seen: set[str] = set()
+        for row in response["data"]:
+            if not isinstance(row, Mapping):
+                raise SiteSnapshotError("Invalid site record")
+            site_id, name, description = row.get("_id"), row.get("name"), row.get("desc")
+            if (
+                not isinstance(site_id, str)
+                or not site_id
+                or site_id in seen
+                or not isinstance(name, str)
+                or not name
+                or (description is not None and not isinstance(description, str))
+            ):
+                raise SiteSnapshotError("Invalid site identity or description")
+            seen.add(site_id)
+            sites.append(Site({**row, "desc": description or ""}))
+        return tuple(sites)
 
 
 @dataclass(slots=True, frozen=True)

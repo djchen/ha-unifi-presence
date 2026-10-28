@@ -22,6 +22,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorConfig,
     SelectSelectorMode,
 )
+from homeassistant.helpers.typing import UNDEFINED
 
 from .const import (
     CONF_AWAY_SECONDS,
@@ -41,14 +42,24 @@ from .helpers import (
     UNIFI_AUTH_EXCEPTIONS,
     UNIFI_COMMUNICATION_EXCEPTIONS,
     ControllerConnectionParams,
+    SiteSnapshotError,
     async_close_controller,
     async_fetch_all_clients,
+    async_fetch_site_snapshot,
     config_entry_site_id,
     create_controller_for_params,
     normalize_mac,
     normalize_macs,
     site_title,
     tracker_unique_id,
+)
+from .site_identity import (
+    _async_migrate_tracker_unique_ids,
+    build_tracker_migration_plan,
+    entry_snapshot_matches,
+    resolve_network_11_site,
+    same_endpoint,
+    tracker_migration_source,
 )
 
 if TYPE_CHECKING:
@@ -145,54 +156,19 @@ def _async_remove_deselected_entities(
         return
 
     entity_registry = er.async_get(hass)
-    site_id = config_entry_site_id(entry)
-    removed_unique_ids = {tracker_unique_id(site_id, mac) for mac in removed_macs}
+    site_ids = {config_entry_site_id(entry)}
+    try:
+        old_site_id = tracker_migration_source(entry.unique_id, entry.data)
+    except ValueError:
+        # Invalid metadata must not authorize deletion under another site ID.
+        old_site_id = None
+    if old_site_id is not None:
+        site_ids.add(old_site_id)
+    removed_unique_ids = {tracker_unique_id(site_id, mac) for site_id in site_ids for mac in removed_macs}
 
     for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         if registry_entry.unique_id in removed_unique_ids:
             entity_registry.async_remove(registry_entry.entity_id)
-
-
-@callback
-def _async_migrate_tracker_unique_ids(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    *,
-    old_site_id: str,
-    new_site_id: str,
-) -> bool:
-    """Preflight and migrate legacy tracker IDs, returning False on any conflict."""
-    if old_site_id == new_site_id:
-        return True
-
-    entity_registry = er.async_get(hass)
-    legacy_prefix = f"{old_site_id}-"
-    migration_plan: list[tuple[str, str]] = []
-    target_ids: set[tuple[str, str, str]] = set()
-
-    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
-        if not registry_entry.unique_id.startswith(legacy_prefix):
-            continue
-
-        mac = normalize_mac(registry_entry.unique_id.removeprefix(legacy_prefix))
-        if not mac:
-            continue
-
-        new_unique_id = tracker_unique_id(new_site_id, mac)
-        target_id = (registry_entry.domain, registry_entry.platform, new_unique_id)
-        existing_entity_id = entity_registry.async_get_entity_id(*target_id)
-        if target_id in target_ids or existing_entity_id not in (None, registry_entry.entity_id):
-            return False
-        target_ids.add(target_id)
-        migration_plan.append((registry_entry.entity_id, new_unique_id))
-
-    for entity_id, new_unique_id in migration_plan:
-        entity_registry.async_update_entity(
-            entity_id,
-            new_unique_id=new_unique_id,
-        )
-
-    return True
 
 
 def _build_client_options(
@@ -314,11 +290,19 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         assert controller is not None
 
         try:
-            await controller.sites.update()
-            self._available_sites = {site.site_id: site for site in controller.sites.values()}
+            sites = await async_fetch_site_snapshot(controller)
+            self._available_sites = {site.site_id: site for site in sites}
             self._available_clients = {}
-        except Exception:
-            _LOGGER.exception("Failed to fetch site list")
+        except UNIFI_AUTH_EXCEPTIONS:
+            return "invalid_auth"
+        except UNIFI_COMMUNICATION_EXCEPTIONS:
+            _LOGGER.warning("Could not verify UniFi site list")
+            return "cannot_connect"
+        except SiteSnapshotError:
+            _LOGGER.warning("Invalid UniFi site list")
+            return "cannot_connect"
+        except Exception:  # noqa: BLE001 - Preserve the site's existing form-error behavior without payload logging.
+            _LOGGER.warning("Failed to fetch UniFi site list")
             return "cannot_connect"
         finally:
             await async_close_controller(controller)
@@ -391,12 +375,21 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def _async_finish_reconfigure(self, site: Site) -> ConfigFlowResult:
+    async def _async_finish_reconfigure(
+        self,
+        site: Site,
+        *,
+        original_unique_id: str | None,
+        original_data: Mapping[str, object],
+        deferred: bool,
+    ) -> ConfigFlowResult:
         """Validate and save the already-configured site during reconfigure."""
         reconfigure_entry = self._get_reconfigure_entry()
         error = await self._async_load_selected_site_clients(
             log_context="UniFi reconfigure site validation",
         )
+        if not entry_snapshot_matches(self.hass, reconfigure_entry, original_unique_id, original_data):
+            return self.async_abort(reason="configuration_changed")
         if error is not None:
             return self._show_reconfigure_form(errors={"base": error})
 
@@ -404,9 +397,20 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         # after validation and controller cleanup so another flow cannot claim an ID.
         existing_entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, self._site_id)
         if existing_entry is not None and existing_entry.entry_id != reconfigure_entry.entry_id:
-            return self.async_abort(reason="already_configured")
+            return self.async_abort(reason="site_identity_conflict" if deferred else "already_configured")
 
-        if not _async_migrate_tracker_unique_ids(
+        if deferred:
+            if (
+                build_tracker_migration_plan(
+                    self.hass,
+                    reconfigure_entry,
+                    old_site_id=original_unique_id or reconfigure_entry.entry_id,
+                    new_site_id=self._site_id,
+                )
+                is None
+            ):
+                return self.async_abort(reason="site_identity_conflict")
+        elif not _async_migrate_tracker_unique_ids(
             self.hass,
             reconfigure_entry,
             old_site_id=reconfigure_entry.unique_id or reconfigure_entry.entry_id,
@@ -416,7 +420,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_update_reload_and_abort(
             reconfigure_entry,
-            unique_id=self._site_id,
+            unique_id=UNDEFINED if deferred else self._site_id,
+            reason="settings_saved_reload_scheduled" if deferred else UNDEFINED,
             title=f"{site_title(site)} ({self._host})",
             data_updates={
                 CONF_HOST: self._host,
@@ -432,6 +437,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         """Complete site selection for the initial user flow."""
         await self.async_set_unique_id(self._site_id)
         self._abort_if_unique_id_configured()
+        if self._has_pending_site_identity():
+            return self.async_abort(reason="site_identity_pending")
 
         is_single_site = len(self._available_sites) == 1
         error = await self._async_load_selected_site_clients(log_context="UniFi site client discovery")
@@ -444,6 +451,17 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_clients_available")
 
         return await self.async_step_devices()
+
+    def _has_pending_site_identity(self) -> bool:
+        """Read current entries, including disabled/failed-unload entries."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if same_endpoint(entry.data, self._host, self._port):
+                candidate = resolve_network_11_site(
+                    entry.unique_id, entry.data.get(CONF_SITE), tuple(self._available_sites.values())
+                )
+                if candidate is not None and candidate.site_id == self._site_id:
+                    return True
+        return False
 
     async def async_step_user(self, user_input: dict[str, object] | None = None) -> ConfigFlowResult:
         """Handle the initial step: UniFi controller credentials."""
@@ -556,9 +574,11 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle reconfiguration of controller credentials."""
         errors: dict[str, str] = {}
         reconfigure_entry = self._get_reconfigure_entry()
-        current_data = reconfigure_entry.data
+        current_data: Mapping[str, object] = reconfigure_entry.data
 
         if user_input is not None:
+            original_unique_id = reconfigure_entry.unique_id
+            current_data = dict(reconfigure_entry.data)
             self._store_connection_input(
                 user_input,
                 ssl_verify_default=bool(current_data[CONF_SSL_VERIFY]),
@@ -569,16 +589,24 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 log_context="UniFi reconfigure",
                 site=self._site,
             )
+            if not entry_snapshot_matches(self.hass, reconfigure_entry, original_unique_id, current_data):
+                return self.async_abort(reason="configuration_changed")
             if error is not None:
                 errors["base"] = error
             elif not self._available_sites:
                 return self.async_abort(reason="no_sites_available")
             else:
+                deferred = False
                 current_site = _find_reconfigure_site(
                     self._available_sites,
-                    entry_unique_id=reconfigure_entry.unique_id,
+                    entry_unique_id=original_unique_id,
                     stored_site=current_data.get(CONF_SITE),
                 )
+                if current_site is None and same_endpoint(current_data, self._host, self._port):
+                    current_site = resolve_network_11_site(
+                        original_unique_id, current_data.get(CONF_SITE), tuple(self._available_sites.values())
+                    )
+                    deferred = current_site is not None
                 if current_site is None:
                     # Legacy IDs contain an underscore; modern site IDs do not.
                     is_legacy_entry = reconfigure_entry.unique_id is None or "_" in reconfigure_entry.unique_id
@@ -587,7 +615,9 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                     current_site = next(iter(self._available_sites.values()))
 
                 self._set_selected_site(current_site)
-                return await self._async_finish_reconfigure(current_site)
+                return await self._async_finish_reconfigure(
+                    current_site, original_unique_id=original_unique_id, original_data=current_data, deferred=deferred
+                )
 
         return self._show_reconfigure_form(errors=errors)
 
@@ -601,6 +631,8 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "no_devices"
             else:
                 self._abort_if_unique_id_configured()
+                if self._has_pending_site_identity():
+                    return self.async_abort(reason="site_identity_pending")
                 return self.async_create_entry(
                     title=f"{self._site_title} ({self._host})",
                     data={

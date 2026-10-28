@@ -164,7 +164,7 @@ async def test_reconfigure_flow_success(hass: HomeAssistant, populated: bool, ss
     for acquisition in create_controller.await_args_list:
         assert acquisition.args == (hass, ControllerConnectionParams(**new_data, site="default"))
         assert acquisition.kwargs == {"unique_id": None, "resolve_legacy_site": False}
-    site_controller.sites.update.assert_awaited_once_with()
+    site_controller.request.assert_awaited_once()
     site_controller.clients.update_mock.assert_not_awaited()
     site_controller.clients_all.update_mock.assert_not_awaited()
     client_controller.sites.update.assert_not_awaited()
@@ -311,7 +311,7 @@ async def test_reconfigure_flow_site_fetch_failure_shows_cannot_connect(hass: Ho
     """Test that reconfigure returns an error if the site list cannot be loaded."""
     entry = add_mock_config_entry(hass)
     controller = _mock_controller()
-    controller.sites.update.side_effect = aiounifi.AiounifiException
+    controller.request.side_effect = aiounifi.AiounifiException
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_reconfigure_step(hass, entry, make_reconfigure_input())
@@ -545,7 +545,7 @@ async def test_reconfigure_flow_matches_stored_site_for_legacy_or_missing_unique
     for acquisition, site in zip(create_controller.await_args_list, [stored_site, "default"], strict=True):
         assert acquisition.args == (hass, ControllerConnectionParams(**new_data, site=site))
         assert acquisition.kwargs == {"unique_id": None, "resolve_legacy_site": False}
-    controller.sites.update.assert_awaited_once_with()
+    controller.request.assert_awaited_once()
     controller.clients.update_mock.assert_not_awaited()
     controller.clients_all.update_mock.assert_not_awaited()
     client_controller.sites.update.assert_not_awaited()

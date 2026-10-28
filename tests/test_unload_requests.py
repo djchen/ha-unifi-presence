@@ -12,10 +12,132 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client as ha_http
 from pytest_aiohttp.plugin import AiohttpServer
 
-from custom_components.unifi_presence.helpers import async_close_controller
+from custom_components.unifi_presence.helpers import (
+    async_close_controller,
+    async_fetch_site_snapshot,
+    create_controller,
+)
 
 from .conftest import MOCK_CONFIG_DATA, add_mock_config_entry
+from .site_identity_helpers import NEW_ID, OLD_ID
 from .test_coordinator_shutdown import assert_stopped
+
+
+@pytest.mark.parametrize("mode", ["relogin", "rejected_auth", "persistent_401", "stall_headers", "stall_body"])
+async def test_setup_identity_real_request_deadline_and_login(  # noqa: PLR0915 - Assert real transport and setup cleanup together.
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+    aiohttp_server: AiohttpServer,
+    socket_enabled: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    """Site authentication is bounded without clock changes; stalled reads honor the deadline."""
+    release = asyncio.Event()
+    deadline_ready = asyncio.Event()
+    deadline = 5
+    login_count = site_count = 0
+    controllers = []
+
+    async def handle(request: web.Request) -> web.StreamResponse:
+        nonlocal login_count, site_count
+        if request.path.endswith("/login"):
+            login_count += 1
+            if mode == "rejected_auth" and login_count > 1:
+                return web.json_response({"meta": {"rc": "error", "msg": "api.err.Invalid"}})
+        if request.path.endswith("/self/sites"):
+            site_count += 1
+            if mode in ("persistent_401", "rejected_auth") or (mode == "relogin" and site_count == 1):
+                return web.Response(status=401)
+            if mode.startswith("stall"):
+                response = web.StreamResponse(headers={"Content-Type": "application/json"})
+                if mode == "stall_body":
+                    await response.prepare(request)
+                    await response.write(b'{"data":')
+                deadline_ready.set()
+                await release.wait()
+                return response
+            return web.json_response({"data": [{"_id": NEW_ID, "name": "default"}]})
+        return web.json_response({"meta": {"rc": "ok"}, "data": []})
+
+    async def capture(*args, **kwargs):
+        controller = await create_controller(*args, **kwargs)
+        controllers.append(controller)
+        return controller
+
+    async def bounded_fetch(controller):
+        # Keep the owned session's individual HTTP timeout at 10 seconds,
+        # proving the logical operation deadline bounds re-login and body reads.
+        assert controller.connectivity.config.session.timeout.total == 10
+        with patch("custom_components.unifi_presence.helpers.CONTROLLER_REQUEST_TIMEOUT", deadline):
+            return await async_fetch_site_snapshot(controller)
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", handle)
+    server = await aiohttp_server(app)
+    connector = TCPConnector()
+    monkeypatch.setattr(ha_http, "_async_get_connector", lambda *args, **kwargs: connector)
+    entry = add_mock_config_entry(
+        hass, unique_id=OLD_ID, data={**MOCK_CONFIG_DATA, CONF_HOST: server.host, CONF_PORT: server.port}
+    )
+    setup = None
+    try:
+        with (
+            patch.object(Configuration, "url", new_callable=PropertyMock, return_value=str(server.make_url(""))),
+            patch("custom_components.unifi_presence.helpers.create_controller", side_effect=capture) as create,
+            patch(
+                "custom_components.unifi_presence.coordinator.async_fetch_site_snapshot", side_effect=bounded_fetch
+            ) as fetch,
+            patch("aiounifi.controller.Controller.start_websocket", new_callable=AsyncMock),
+        ):
+            async with asyncio.timeout(15):
+                setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
+                if mode in ("stall_headers", "stall_body"):
+                    await deadline_ready.wait()
+                    assert not setup.done()
+                    # Establish the stalled response before expiring
+                    # the logical timer; individual HTTP deadlines remain later.
+                    loop = asyncio.get_running_loop()
+                    real_time = loop.time
+                    with monkeypatch.context() as clock:
+                        clock.setattr(loop, "time", lambda: real_time() + deadline)
+                        success = await setup
+                else:
+                    success = await setup
+            assert len(controllers) == 1
+            create.assert_awaited_once()
+            fetch.assert_awaited_once_with(controllers[0])
+            assert site_count >= 1
+            session = controllers[0].connectivity.config.session
+            if mode == "relogin":
+                assert success
+                assert login_count == 2
+                assert site_count == 2
+                assert entry.unique_id == NEW_ID
+                assert await hass.config_entries.async_unload(entry.entry_id)
+            else:
+                assert not success
+                assert entry.unique_id == OLD_ID
+                auth_failure = mode in ("rejected_auth", "persistent_401")
+                assert entry.state is (ConfigEntryState.SETUP_ERROR if auth_failure else ConfigEntryState.SETUP_RETRY)
+                assert entry.error_reason_translation_key == (
+                    "credentials_rejected" if auth_failure else "cannot_connect"
+                )
+                if mode == "persistent_401":
+                    assert login_count == 2  # Initial authentication plus exactly one retry.
+                    assert site_count == 2
+            assert session.closed
+            assert not connector._acquired
+            assert not connector.closed
+    finally:
+        release.set()
+        if setup is not None:
+            if not setup.done():
+                setup.cancel()
+            await asyncio.gather(setup, return_exceptions=True)
+        for controller in controllers:
+            await async_close_controller(controller)
+        await connector.close()
 
 
 @pytest.mark.parametrize("request_kind", ["scheduled", "manual", "options"])
