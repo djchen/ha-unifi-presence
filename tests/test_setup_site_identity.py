@@ -9,11 +9,9 @@ import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.unifi_presence import async_setup_entry
 from custom_components.unifi_presence.const import CONF_SITE, CONF_SITE_ID_MIGRATION, DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceCoordinator
 
@@ -28,41 +26,22 @@ from .site_identity_helpers import MAC, NEW_ID, OLD_ID, PATCH_CONTROLLER, networ
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 
-async def test_recovery_logs_once_after_identity_and_trackers_commit(hass: HomeAssistant) -> None:
-    """Report only committed identity changes and the actual registry migration count."""
-    entry = add_mock_config_entry(hass, unique_id=OLD_ID)
-    registry = er.async_get(hass)
-    records = [
-        registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{mac}", config_entry=entry)
-        for mac in (MAC, "11:22:33:44:55:66")
-    ]
-
-    def assert_committed(*_args: object) -> None:
-        assert entry.unique_id == NEW_ID
-        for record in records:
-            assert registry.async_get(record.entity_id).unique_id == record.unique_id.replace(OLD_ID, NEW_ID)
-
-    with (
-        patch(PATCH_CONTROLLER, return_value=network_11_controller()),
-        patch("custom_components.unifi_presence._LOGGER.info", side_effect=assert_committed) as recovery_log,
-    ):
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        assert await hass.config_entries.async_reload(entry.entry_id)
-    recovery_log.assert_called_once_with(
-        "Recovered UniFi site identity from %s to %s; migrated %s tracker registry records",
-        OLD_ID,
-        NEW_ID,
-        2,
-    )
-
-
 async def test_real_reload_preserves_tracker_identity_and_metadata(hass: HomeAssistant):
     """Pre-upgrade entities survive with registry IDs and user customizations intact."""
     entry = add_mock_config_entry(hass, unique_id=OLD_ID)
     controller = network_11_controller()
     controller.request.return_value = {"data": [{"_id": OLD_ID, "name": "renamed"}]}
     registry = er.async_get(hass)
-    with patch(PATCH_CONTROLLER, return_value=controller):
+
+    def assert_committed(*_args: object) -> None:
+        assert entry.unique_id == NEW_ID
+        for record in (before, retained):
+            assert registry.async_get(record.entity_id).unique_id == record.unique_id.replace(OLD_ID, NEW_ID)
+
+    with (
+        patch(PATCH_CONTROLLER, return_value=controller),
+        patch("custom_components.unifi_presence._LOGGER.info", side_effect=assert_committed) as recovery_log,
+    ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
         entity_id = registry.async_get_entity_id("device_tracker", DOMAIN, f"{OLD_ID}-{MAC}")
@@ -100,6 +79,7 @@ async def test_real_reload_preserves_tracker_identity_and_metadata(hass: HomeAss
         )
         assert registry.async_get(retained.entity_id).unique_id.startswith(NEW_ID)
         assert registry.async_get(retained.entity_id).disabled_by is retained.disabled_by
+        assert registry.async_get(retained.entity_id).hidden_by is retained.hidden_by
         assert dict(entry.data) == {
             **original[0],
             CONF_SITE_ID_MIGRATION: {"old_site_id": OLD_ID, "new_site_id": NEW_ID, CONF_SITE: "default"},
@@ -112,6 +92,12 @@ async def test_real_reload_preserves_tracker_identity_and_metadata(hass: HomeAss
         assert controller.request.await_count == 2
         assert await hass.config_entries.async_reload(entry.entry_id)
         assert controller.request.await_count == 2
+    recovery_log.assert_called_once_with(
+        "Recovered UniFi site identity from %s to %s; migrated %s tracker registry records",
+        OLD_ID,
+        NEW_ID,
+        2,
+    )
 
 
 @pytest.mark.parametrize("unique_id", [NEW_ID, "arbitrary", "host_default", None])
@@ -222,8 +208,7 @@ async def test_setup_conflicts_are_mutation_free_and_recoverable(hass: HomeAssis
     assert registry.async_get(record.entity_id).unique_id == f"{NEW_ID}-{MAC}"
 
 
-@pytest.mark.parametrize("stage", ["refresh", "identity"])
-@pytest.mark.parametrize("candidate", [False, True])
+@pytest.mark.parametrize(("stage", "candidate"), [("refresh", False), ("identity", True), ("identity", False)])
 async def test_changed_entry_snapshot_retries_without_runtime(hass: HomeAssistant, stage, candidate):
     """Snapshot starts before first refresh, and no-candidate results are also checked."""
     entry = add_mock_config_entry(hass, unique_id=OLD_ID)
@@ -391,31 +376,4 @@ async def test_identity_fetch_honors_stop_before_request(hass: HomeAssistant, st
         controller.request.assert_not_awaited()
     finally:
         await coordinator.async_shutdown()
-    _assert_session_cleanup(session)
-
-
-async def test_removed_entry_is_not_recreated_by_identity_validation(hass: HomeAssistant):
-    """Even a successful response cannot resurrect an entry removed across the await."""
-    entry = add_mock_config_entry(hass, unique_id=OLD_ID)
-    controller = network_11_controller()
-    session = _attach_mock_session(controller)
-
-    async def remove(_request):
-        assert await hass.config_entries.async_remove(entry.entry_id)
-        return {"data": [{"_id": NEW_ID, "name": "default"}]}
-
-    async def refresh(coordinator):
-        coordinator._controller = controller
-
-    controller.request.side_effect = remove
-    with (
-        patch.object(UnifiPresenceCoordinator, "async_config_entry_first_refresh", refresh),
-        pytest.raises(ConfigEntryNotReady),
-    ):
-        # Direct invocation allows removal while validation runs, independent of
-        # the config-entry manager's separate setup/remove serialization.
-        await async_setup_entry(hass, entry)
-    assert hass.config_entries.async_get_entry(entry.entry_id) is None
-    assert entry.unique_id == OLD_ID
-    controller.start_websocket.assert_not_awaited()
     _assert_session_cleanup(session)

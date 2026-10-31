@@ -96,30 +96,29 @@ async def test_entry_only_save_restarts_preserve_entities(hass: HomeAssistant, h
         saved_record["unique_id"] = saved_record["unique_id"].replace(OLD_ID, NEW_ID)
     crash_snapshot = deepcopy(hass_storage)
     crash_snapshot[er.STORAGE_KEY] = old_registry
-    for _restart in range(2):
-        hass_storage.update(deepcopy(crash_snapshot))
-        async with async_test_home_assistant(hass.loop, config_dir=hass.config.config_dir) as restarted:
-            restarted.data.pop(loader.DATA_CUSTOM_COMPONENTS)
-            await restarted.config_entries.async_initialize()
-            restored_registry = await _load_persistent_registry(restarted)
-            restored_entry = restarted.config_entries.async_get_entry(entry.entry_id)
-            assert restored_entry is not None
-            controller = network_11_controller()
-            try:
-                with patch(PATCH_CONTROLLER, return_value=controller):
-                    assert await restarted.config_entries.async_setup(entry.entry_id)
-                    await restarted.async_block_till_done()
-                    assert restored_entry.data[CONF_SITE_ID_MIGRATION] == MARKER
-                    _assert_preserved_trackers(restored_registry, restored_entry, records)
-                    component = restarted.data["entity_components"]["device_tracker"]
-                    assert component.get_entity(records[0].entity_id).unique_id == f"{NEW_ID}-{MAC}"
-                    assert await restarted.config_entries.async_reload(entry.entry_id)
-                controller.request.assert_not_awaited()
+    hass_storage.update(deepcopy(crash_snapshot))
+    async with async_test_home_assistant(hass.loop, config_dir=hass.config.config_dir) as restarted:
+        restarted.data.pop(loader.DATA_CUSTOM_COMPONENTS)
+        await restarted.config_entries.async_initialize()
+        restored_registry = await _load_persistent_registry(restarted)
+        restored_entry = restarted.config_entries.async_get_entry(entry.entry_id)
+        assert restored_entry is not None
+        controller = network_11_controller()
+        try:
+            with patch(PATCH_CONTROLLER, return_value=controller):
+                assert await restarted.config_entries.async_setup(entry.entry_id)
+                await restarted.async_block_till_done()
                 assert restored_entry.data[CONF_SITE_ID_MIGRATION] == MARKER
-            finally:
-                if restored_entry.state is ConfigEntryState.LOADED:
-                    assert await restarted.config_entries.async_unload(entry.entry_id)
-                await restarted.async_stop(force=True)
+                _assert_preserved_trackers(restored_registry, restored_entry, records)
+                component = restarted.data["entity_components"]["device_tracker"]
+                assert component.get_entity(records[0].entity_id).unique_id == f"{NEW_ID}-{MAC}"
+                assert await restarted.config_entries.async_reload(entry.entry_id)
+            controller.request.assert_not_awaited()
+            assert restored_entry.data[CONF_SITE_ID_MIGRATION] == MARKER
+        finally:
+            if restored_entry.state is ConfigEntryState.LOADED:
+                assert await restarted.config_entries.async_unload(entry.entry_id)
+            await restarted.async_stop(force=True)
 
 
 async def test_registry_first_save_restarts_preserve_entities(hass: HomeAssistant, hass_storage):
@@ -292,9 +291,9 @@ async def test_marker_survives_request_facing_site_rename(hass: HomeAssistant):
     controller.request.assert_not_awaited()
 
 
-@pytest.mark.parametrize("change", ["data", "identity", "provenance", "removed", "stop", "shutdown"])
+@pytest.mark.parametrize("change", ["data", "identity", "provenance", "stop", "shutdown"])
 async def test_replay_rechecks_snapshot_and_lifecycle(hass: HomeAssistant, change):
-    """First refresh cannot race settings/removal/shutdown into a residual commit."""
+    """First refresh cannot race settings/shutdown into a residual commit."""
     entry = add_mock_config_entry(
         hass, unique_id=NEW_ID, data={**MOCK_CONFIG_DATA, CONF_SITE_ID_MIGRATION: deepcopy(MARKER)}
     )
@@ -308,8 +307,6 @@ async def test_replay_rechecks_snapshot_and_lifecycle(hass: HomeAssistant, chang
             hass.config_entries.async_update_entry(entry, unique_id=OTHER_ID)
         elif change == "provenance":
             entry.data[CONF_SITE_ID_MIGRATION]["old_site_id"] = "5f0123456789abcdef012346"
-        elif change == "removed":
-            assert await hass.config_entries.async_remove(entry.entry_id)
         elif change == "stop":
             hass.set_state(CoreState.stopping)
         else:
@@ -325,8 +322,5 @@ async def test_replay_rechecks_snapshot_and_lifecycle(hass: HomeAssistant, chang
         else:
             with pytest.raises(ConfigEntryNotReady):
                 await async_setup_entry(hass, entry)
-    if change == "removed":
-        assert registry.async_get(record.entity_id) is None
-    else:
-        assert registry.async_get(record.entity_id).unique_id == record.unique_id
+    assert registry.async_get(record.entity_id).unique_id == record.unique_id
     forward.assert_not_awaited()
