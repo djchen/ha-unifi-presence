@@ -122,15 +122,3 @@ def apply_tracker_migration_plan(hass: HomeAssistant, plan: list[tuple[str, str]
     registry = er.async_get(hass)
     for entity_id, unique_id in plan:
         registry.async_update_entity(entity_id, new_unique_id=unique_id)
-
-
-@callback
-def _async_migrate_tracker_unique_ids(
-    hass: HomeAssistant, entry: ConfigEntry, *, old_site_id: str, new_site_id: str
-) -> bool:
-    """Preserve the historical reconfigure helper's boolean contract."""
-    plan = build_tracker_migration_plan(hass, entry, old_site_id=old_site_id, new_site_id=new_site_id)
-    if plan is None:
-        return False
-    apply_tracker_migration_plan(hass, plan)
-    return True

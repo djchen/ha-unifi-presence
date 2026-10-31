@@ -18,7 +18,6 @@ from homeassistant.helpers import entity_registry as er
 
 from custom_components.unifi_presence.config_flow import (
     UnifiPresenceConfigFlow,
-    _async_migrate_tracker_unique_ids,
     _find_reconfigure_site,
 )
 from custom_components.unifi_presence.const import (
@@ -26,6 +25,7 @@ from custom_components.unifi_presence.const import (
     DOMAIN,
 )
 from custom_components.unifi_presence.helpers import ControllerConnectionParams
+from custom_components.unifi_presence.site_identity import apply_tracker_migration_plan, build_tracker_migration_plan
 
 from .conftest import (
     DEFAULT_SITE_ID,
@@ -69,8 +69,12 @@ async def unchanged_reconfigure_flow(hass: HomeAssistant) -> AsyncGenerator[Unif
     flow.context = {"source": config_entries.SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
     with (
         patch(
-            "custom_components.unifi_presence.config_flow._async_migrate_tracker_unique_ids",
-            wraps=_async_migrate_tracker_unique_ids,
+            "custom_components.unifi_presence.config_flow.build_tracker_migration_plan",
+            wraps=build_tracker_migration_plan,
+        ) as plan,
+        patch(
+            "custom_components.unifi_presence.config_flow.apply_tracker_migration_plan",
+            wraps=apply_tracker_migration_plan,
         ) as migrate,
         patch.object(flow, "async_update_reload_and_abort", wraps=flow.async_update_reload_and_abort) as persist,
     ):
@@ -78,6 +82,7 @@ async def unchanged_reconfigure_flow(hass: HomeAssistant) -> AsyncGenerator[Unif
         await hass.async_block_till_done()
         assert (dict(entry.data), dict(entry.options), entry.title, entry.unique_id) == original_entry
         assert er.async_entries_for_config_entry(registry, entry.entry_id) == original_entities
+        plan.assert_not_called()
         migrate.assert_not_called()
         persist.assert_not_called()
 
@@ -260,8 +265,12 @@ async def test_reconfigure_flow_rejects_same_named_site_with_different_modern_id
     with (
         patch(PATCH_CREATE_CONTROLLER, return_value=controller) as create_controller,
         patch(
-            "custom_components.unifi_presence.config_flow._async_migrate_tracker_unique_ids",
-            wraps=_async_migrate_tracker_unique_ids,
+            "custom_components.unifi_presence.config_flow.build_tracker_migration_plan",
+            wraps=build_tracker_migration_plan,
+        ) as plan,
+        patch(
+            "custom_components.unifi_presence.config_flow.apply_tracker_migration_plan",
+            wraps=apply_tracker_migration_plan,
         ) as migrate,
         assert_no_reconfigure_mutations(hass, entry),
     ):
@@ -270,6 +279,7 @@ async def test_reconfigure_flow_rejects_same_named_site_with_different_modern_id
 
         assert result["type"] is FlowResultType.ABORT
         assert result["reason"] == "different_site_selected"
+        plan.assert_not_called()
         migrate.assert_not_called()
         create_controller.assert_awaited_once()
     controller.clients.update_mock.assert_not_awaited()
@@ -583,8 +593,12 @@ async def test_reconfigure_flow_migrates_legacy_tracker_entity_unique_ids(
     with (
         patch(PATCH_CREATE_CONTROLLER, side_effect=[controller, client_controller]) as acquire,
         patch(
-            "custom_components.unifi_presence.config_flow._async_migrate_tracker_unique_ids",
-            wraps=_async_migrate_tracker_unique_ids,
+            "custom_components.unifi_presence.config_flow.build_tracker_migration_plan",
+            wraps=build_tracker_migration_plan,
+        ) as plan,
+        patch(
+            "custom_components.unifi_presence.config_flow.apply_tracker_migration_plan",
+            wraps=apply_tracker_migration_plan,
         ) as migrate,
         patch.object(
             hass.config_entries, "async_update_entry", wraps=hass.config_entries.async_update_entry
@@ -594,6 +608,7 @@ async def test_reconfigure_flow_migrates_legacy_tracker_entity_unique_ids(
             ("acquire", acquire),
             ("site_cleanup", site_session.detach),
             ("client_cleanup", client_session.detach),
+            ("planning", plan),
             ("migration", migrate),
             ("persistence", persist),
         ]:
@@ -608,6 +623,7 @@ async def test_reconfigure_flow_migrates_legacy_tracker_entity_unique_ids(
             "site_cleanup",
             "acquire",
             "client_cleanup",
+            "planning",
             "migration",
             "persistence",
         ]
@@ -807,9 +823,9 @@ async def test_migrate_tracker_unique_ids_checks_conflicts_in_actual_registry_sc
         "sensor", "other_platform", f"{DEFAULT_SITE_ID}-aa:bb:cc:dd:ee:ff", config_entry=entry
     )
 
-    assert _async_migrate_tracker_unique_ids(
-        hass, entry, old_site_id="192.168.1.1_default", new_site_id=DEFAULT_SITE_ID
-    )
+    plan = build_tracker_migration_plan(hass, entry, old_site_id="192.168.1.1_default", new_site_id=DEFAULT_SITE_ID)
+    assert plan is not None
+    apply_tracker_migration_plan(hass, plan)
     for entity in entities:
         migrated = registry.async_get(entity.entity_id)
         assert migrated is not None
@@ -829,12 +845,14 @@ async def test_migrate_tracker_unique_ids_skips_non_matching_entities(hass: Home
         suggested_object_id="other_phone",
     )
 
-    _async_migrate_tracker_unique_ids(
+    plan = build_tracker_migration_plan(
         hass,
         entry,
         old_site_id="192.168.1.1_default",
         new_site_id=DEFAULT_SITE_ID,
     )
+    assert plan == []
+    apply_tracker_migration_plan(hass, plan)
 
     unchanged = entity_registry.async_get(entity.entity_id)
     assert unchanged is not None

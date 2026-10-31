@@ -54,7 +54,7 @@ from .helpers import (
     tracker_unique_id,
 )
 from .site_identity import (
-    _async_migrate_tracker_unique_ids,
+    apply_tracker_migration_plan,
     build_tracker_migration_plan,
     entry_snapshot_matches,
     resolve_network_11_site,
@@ -399,24 +399,16 @@ class UnifiPresenceConfigFlow(ConfigFlow, domain=DOMAIN):
         if existing_entry is not None and existing_entry.entry_id != reconfigure_entry.entry_id:
             return self.async_abort(reason="site_identity_conflict" if deferred else "already_configured")
 
-        if deferred:
-            if (
-                build_tracker_migration_plan(
-                    self.hass,
-                    reconfigure_entry,
-                    old_site_id=original_unique_id or reconfigure_entry.entry_id,
-                    new_site_id=self._site_id,
-                )
-                is None
-            ):
-                return self.async_abort(reason="site_identity_conflict")
-        elif not _async_migrate_tracker_unique_ids(
+        plan = build_tracker_migration_plan(
             self.hass,
             reconfigure_entry,
-            old_site_id=reconfigure_entry.unique_id or reconfigure_entry.entry_id,
+            old_site_id=original_unique_id or reconfigure_entry.entry_id,
             new_site_id=self._site_id,
-        ):
-            return self.async_abort(reason="already_configured")
+        )
+        if plan is None:
+            return self.async_abort(reason="site_identity_conflict" if deferred else "already_configured")
+        if not deferred:
+            apply_tracker_migration_plan(self.hass, plan)
 
         return self.async_update_reload_and_abort(
             reconfigure_entry,

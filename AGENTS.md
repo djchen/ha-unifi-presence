@@ -35,7 +35,7 @@
 ## Tests And Edit Traps
 
 - Patch factories at the import site: flows/options use `config_flow.create_controller_for_params`; runtime tests use `coordinator.create_controller_for_params`; helper factory tests use `helpers.create_controller`.
-- Flow site-list tests configure `controller.request` responses, not only `sites.values()`. Runtime identity fetching is imported at `coordinator.async_fetch_site_snapshot`; the legacy migration wrapper remains imported at `config_flow._async_migrate_tracker_unique_ids`, with shared planning/application in `site_identity.py`. Use realistic ObjectId/UUID fixtures for eligible recovery, leaving ordinary `site-default-id` fixtures ineligible.
+- Flow site-list tests configure `controller.request` responses, not only `sites.values()`. Runtime identity fetching is imported at `coordinator.async_fetch_site_snapshot`; reconfigure imports `build_tracker_migration_plan` and `apply_tracker_migration_plan` from `site_identity.py`. Use realistic ObjectId/UUID fixtures for eligible recovery, leaving ordinary `site-default-id` fixtures ineligible.
 - Reuse `tests/conftest.py`'s `make_mock_controller()` and coordinator fixtures: client stores are dict-like with async `update()` (failures go on `update_mock`), while `sites.values()` is synchronous. Flow fixture `_bypass_setup` enables custom integrations and prevents real setup after entry creation.
 - Use `tests/websocket_helpers.py` for WebSocket mocks and task/start waits; coordinator fixtures run unload callbacks to clean up timers/controllers.
 - Keep `custom_components/unifi_presence/strings.json` and `translations/en.json` aligned; picker/error copy assertions live in `tests/test_config_flow_options.py`.
