@@ -5,6 +5,7 @@ from typing import Final
 DOMAIN: Final = "unifi_presence"
 
 CONF_SITE: Final = "site"
+CONF_SITE_ID_MIGRATION: Final = "site_id_migration"
 CONF_SSL_VERIFY: Final = "ssl_verify"
 CONF_AWAY_SECONDS: Final = "away_seconds"
 CONF_FALLBACK_POLL_INTERVAL: Final = "fallback_poll_interval"

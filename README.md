@@ -77,8 +77,34 @@ Use reconfigure to change controller connection settings without removing the in
 2. Open the **⋮** menu on the UniFi Presence card.
 3. Select **Reconfigure**.
 4. Update the host, port, username, password, or SSL verification settings.
-5. If multiple sites are available, confirm the current site.
-6. Submit to save and reload.
+5. Submit to validate access to the existing site, save settings, and schedule reload. Reconfigure does not offer arbitrary site selection.
+
+### UniFi Network 11 site identity changes
+
+After upgrading an existing UniFi site to Network 11, **reload the existing integration entry** (or restart Home Assistant). **Do not delete and re-add it.** Recovery during setup preserves entity IDs, customizations, and person/automation references.
+
+Reconfigure means **“Settings saved; reload scheduled”**, not recovery completed. Identity changes only after successful unload and verification during setup. If recovery fails, follow the troubleshooting guidance below rather than adding another entry.
+
+#### Recovery troubleshooting
+
+Saved connection settings can affect later reconnections even if reload fails. Recovery depends on the failure:
+
+- **Transient connection or site-verification failure during setup:** allow Home Assistant's automatic setup retries.
+- **Identity conflict with another entry or entity:** resolve ownership deliberately, then manually reload this entry. No automatic merging or deletion is performed.
+- **Failed unload:** resolve the underlying unload problem and **restart Home Assistant**. Another reload cannot recover a failed unload on the tested Home Assistant 2026.10.1; identity stays unchanged while old trackers remain active.
+- **Disabled entry:** enable it and complete setup; saving settings alone cannot migrate it.
+
+New setup blocks duplicates when an existing entry at the same endpoint can be identified as awaiting recovery, including disabled and failed-unload entries. Reuse that entry.
+
+#### Recovery behavior and limitations
+
+Recovery happens during setup, not through polling, WebSocket reconnects, options, or a firmware upgrade alone. Reauthentication can trigger recovery through its scheduled reload. If no eligible identity change is found, tracking continues with the existing identity.
+
+Preserved customizations include disabled/hidden state and associated-zone settings, including retained or unselected entities.
+
+Recovery retains the previous site identity so setup can finish migrating existing tracker records after an interrupted save, without creating replacement trackers.
+
+Automatic recovery requires an unchanged, unambiguous stored short site name. Reconfigure also requires the exact stored host and port; aliases and simultaneous endpoint/name changes are not supported. This is **not proof of physical controller identity**: a replacement controller or recreated site at the same address can be indistinguishable. Firmware downgrades, general duplicate merging, and history repair are outside automatic recovery.
 
 ## Removal
 <details>

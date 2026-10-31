@@ -212,7 +212,7 @@ async def test_user_step_no_clients_available_aborts(hass: HomeAssistant) -> Non
 async def test_user_step_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
     """Test that failing to fetch sites returns to the user step with an error."""
     controller = _mock_controller()
-    controller.sites.update = AsyncMock(side_effect=aiounifi.AiounifiException)
+    controller.request = AsyncMock(side_effect=aiounifi.AiounifiException)
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_user_step(hass, USER_STEP_INPUT)

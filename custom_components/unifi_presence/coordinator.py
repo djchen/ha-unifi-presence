@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from aiounifi.models.message import Message
+from aiounifi.models.site import Site
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -29,6 +30,7 @@ from .helpers import (
     ControllerConnectionParams,
     async_close_controller,
     async_fetch_all_clients,
+    async_fetch_site_snapshot,
     async_refresh_client_stores,
     config_entry_site_id,
     create_controller_for_params,
@@ -156,6 +158,22 @@ class UnifiPresenceCoordinator(DataUpdateCoordinator[UnifiPresenceData]):
         """Discard stopped work without cancelling its caller task."""
         if self._stopping:
             raise asyncio.CancelledError
+
+    async def async_fetch_identity_sites(self) -> tuple[Site, ...]:
+        """Verify identity using the authenticated controller under its lifetime lock."""
+        self._raise_if_stopping()
+        if self.hass.is_stopping:
+            raise asyncio.CancelledError
+        async with self._client_store_lock:
+            self._raise_if_stopping()
+            if self.hass.is_stopping:
+                raise asyncio.CancelledError
+            assert self._controller is not None
+            sites = await async_fetch_site_snapshot(self._controller)
+            self._raise_if_stopping()
+            if self.hass.is_stopping:
+                raise asyncio.CancelledError
+            return sites
 
     async def _async_close_runtime_controller(self) -> None:
         """Release the current controller session without stopping heartbeat tracking."""
