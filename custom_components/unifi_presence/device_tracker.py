@@ -2,9 +2,10 @@
 
 from typing import cast
 
-from homeassistant.components.device_tracker import ScannerEntity  # type: ignore[attr-defined]
+from homeassistant.components.device_tracker import ScannerEntity
 from homeassistant.components.device_tracker.const import SourceType
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -31,24 +32,16 @@ async def async_setup_entry(
 class UnifiPresenceTracker(CoordinatorEntity[UnifiPresenceCoordinator], ScannerEntity):
     """Represent a tracked UniFi client as a device tracker entity."""
 
+    # Explicitly opt out of ScannerEntity's fallback MAC-based device creation.
+    _attr_device_info = DeviceInfo()
     _attr_source_type = SourceType.ROUTER
-
-    @callback
-    def _async_mac_address_registered(self) -> bool:
-        """Opt out of ScannerEntity's automatic MAC-based device registration.
-
-        HA creates and links a device when this predicate matches another
-        integration's MAC. Keep these trackers entity-only while retaining
-        ScannerEntity's complete lifecycle, including associated-zone handling.
-        """
-        return False
 
     @property
     def entity_registry_enabled_default(self) -> bool:
         """Enable entities by default.
 
-        ScannerEntity disables entities when no device entry exists, but this
-        integration intentionally does not create per-client device entries.
+        ScannerEntity disables entities by default, but users explicitly select
+        the clients this integration tracks.
         """
         return True
 
