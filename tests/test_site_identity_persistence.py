@@ -14,7 +14,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_test_home_assistant
+from pytest_homeassistant.common import async_fire_time_changed, async_test_home_assistant
 
 from custom_components.unifi_presence import async_setup_entry
 from custom_components.unifi_presence.const import CONF_SITE, CONF_SITE_ID_MIGRATION, DOMAIN

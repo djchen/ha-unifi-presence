@@ -13,7 +13,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
-    "pytest-homeassistant-custom-component",
+    "pytest-homeassistant>=2026.11.0",
     "ruff",
 ]
 
@@ -22,11 +22,20 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_debug = true
 asyncio_default_fixture_loop_scope = "function"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # Core intentionally subclasses aiohttp's application (also ignored by Core tests).
+    "ignore:Inheritance class HomeAssistantApplication from web.Application is discouraged:DeprecationWarning",
+    # Core's aiogithubapi dependency still uses the archived backoff package.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16:DeprecationWarning:(backoff._decorator|backoff._async)",
+]
 addopts = [
+    # Home Assistant must install its httpx alias before respx is imported.
+    "-p", "no:respx",
     "--cov=custom_components.unifi_presence",
     "--cov-report=term-missing",
     "--cov-fail-under=98",

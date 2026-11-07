@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_test_home_assistant
+from pytest_homeassistant.common import MockConfigEntry, async_test_home_assistant
 
 from custom_components.unifi_presence.const import CONF_SITE_ID_MIGRATION, CONF_SSL_VERIFY, CONF_TRACKED_DEVICES, DOMAIN
 

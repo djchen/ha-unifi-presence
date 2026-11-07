@@ -285,6 +285,8 @@ uv run --locked --no-sync prek install
 
 Activation is not required, and `[tool.uv] package = false` prevents editable installation for Home Assistant custom-component tests.
 
+Tests use the official `pytest-homeassistant` package, which pins a matching Home Assistant release. The development dependency requires at least `2026.11.0`, matching the integration minimum; `uv.lock` records the exact tested versions. Upgrade the test package and regenerate the lockfile together, without overriding its Home Assistant pin.
+
 ### Testing
 
 ```bash

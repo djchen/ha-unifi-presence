@@ -12,7 +12,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.unifi_presence.const import DOMAIN
 from custom_components.unifi_presence.coordinator import UnifiPresenceData
@@ -101,12 +101,15 @@ def test_tracker_metadata_contract() -> None:
     assert tracker.mac_address == MAC
     assert tracker.has_entity_name is True
     assert tracker.entity_registry_enabled_default is True
+    assert isinstance(tracker.device_info, dr.DeviceInfo)
+    assert tracker.device_info.as_dict() == {}
 
 
 @pytest.mark.parametrize("device_timing", ["never", "before_setup", "after_setup"])
 async def test_trackers_remain_entity_only(
     hass: HomeAssistant,
     enable_custom_integrations: None,
+    caplog: pytest.LogCaptureFixture,
     device_timing: str,
 ) -> None:
     """A matching MAC from another integration must not create or link a device."""
@@ -134,6 +137,7 @@ async def test_trackers_remain_entity_only(
         entities = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
         assert len(entities) == 1
         entity = entities[0]
+        assert entity.entity_id == "device_tracker.phone"
         assert entity.unique_id == f"{entry.unique_id}-{MAC}"
         assert entity.device_id is None
         assert entity.disabled_by is None
@@ -142,6 +146,8 @@ async def test_trackers_remain_entity_only(
         assert state.state == "home"
         assert state.attributes["mac"] == MAC
         assert state.attributes["source_type"] == "router"
+        assert state.attributes["friendly_name"] == "Phone"
+        assert "does not provide device info" not in caplog.text
         assert not dr.async_entries_for_config_entry(device_registry, entry.entry_id)
         assert {device.id: device for device in device_registry.devices} == original_devices
 
