@@ -4,7 +4,6 @@ rules:
       allow:
         - actions/checkout
         - actions/create-github-app-token
-        - actions/setup-python
         - adrienverge/yamllint
         - astral-sh/setup-uv
         - astral-sh/ruff-pre-commit
@@ -18,8 +17,8 @@ rules:
   stale-action-refs:
     ignore:
       # These upstream validation actions do not publish version tags; the workflows still pin exact commits.
-      - validate.yml:68
-      - validate.yml:82
+      - validate.yml:66
+      - validate.yml:80
 
   unpinned-uses:
     config:
