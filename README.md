@@ -276,7 +276,7 @@ The integration also adds a system health summary to Home Assistant. It reports:
 
 ### Setup
 
-Install [uv](https://docs.astral.sh/uv/) as local bootstrap tooling first, then run the commands below. CI pins uv `0.12.5` explicitly.
+Install [uv](https://docs.astral.sh/uv/) as local bootstrap tooling first, then run the commands below. CI pins uv `0.13.6` explicitly and uses uv-managed Python `3.14.10`, matching upstream Core's `.python-version`.
 
 ```bash
 uv sync --locked
