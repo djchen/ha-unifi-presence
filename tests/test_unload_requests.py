@@ -3,8 +3,10 @@
 import asyncio
 from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 
+import aiounifi
 import pytest
 from aiohttp import TCPConnector, web
+from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT
@@ -316,7 +318,7 @@ async def test_unload_drains_stalled_http_request(  # noqa: PLR0915 - Keep real 
 
 @pytest.mark.parametrize("request_kind", ["scheduled", "manual", "discovery"])
 @pytest.mark.parametrize("blocked_store", ["sta", "user"])
-async def test_unload_bounds_repeated_login_retries(  # noqa: PLR0915 - Keep real retries and unload ownership together.
+async def test_unload_bounds_stalled_login_retry(  # noqa: PLR0915 - Keep real retries and unload ownership together.
     hass: HomeAssistant,
     enable_custom_integrations: None,
     aiohttp_server: AiohttpServer,
@@ -325,8 +327,9 @@ async def test_unload_bounds_repeated_login_retries(  # noqa: PLR0915 - Keep rea
     request_kind: str,
     blocked_store: str,
 ) -> None:
-    """Successful logins cannot extend a store update past its overall deadline."""
+    """A stalled request after relogin cannot extend a store update past its deadline."""
     retrying = asyncio.Event()
+    release = asyncio.Event()
     draining = asyncio.Event()
     rejecting = False
     login_count = client_count = active_requests = 0
@@ -337,8 +340,9 @@ async def test_unload_bounds_repeated_login_retries(  # noqa: PLR0915 - Keep rea
             login_count += 1
         if rejecting and request.path.endswith(f"/{blocked_store}"):
             client_count += 1
-            if client_count >= 3:
+            if client_count == 2:
                 retrying.set()
+                await release.wait()
             return web.Response(status=401)
         return web.json_response({"meta": {"rc": "ok"}, "data": []})
 
@@ -352,7 +356,7 @@ async def test_unload_bounds_repeated_login_retries(  # noqa: PLR0915 - Keep rea
         shared = ha_http.async_get_clientsession(hass)
         entry = add_mock_config_entry(hass, data={**MOCK_CONFIG_DATA, CONF_HOST: server.host, CONF_PORT: server.port})
 
-        # Keep authentication real: aiounifi's successful login re-enables its retry.
+        # Keep authentication real: aiounifi permits one relogin and request retry.
         with (
             patch.object(Configuration, "url", new_callable=PropertyMock, return_value=str(server.make_url(""))),
             patch("aiounifi.controller.Controller.start_websocket", new_callable=AsyncMock),
@@ -412,14 +416,14 @@ async def test_unload_bounds_repeated_login_retries(  # noqa: PLR0915 - Keep rea
                             else coordinator.async_refresh()
                         )
                     await retrying.wait()
-                    assert login_count >= 3
+                    assert login_count == 2
                     assert not operation.done()
                     unloading = hass.async_create_task(hass.config_entries.async_unload(entry.entry_id))
                     await draining.wait()
                     assert not unloading.done()
                     assert not session.closed
 
-                    # Expire the operation's real timer only after retries and the
+                    # Expire the operation's real timer only after the retry and the
                     # unload wait are established; the HTTP deadline is still far away.
                     loop = asyncio.get_running_loop()
                     real_time = loop.time
@@ -448,6 +452,7 @@ async def test_unload_bounds_repeated_login_retries(  # noqa: PLR0915 - Keep rea
                 assert response.status == 200
                 await response.read()
     finally:
+        release.set()
         if operation is not None and not operation.done():
             operation.cancel()
         await asyncio.gather(*(task for task in (operation, unloading) if task is not None), return_exceptions=True)
@@ -456,3 +461,23 @@ async def test_unload_bounds_repeated_login_retries(  # noqa: PLR0915 - Keep rea
         if shared is not None:
             shared.detach()
         await connector.close()
+
+
+@pytest.mark.parametrize("store", ["clients", "clients_all"])
+async def test_client_store_bounds_repeated_login_retries(store: str) -> None:
+    """Persistent rejection allows only one relogin, including subsequent updates."""
+    controller = Controller(Configuration(Mock(), host="controller", username="user", password="password"))
+    controller.connectivity.is_unifi_os = False
+    controller.connectivity.can_retry_login = True
+    with (
+        patch.object(controller.connectivity, "_request", AsyncMock(side_effect=aiounifi.LoginRequired)) as request,
+        patch.object(controller.connectivity, "login", AsyncMock()) as login,
+    ):
+        with pytest.raises(aiounifi.LoginRequired):
+            await getattr(controller, store).update()
+        assert request.await_count == 2
+        login.assert_awaited_once()
+        with pytest.raises(aiounifi.LoginRequired):
+            await getattr(controller, store).update()
+        assert request.await_count == 3
+        login.assert_awaited_once()
