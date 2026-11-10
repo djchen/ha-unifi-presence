@@ -33,7 +33,7 @@
 - Reconfigure preserves site identity across host changes. Network 11 name-based recovery additionally requires the exact stored host/port: read-only preflight, save settings/title, schedule reload, then independently revalidate/commit in setup after successful unload. Keep legacy reconfigure sequencing separate.
 - Failed unload requires HA restart on the locked version; disabled entries recover only during setup after enablement. New setup checks exact IDs and identifiable pending recovery at both site selection and final creation, without mutating existing entries.
 - Evidence must come from `helpers.async_fetch_site_snapshot()` using public `Controller.request()` and the global `SiteListRequest` path. `sites.update()` accumulates absent IDs and cannot prove replacement. Validate every row, preserve duplicate-name ambiguity, default descriptions on detached copies; classify structural decode errors only in the adapter.
-- Snapshot requests disable aiounifi's recursive login retry, permit at most one explicit relogin under one deadline, and restore the flag on every exit. Never log raw responses/errors; suppress exception chains when translating identity-fetch failures to HA setup errors.
+- Snapshot requests disable aiounifi's automatic login retry, permit at most one explicit relogin under one deadline, and restore the flag on every exit. Never log raw responses/errors; suppress exception chains when translating identity-fetch failures to HA setup errors.
 
 ## Test and edit traps
 
@@ -46,7 +46,7 @@
 
 ## Metadata and CI
 
-- `pyproject.toml` pins tested aiounifi (`==97`); `manifest.json` declares a runtime minimum (`>=97`). Preserve this distinction and refresh `uv.lock` for dependency changes.
+- `pyproject.toml` pins tested aiounifi (`==98`); `manifest.json` declares a runtime minimum (`>=98`). Preserve this distinction and refresh `uv.lock` for dependency changes.
 - Keep the HA minimum in `hacs.json`, the test-package floor, and README requirements aligned; Python requirements also live in `pyproject.toml` and `.python-version`.
 - Workflow actions are allowlisted and hash-pinned in `.github/zizmor.yml`; its `stale-action-refs` exceptions use workflow line numbers, so check them when moving steps.
 - Dispatch `.github/workflows/release.yml` from `main` with a higher `X.Y.Z` version (no `v`). It updates `pyproject.toml`, `manifest.json`, and `uv.lock` and opens `release/vX.Y.Z`; merging the marked release PR creates a draft release.

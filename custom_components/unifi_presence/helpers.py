@@ -61,8 +61,8 @@ async def async_fetch_site_snapshot(controller: Controller) -> tuple[Site, ...]:
         connectivity = controller.connectivity
         can_retry_login = connectivity.can_retry_login
         try:
-            # aiounifi 96 login resets this flag, making its request retry recursive.
-            # Own the single retry here, including login in the total deadline.
+            # Own the single retry here rather than using aiounifi's automatic
+            # relogin, including login in the total deadline.
             connectivity.can_retry_login = False
             try:
                 response = await controller.request(_SiteSnapshotRequest.create())

@@ -1,7 +1,6 @@
 """Network 11 policy, response-only dependency contracts, and registry preflight."""
 
 from copy import deepcopy
-from json import JSONDecodeError
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiounifi
@@ -123,7 +122,7 @@ async def test_real_request_snapshot_ignores_accumulated_cache(unifi_os):
         Configuration(Mock(), host="controller", username="user", password="password", site="office")
     )
     controller.connectivity.is_unifi_os = unifi_os
-    response = Mock(content_type="application/json")
+    response = Mock(content_type="application/json", status=200)
     old = orjson.dumps({"data": [{"_id": OLD_ID, "name": "office"}]})
     new = orjson.dumps({"data": [{"_id": NEW_ID, "name": "office"}]})
     with patch.object(
@@ -146,14 +145,14 @@ async def test_real_request_snapshot_ignores_accumulated_cache(unifi_os):
     [
         (b'{"meta":null,"data":[]}', SiteSnapshotError),
         (b'{"meta":{},"data":[]}', SiteSnapshotError),
-        (b"null", SiteSnapshotError),
-        (b"{", JSONDecodeError),
+        (b"null", aiounifi.ResponseError),
+        (b"{", aiounifi.RequestError),
         (b'{"meta":{"rc":"error","msg":"api.err.Invalid"}}', aiounifi.Unauthorized),
         (b'{"meta":{"rc":"error","msg":"api.err.LoginRequired"}}', aiounifi.LoginRequired),
     ],
 )
 async def test_real_decoder_error_classification(raw, error):
-    """Only decoder structural failures are translated by the adapter."""
+    """Adapter structural errors and dependency response errors remain distinct."""
     controller = Controller(Configuration(Mock(), host="controller", username="user", password="password"))
     with (
         patch.object(
