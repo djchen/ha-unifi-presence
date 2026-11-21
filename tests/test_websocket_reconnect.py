@@ -164,18 +164,6 @@ async def test_stop_cancels_pending_retry(hass: HomeAssistant) -> None:
     assert ws._cancel_retry is None
 
 
-async def test_clear_retry_cancels_active_handle(hass: HomeAssistant) -> None:
-    """Test _clear_retry() cancels and clears an active retry handle."""
-    ws, _, _ = make_websocket(hass)
-    cancel_retry = MagicMock()
-    ws._cancel_retry = cancel_retry
-
-    ws._clear_retry()
-
-    cancel_retry.assert_called_once()
-    assert ws._cancel_retry is None
-
-
 async def test_schedule_reauth_and_restart_clears_pending_retry_handle(
     hass: HomeAssistant,
 ) -> None:

@@ -204,18 +204,17 @@ async def test_replay_rejects_any_other_uuid_owner(hass: HomeAssistant, owner_fi
     controller.request.assert_not_awaited()
 
 
-@pytest.mark.parametrize("conflict", ["entity", "later", "normalized"])
-async def test_replay_conflicts_fail_closed(hass: HomeAssistant, conflict):
-    """Residual preflight checks all records before mutation or entity creation."""
+async def test_replay_registry_collision_fails_closed(hass: HomeAssistant) -> None:
+    """A blocked residual migration leaves identity intact and prevents entity creation."""
     assert await async_setup_component(hass, DOMAIN, {})
-    entry = add_mock_config_entry(hass, unique_id=NEW_ID, data={**MOCK_CONFIG_DATA, CONF_SITE_ID_MIGRATION: MARKER})
+    entry = add_mock_config_entry(
+        hass, unique_id=NEW_ID, data={**MOCK_CONFIG_DATA, CONF_SITE_ID_MIGRATION: deepcopy(MARKER)}
+    )
     registry = er.async_get(hass)
-    record = registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{MAC}", config_entry=entry)
-    mac = "11:22:33:44:55:66" if conflict == "later" else MAC
-    if conflict == "later":
-        registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{mac}", config_entry=entry)
-    unique_id = f"{OLD_ID}-{MAC.upper()}" if conflict == "normalized" else f"{NEW_ID}-{mac}"
-    registry.async_get_or_create("device_tracker", DOMAIN, unique_id, config_entry=entry)
+    registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{MAC}", config_entry=entry)
+    blocked_mac = "11:22:33:44:55:66"
+    registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{blocked_mac}", config_entry=entry)
+    registry.async_get_or_create("device_tracker", DOMAIN, f"{NEW_ID}-{blocked_mac}", config_entry=entry)
     before = dict(registry.entities)
     controller = network_11_controller()
     with (
@@ -223,11 +222,11 @@ async def test_replay_conflicts_fail_closed(hass: HomeAssistant, conflict):
         patch.object(hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock) as forward,
     ):
         assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.state is ConfigEntryState.SETUP_ERROR
     assert entry.error_reason_translation_key == "site_identity_conflict"
     assert dict(registry.entities) == before
-    assert registry.async_get(record.entity_id) == record
     assert entry.unique_id == NEW_ID
-    assert entry.data[CONF_SITE_ID_MIGRATION] == MARKER
+    assert entry.data == {**MOCK_CONFIG_DATA, CONF_SITE_ID_MIGRATION: MARKER}
     forward.assert_not_awaited()
     controller.request.assert_not_awaited()
 

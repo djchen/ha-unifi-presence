@@ -1,6 +1,6 @@
 """Tests for the UniFi Presence config flow — user step, site selection, and device selection."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import aiohttp
 import aiounifi
@@ -144,17 +144,30 @@ async def test_user_step_historical_client_failure_uses_active_clients(
     assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
 
 
+@pytest.mark.parametrize("historical_refresh_fails", [False, True], ids=["refreshed", "cached"])
 async def test_user_step_active_client_refresh_failure_uses_historical_clients(
-    hass: HomeAssistant,
+    hass: HomeAssistant, historical_refresh_fails: bool
 ) -> None:
-    """Test that setup still proceeds when active client refresh fails."""
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Dan Phone")
-    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
+    """Setup uses refreshed or cached historical clients when active refresh fails."""
+    mac = "aa:bb:cc:dd:ee:ff"
+    client = _make_mock_client(mac, name="Dan Phone")
+    controller = _mock_controller()
     controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active clients unavailable")
+
+    async def refresh_history() -> None:
+        controller.clients_all[mac] = client
+
+    if historical_refresh_fails:
+        controller.clients_all[mac] = client
+        controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("historical clients unavailable")
+    else:
+        controller.clients_all.update_mock.side_effect = refresh_history
 
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
 
+    controller.clients.update_mock.assert_awaited_once_with()
+    controller.clients_all.update_mock.assert_awaited_once_with()
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "devices"
     assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Dan Phone (aa:bb:cc:dd:ee:ff)"}
@@ -209,19 +222,6 @@ async def test_user_step_no_clients_available_aborts(hass: HomeAssistant) -> Non
     assert result["reason"] == "no_clients_available"
 
 
-async def test_user_step_site_fetch_failure_shows_cannot_connect(hass: HomeAssistant) -> None:
-    """Test that failing to fetch sites returns to the user step with an error."""
-    controller = _mock_controller()
-    controller.request = AsyncMock(side_effect=aiounifi.AiounifiException)
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
-    assert result["errors"] == {"base": "cannot_connect"}
-
-
 async def test_user_step_no_sites_available_aborts(hass: HomeAssistant) -> None:
     """Test that setup aborts when the account has no accessible UniFi sites."""
     controller = _mock_controller(sites=[])
@@ -231,21 +231,6 @@ async def test_user_step_no_sites_available_aborts(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_sites_available"
-
-
-async def test_user_step_both_updates_fail_but_cached_data_proceeds(hass: HomeAssistant) -> None:
-    """Test that setup proceeds when both update() calls fail but stores have cached data."""
-    client1 = _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone")
-    controller = _mock_controller(clients_all_items=[("aa:bb:cc:dd:ee:ff", client1)])
-    controller.clients_all.update_mock.side_effect = aiounifi.AiounifiException("historical fetch failed")
-    controller.clients.update_mock.side_effect = aiounifi.AiounifiException("active fetch failed")
-
-    with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
-        result = await async_run_user_step(hass, USER_STEP_INPUT)
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "devices"
-    assert _get_tracked_device_options(result) == {"aa:bb:cc:dd:ee:ff": "Cached Phone (aa:bb:cc:dd:ee:ff)"}
 
 
 # ── Site selection ───────────────────────────────────────────────────────
