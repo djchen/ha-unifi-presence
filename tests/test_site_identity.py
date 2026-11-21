@@ -29,7 +29,7 @@ from custom_components.unifi_presence.site_identity import (
 )
 
 from .conftest import add_mock_config_entry, make_mock_controller
-from .site_identity_helpers import NEW_ID, OLD_ID, OTHER_ID
+from .site_identity_helpers import MAC, NEW_ID, OLD_ID, OTHER_ID
 
 
 def site(site_id=NEW_ID, name="default", **extra):
@@ -183,17 +183,75 @@ async def test_empty_and_ambiguous_snapshots():
     assert resolve_network_11_site(OLD_ID, "default", await async_fetch_site_snapshot(controller)) is None
 
 
-async def test_preflight_ignores_empty_suffix_and_other_scopes(hass: HomeAssistant):
-    """Extraction retains the old prefix/MAC and actual registry uniqueness semantics."""
+async def test_preflight_respects_registry_scope_and_ignores_unrelated_ids(hass: HomeAssistant) -> None:
+    """The same target can be used across domains/platforms, but only old IDs migrate."""
     entry = add_mock_config_entry(hass, unique_id=OLD_ID)
     registry = er.async_get(hass)
-    registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}- ", config_entry=entry)
-    record = registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-mac", config_entry=entry)
-    registry.async_get_or_create("sensor", DOMAIN, f"{NEW_ID}-mac", config_entry=entry)
-    registry.async_get_or_create("device_tracker", "other", f"{NEW_ID}-mac", config_entry=entry)
-    assert build_tracker_migration_plan(hass, entry, old_site_id=OLD_ID, new_site_id=NEW_ID) == [
-        (record.entity_id, f"{NEW_ID}-mac")
+    records = [
+        registry.async_get_or_create(domain, platform, f"{OLD_ID}-{MAC}", config_entry=entry)
+        for domain, platform in [("device_tracker", DOMAIN), ("sensor", DOMAIN), ("device_tracker", "other_platform")]
     ]
+    target = f"{NEW_ID}-{MAC}"
+    ignored = [
+        registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}- ", config_entry=entry),
+        registry.async_get_or_create("sensor", "other_platform", target, config_entry=entry),
+    ]
+
+    plan = build_tracker_migration_plan(hass, entry, old_site_id=OLD_ID, new_site_id=NEW_ID)
+    assert plan is not None
+    assert sorted(plan) == sorted((record.entity_id, target) for record in records)
+    apply_tracker_migration_plan(hass, plan)
+    for record in records:
+        assert registry.async_get_entity_id(record.domain, record.platform, target) == record.entity_id
+    for record in ignored:
+        assert registry.async_get(record.entity_id) is record
+    # Replay keeps the marker, so already-migrated records must yield an empty plan, not a conflict.
+    assert build_tracker_migration_plan(hass, entry, old_site_id=OLD_ID, new_site_id=NEW_ID) == []
+
+
+@pytest.mark.parametrize("same_entry", [False, True], ids=["other-entry", "own-entry"])
+@pytest.mark.parametrize(
+    ("entity_domain", "platform"),
+    [("device_tracker", DOMAIN), ("sensor", DOMAIN), ("device_tracker", "other_platform")],
+)
+async def test_preflight_later_registry_collision_is_read_only(
+    hass: HomeAssistant, same_entry: bool, entity_domain: str, platform: str
+) -> None:
+    """A target occupied in the same scope rejects the whole migration, regardless of owner."""
+    entry = add_mock_config_entry(hass, unique_id=OLD_ID)
+    owner = entry if same_entry else add_mock_config_entry(hass, unique_id=OTHER_ID)
+    registry = er.async_get(hass)
+    later_mac = "11:22:33:44:55:66"
+    first, later = [
+        registry.async_get_or_create(entity_domain, platform, f"{OLD_ID}-{mac}", config_entry=entry)
+        for mac in (MAC, later_mac)
+    ]
+    plan = build_tracker_migration_plan(hass, entry, old_site_id=OLD_ID, new_site_id=NEW_ID)
+    assert plan is not None
+    expected = [
+        (first.entity_id, f"{NEW_ID}-{MAC}"),
+        (later.entity_id, f"{NEW_ID}-{later_mac}"),
+    ]
+    assert sorted(plan) == sorted(expected)
+    registry.async_get_or_create(entity_domain, platform, f"{NEW_ID}-{later_mac}", config_entry=owner)
+
+    before = dict(registry.entities)
+    with patch.object(registry, "async_update_entity", wraps=registry.async_update_entity) as update:
+        assert build_tracker_migration_plan(hass, entry, old_site_id=OLD_ID, new_site_id=NEW_ID) is None
+    update.assert_not_called()
+    assert dict(registry.entities) == before
+
+
+async def test_preflight_rejects_duplicate_normalized_targets(hass: HomeAssistant) -> None:
+    """Distinct stored spellings cannot migrate to the same registry ID."""
+    entry = add_mock_config_entry(hass, unique_id=OLD_ID)
+    registry = er.async_get(hass)
+    for mac in (MAC, f" {MAC.upper()} "):
+        registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{mac}", config_entry=entry)
+
+    before = dict(registry.entities)
+    assert build_tracker_migration_plan(hass, entry, old_site_id=OLD_ID, new_site_id=NEW_ID) is None
+    assert dict(registry.entities) == before
 
 
 async def test_read_only_preflight_and_metadata(hass: HomeAssistant):

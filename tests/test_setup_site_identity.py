@@ -169,24 +169,22 @@ async def test_invalid_snapshot_retries(hass: HomeAssistant, response):
     _assert_session_cleanup(session)
 
 
-@pytest.mark.parametrize("conflict", ["entry", "entity", "later", "normalized"])
+@pytest.mark.parametrize("conflict", ["entry", "entity"])
 async def test_setup_conflicts_are_mutation_free_and_recoverable(hass: HomeAssistant, conflict):
     """Final ownership and whole-registry preflight prevent all partial writes."""
     assert await async_setup_component(hass, DOMAIN, {})
     entry = add_mock_config_entry(hass, unique_id=OLD_ID)
     registry = er.async_get(hass)
     record = registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{MAC}", config_entry=entry)
+    blocked_mac = "11:22:33:44:55:66"
+    blocked = registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{blocked_mac}", config_entry=entry)
     blocker = None
     if conflict == "entry":
         owner = add_mock_config_entry(hass, unique_id=NEW_ID)
-    elif conflict == "normalized":
-        blocker = registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{MAC.upper()}", config_entry=entry)
     else:
-        target_mac = "11:22:33:44:55:66" if conflict == "later" else MAC
-        if conflict == "later":
-            registry.async_get_or_create("device_tracker", DOMAIN, f"{OLD_ID}-{target_mac}", config_entry=entry)
-        blocker = registry.async_get_or_create("device_tracker", DOMAIN, f"{NEW_ID}-{target_mac}", config_entry=entry)
+        blocker = registry.async_get_or_create("device_tracker", DOMAIN, f"{NEW_ID}-{blocked_mac}", config_entry=entry)
     before = dict(registry.entities)
+    original_data = dict(entry.data)
     controller = network_11_controller()
     with (
         patch(PATCH_CONTROLLER, return_value=controller),
@@ -196,6 +194,7 @@ async def test_setup_conflicts_are_mutation_free_and_recoverable(hass: HomeAssis
         assert entry.state is ConfigEntryState.SETUP_ERROR
         assert entry.error_reason_translation_key == "site_identity_conflict"
         assert entry.unique_id == OLD_ID
+        assert entry.data == original_data
         assert dict(registry.entities) == before
         recovery_log.assert_not_called()
         if blocker:
@@ -203,9 +202,11 @@ async def test_setup_conflicts_are_mutation_free_and_recoverable(hass: HomeAssis
         else:
             assert await hass.config_entries.async_remove(owner.entry_id)
         assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
         recovery_log.assert_called_once()
     assert entry.unique_id == NEW_ID
     assert registry.async_get(record.entity_id).unique_id == f"{NEW_ID}-{MAC}"
+    assert registry.async_get_entity_id("device_tracker", DOMAIN, f"{NEW_ID}-{blocked_mac}") == blocked.entity_id
 
 
 @pytest.mark.parametrize(("stage", "candidate"), [("refresh", False), ("identity", True), ("identity", False)])

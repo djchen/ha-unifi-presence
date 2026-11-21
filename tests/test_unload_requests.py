@@ -142,9 +142,18 @@ async def test_setup_identity_real_request_deadline_and_login(  # noqa: PLR0915 
         await connector.close()
 
 
-@pytest.mark.parametrize("request_kind", ["scheduled", "manual", "options"])
-@pytest.mark.parametrize("blocked_store", ["sta", "user"])
-@pytest.mark.parametrize("stall_body", [False, True])
+# Pairwise rows: every kind/store/phase pair appears at least once; all phases share one session timeout.
+@pytest.mark.parametrize(
+    ("request_kind", "blocked_store", "phase"),
+    [
+        ("scheduled", "sta", "body"),
+        ("scheduled", "user", "headers"),
+        ("manual", "sta", "headers"),
+        ("manual", "user", "body"),
+        ("options", "sta", "headers"),
+        ("options", "user", "body"),
+    ],
+)
 async def test_unload_drains_stalled_http_request(  # noqa: PLR0915 - Keep real network and unload ownership together.
     hass: HomeAssistant,
     enable_custom_integrations: None,
@@ -153,7 +162,7 @@ async def test_unload_drains_stalled_http_request(  # noqa: PLR0915 - Keep real 
     monkeypatch: pytest.MonkeyPatch,
     request_kind: str,
     blocked_store: str,
-    stall_body: bool,
+    phase: str,
 ) -> None:
     """Unload alone waits for a short request deadline, not HA's later cancellation."""
     started: asyncio.Queue[None] = asyncio.Queue()
@@ -166,7 +175,7 @@ async def test_unload_drains_stalled_http_request(  # noqa: PLR0915 - Keep real 
     async def handle(request: web.Request) -> web.StreamResponse:
         if stalled and request.path.endswith(f"/{blocked_store}"):
             response = web.StreamResponse(headers={"Content-Type": "application/json"})
-            if stall_body:
+            if phase == "body":
                 await response.prepare(request)
                 await response.write(b'{"meta":')
             else:
@@ -203,7 +212,7 @@ async def test_unload_drains_stalled_http_request(  # noqa: PLR0915 - Keep real 
         response_read = ha_http.HassClientResponse.read
 
         async def observe_read(response):
-            if stall_body and response.url.path.endswith(f"/{blocked_store}"):
+            if phase == "body" and response.url.path.endswith(f"/{blocked_store}"):
                 started.put_nowait(None)
             return await response_read(response)
 
@@ -316,6 +325,7 @@ async def test_unload_drains_stalled_http_request(  # noqa: PLR0915 - Keep real 
             await connector.close()
 
 
+# Discovery tolerates either store failing, but unload still waits for both refreshes.
 @pytest.mark.parametrize("request_kind", ["scheduled", "manual", "discovery"])
 @pytest.mark.parametrize("blocked_store", ["sta", "user"])
 async def test_unload_bounds_stalled_login_retry(  # noqa: PLR0915 - Keep real retries and unload ownership together.

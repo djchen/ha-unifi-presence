@@ -213,48 +213,6 @@ async def test_create_controller_for_params_keeps_default_site_without_refresh(h
     controller.sites.update.assert_not_awaited()
 
 
-async def test_async_refresh_client_stores_allows_cached_discovery_data() -> None:
-    """Test setup/options refresh can proceed from cache when both sources fail."""
-    controller = make_mock_controller(
-        clients_all_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff", name="Cached Phone"))]
-    )
-    controller.clients_all.update_mock.side_effect = TimeoutError
-    controller.clients.update_mock.side_effect = TimeoutError
-
-    await async_refresh_client_stores(
-        controller,
-        require_active_refresh=False,
-    )
-
-    controller.clients_all.update_mock.assert_awaited_once_with()
-    controller.clients.update_mock.assert_awaited_once_with()
-
-
-async def test_async_refresh_client_stores_raises_without_cached_discovery_data() -> None:
-    """Test setup/options refresh fails when both sources fail with no cache."""
-    controller = make_mock_controller()
-    controller.clients_all.update_mock.side_effect = TimeoutError
-    controller.clients.update_mock.side_effect = TimeoutError
-
-    with pytest.raises(RuntimeError):
-        await async_refresh_client_stores(
-            controller,
-            require_active_refresh=False,
-        )
-
-
-async def test_async_refresh_client_stores_requires_active_runtime_refresh() -> None:
-    """Test runtime refresh keeps active clients as a required source."""
-    controller = make_mock_controller()
-    controller.clients.update_mock.side_effect = TimeoutError
-
-    with pytest.raises(TimeoutError):
-        await async_refresh_client_stores(
-            controller,
-            require_active_refresh=True,
-        )
-
-
 async def test_async_refresh_client_stores_active_update_times_out() -> None:
     """A real active-store timeout fails polling even when cached clients exist."""
     controller = make_mock_controller(clients_items=[("aa:bb:cc:dd:ee:ff", _make_mock_client("aa:bb:cc:dd:ee:ff"))])

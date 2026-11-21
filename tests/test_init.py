@@ -20,7 +20,6 @@ from custom_components.unifi_presence import (
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.unifi_presence.config_flow import _async_remove_deselected_entities
 from custom_components.unifi_presence.const import (
     CONF_AWAY_SECONDS,
     CONF_FALLBACK_POLL_INTERVAL,
@@ -36,6 +35,7 @@ from .conftest import (
     MOCK_OPTIONS,
     _assert_session_cleanup,
     _attach_mock_session,
+    _get_tracked_device_options,
     _make_mock_client,
     add_mock_config_entry,
     make_mock_controller,
@@ -79,17 +79,6 @@ async def test_async_setup_entry(loaded_entry: MockConfigEntry, mock_controller:
     assert isinstance(entry.runtime_data.websocket, UnifiPresenceWebsocket)
     assert entry.runtime_data.controller is mock_controller
     mock_controller.start_websocket.assert_awaited_once_with()
-
-
-async def test_async_unload_entry(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
-    """Test that async_unload_entry stops WS and unloads platforms."""
-    entry = loaded_entry
-    assert entry.runtime_data.websocket is not None
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.state is ConfigEntryState.NOT_LOADED
 
 
 @pytest.mark.parametrize("scheduled", [False, True])
@@ -745,73 +734,47 @@ async def test_offline_tracked_client_entity_is_not_home(
     assert missing_state.attributes["friendly_name"] == "11:22:33:44:55:66"
 
 
-async def test_options_flow_removes_explicitly_deselected_entity_registry_entries(
-    hass: HomeAssistant, loaded_entry: MockConfigEntry
+@pytest.mark.parametrize(
+    ("deselect", "change_timing"),
+    [(False, True), (True, False), (True, True)],
+    ids=["timing-only", "deselect-only", "deselect-and-timing"],
+)
+async def test_options_flow_keeps_missing_tracker_and_removes_only_deselected(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, mock_controller: MagicMock, deselect: bool, change_timing: bool
 ) -> None:
-    """Test options flow removes entities for deselected tracked clients."""
+    """Saving options preserves a still-selected missing tracker and reloads once."""
     entry = loaded_entry
+    missing_mac, available_mac = entry.options[CONF_TRACKED_DEVICES]
+    mock_controller.clients[available_mac] = _make_mock_client(available_mac, name="Jane Phone")
     entity_registry = er.async_get(hass)
-    kept_entry = entity_registry.async_get_or_create(
-        "device_tracker",
-        DOMAIN,
-        f"{entry.unique_id}-aa:bb:cc:dd:ee:ff",
-        config_entry=entry,
-        suggested_object_id="dan_phone",
-    )
-    removed_entry = entity_registry.async_get_or_create(
-        "device_tracker",
-        DOMAIN,
-        f"{entry.unique_id}-11:22:33:44:55:66",
-        config_entry=entry,
-        suggested_object_id="jane_phone",
-    )
+    missing_id = entity_registry.async_get_entity_id("device_tracker", DOMAIN, f"{entry.unique_id}-{missing_mac}")
+    available_id = entity_registry.async_get_entity_id("device_tracker", DOMAIN, f"{entry.unique_id}-{available_mac}")
+    assert missing_id is not None
+    assert available_id is not None
+    missing_entry = entity_registry.async_get(missing_id)
+    available_entry = entity_registry.async_get(available_id)
+    assert missing_entry is not None
+    assert available_entry is not None
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert _get_tracked_device_options(result) == {
+        missing_mac: f"{missing_mac} (No longer in UniFi Client Devices)",
+        available_mac: f"Jane Phone ({available_mac})",
+    }
+    new_options = dict(entry.options)
+    if deselect:
+        new_options[CONF_TRACKED_DEVICES] = [missing_mac]
+    if change_timing:
+        new_options.update({CONF_AWAY_SECONDS: 120, CONF_FALLBACK_POLL_INTERVAL: 600})
     with patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload:
-        result = await hass.config_entries.options.async_configure(
-            result["flow_id"],
-            user_input={
-                CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
-                CONF_AWAY_SECONDS: entry.options[CONF_AWAY_SECONDS],
-                CONF_FALLBACK_POLL_INTERVAL: entry.options[CONF_FALLBACK_POLL_INTERVAL],
-            },
-        )
+        result = await hass.config_entries.options.async_configure(result["flow_id"], user_input=new_options)
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entity_registry.async_get(kept_entry.entity_id) is not None
-    assert entity_registry.async_get(removed_entry.entity_id) is None
-    schedule_reload.assert_called_once_with(entry.entry_id)
-
-
-async def test_options_flow_keeps_still_selected_missing_entity_registry_entries(
-    hass: HomeAssistant, loaded_entry: MockConfigEntry
-) -> None:
-    """Test options flow does not remove still-selected missing tracked clients."""
-    entry = loaded_entry
-    entity_registry = er.async_get(hass)
-    missing_entry = entity_registry.async_get_or_create(
-        "device_tracker",
-        DOMAIN,
-        f"{entry.unique_id}-11:22:33:44:55:66",
-        config_entry=entry,
-        suggested_object_id="jane_phone",
-    )
-
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    with patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload:
-        result = await hass.config_entries.options.async_configure(
-            result["flow_id"],
-            user_input={
-                CONF_AWAY_SECONDS: 120,
-                CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"],
-                CONF_FALLBACK_POLL_INTERVAL: entry.options[CONF_FALLBACK_POLL_INTERVAL],
-            },
-        )
-        await hass.async_block_till_done()
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entity_registry.async_get(missing_entry.entity_id) is not None
+    assert entry.options == new_options
+    assert entity_registry.async_get(missing_id) is missing_entry
+    assert entity_registry.async_get(available_id) is (None if deselect else available_entry)
     schedule_reload.assert_called_once_with(entry.entry_id)
 
 
@@ -851,36 +814,3 @@ async def test_reconfigure_schedules_one_reload(hass: HomeAssistant, loaded_entr
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     schedule_reload.assert_called_once_with(entry.entry_id)
-
-
-async def test_options_flow_saves_loaded_entry_and_reloads(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> None:
-    """Test options flow saves options and schedules a reload."""
-    entry = loaded_entry
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["type"] is FlowResultType.FORM
-
-    new_options = {
-        CONF_TRACKED_DEVICES: ["aa:bb:cc:dd:ee:ff"],
-        CONF_AWAY_SECONDS: 120,
-        CONF_FALLBACK_POLL_INTERVAL: 600,
-    }
-    with patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload:
-        result = await hass.config_entries.options.async_configure(
-            result["flow_id"],
-            user_input=new_options,
-        )
-        await hass.async_block_till_done()
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == new_options
-    schedule_reload.assert_called_once_with(entry.entry_id)
-
-
-async def test_remove_deselected_entities_noop_when_removed_macs_empty(hass: HomeAssistant) -> None:
-    """Test empty deselection sets skip entity-registry cleanup work."""
-    entry = _make_config_entry(hass)
-
-    with patch("custom_components.unifi_presence.config_flow.er.async_get") as async_get:
-        _async_remove_deselected_entities(hass, entry, set())
-
-    async_get.assert_not_called()

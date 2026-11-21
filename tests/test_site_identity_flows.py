@@ -1,5 +1,6 @@
 """Real flow-manager and deferred-reload contracts for Network 11 migration."""
 
+import logging
 from unittest.mock import patch
 
 import aiounifi
@@ -14,6 +15,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry, async_test_home_assistant
 
 from custom_components.unifi_presence.const import CONF_SITE_ID_MIGRATION, CONF_SSL_VERIFY, CONF_TRACKED_DEVICES, DOMAIN
+from custom_components.unifi_presence.helpers import SiteSnapshotError
 
 from .conftest import (
     MOCK_CONFIG_DATA,
@@ -87,6 +89,8 @@ async def test_reconfigure_read_only_conflicts_save_nothing(hass: HomeAssistant,
         registry.async_get_or_create("device_tracker", DOMAIN, f"{NEW_ID}-{MAC}", config_entry=entry)
     with patch(PATCH_CREATE_CONTROLLER, return_value=flow_controller()), assert_no_reconfigure_mutations(hass, entry):
         result = await async_run_reconfigure_step(hass, entry, make_reconfigure_input())
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "site_identity_conflict"
 
 
@@ -347,16 +351,38 @@ async def test_successful_reauth_schedules_one_reload_then_migrates(hass: HomeAs
     assert dict(entry.options) == original_options
 
 
-@pytest.mark.parametrize("error", [aiounifi.Unauthorized(), ValueError("malformed"), RuntimeError("unexpected")])
-async def test_site_fetch_form_errors_are_sanitized(hass: HomeAssistant, error):
+@pytest.mark.parametrize(
+    ("error_type", "form_error"),
+    [
+        (aiounifi.Unauthorized, "invalid_auth"),
+        (aiounifi.AiounifiException, "cannot_connect"),
+        (SiteSnapshotError, "cannot_connect"),
+        (ValueError, "cannot_connect"),
+        (RuntimeError, "cannot_connect"),
+    ],
+)
+async def test_site_fetch_form_errors_are_sanitized(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture, error_type: type[Exception], form_error: str
+) -> None:
     """Site-list failures retain form behavior without logging raw exceptions/payloads."""
+    request_secret = "DUMMY-SITE-REQUEST-PASSWORD"
+    cause_secret = "DUMMY-SITE-RESPONSE-SESSION-TOKEN"
+    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger=f"custom_components.{DOMAIN}.config_flow")
+    caplog.set_level(logging.DEBUG, logger="homeassistant.config_entries")
+
+    async def fail_request(_request) -> None:
+        raise error_type(request_secret) from ValueError(cause_secret)
+
     controller = flow_controller()
-    controller.request.side_effect = error
+    controller.request.side_effect = fail_request
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
-    assert result["errors"] == {
-        "base": "invalid_auth" if isinstance(error, aiounifi.Unauthorized) else "cannot_connect"
-    }
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": form_error}
+    assert request_secret not in caplog.text
+    assert cause_secret not in caplog.text
 
 
 @pytest.mark.parametrize("data", [{}, {"data": [{"_id": NEW_ID, "name": "default", "desc": 1}]}])
@@ -366,6 +392,8 @@ async def test_malformed_site_fetch_is_form_error(hass: HomeAssistant, data):
     controller.request.return_value = data
     with patch(PATCH_CREATE_CONTROLLER, return_value=controller):
         result = await async_run_user_step(hass, USER_STEP_INPUT)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
     assert result["errors"] == {"base": "cannot_connect"}
 
 

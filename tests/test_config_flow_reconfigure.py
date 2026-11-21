@@ -766,23 +766,15 @@ async def test_reconfigure_rejects_site_claimed_during_final_validation(hass: Ho
     _assert_session_cleanup(session)
 
 
-@pytest.mark.parametrize("same_entry", [False, True], ids=["other-entry", "own-entry"])
-@pytest.mark.parametrize(
-    ("entity_domain", "platform"),
-    [("device_tracker", DOMAIN), ("sensor", DOMAIN), ("device_tracker", "other_platform")],
-)
-async def test_reconfigure_registry_collision_preflight_prevents_partial_migration(
-    hass: HomeAssistant, same_entry: bool, entity_domain: str, platform: str
-) -> None:
-    """A collision on a later tracker aborts before writing any earlier tracker."""
+async def test_reconfigure_registry_collision_aborts_without_mutation(hass: HomeAssistant) -> None:
+    """A registry collision aborts legacy reconfigure even without a competing entry ID."""
     entry = add_mock_config_entry(hass, unique_id="192.168.1.1_default", options=deepcopy(MOCK_OPTIONS))
-    other_entry = entry if same_entry else add_mock_config_entry(hass, unique_id=OFFICE_SITE_ID)
+    other_entry = add_mock_config_entry(hass, unique_id=OFFICE_SITE_ID)
     registry = er.async_get(hass)
-    for mac in entry.options[CONF_TRACKED_DEVICES]:
-        registry.async_get_or_create(entity_domain, platform, f"192.168.1.1_default-{mac}", config_entry=entry)
-    registry.async_get_or_create(
-        entity_domain, platform, f"{DEFAULT_SITE_ID}-11:22:33:44:55:66", config_entry=other_entry
-    )
+    registry.async_get_or_create("device_tracker", DOMAIN, "192.168.1.1_default-aa:bb:cc:dd:ee:ff", config_entry=entry)
+    blocked_mac = "11:22:33:44:55:66"
+    registry.async_get_or_create("device_tracker", DOMAIN, f"192.168.1.1_default-{blocked_mac}", config_entry=entry)
+    registry.async_get_or_create("device_tracker", DOMAIN, f"{DEFAULT_SITE_ID}-{blocked_mac}", config_entry=other_entry)
     assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DEFAULT_SITE_ID) is None
 
     with (
@@ -793,70 +785,6 @@ async def test_reconfigure_registry_collision_preflight_prevents_partial_migrati
         await hass.async_block_till_done()
         assert result["type"] is FlowResultType.ABORT
         assert result["reason"] == "already_configured"
-
-
-async def test_reconfigure_rejects_duplicate_normalized_migration_targets(hass: HomeAssistant) -> None:
-    """Distinct stored MAC spellings cannot be migrated to the same registry ID."""
-    entry = add_mock_config_entry(hass, unique_id="192.168.1.1_default", options=deepcopy(MOCK_OPTIONS))
-    registry = er.async_get(hass)
-    for suffix in ["11:22:33:44:55:66", "aa:bb:cc:dd:ee:ff", " AA:BB:CC:DD:EE:FF "]:
-        registry.async_get_or_create("device_tracker", DOMAIN, f"192.168.1.1_default-{suffix}", config_entry=entry)
-    with (
-        patch(PATCH_CREATE_CONTROLLER, return_value=_mock_controller()),
-        assert_no_reconfigure_mutations(hass, entry),
-    ):
-        result = await async_run_reconfigure_step(hass, entry, _validation_input())
-        await hass.async_block_till_done()
-        assert result["type"] is FlowResultType.ABORT
-        assert result["reason"] == "already_configured"
-
-
-async def test_migrate_tracker_unique_ids_checks_conflicts_in_actual_registry_scope(hass: HomeAssistant) -> None:
-    """Identical target IDs in different domains/platforms are not conflicts."""
-    entry = add_mock_config_entry(hass, unique_id="192.168.1.1_default")
-    registry = er.async_get(hass)
-    entities = [
-        registry.async_get_or_create(domain, platform, "192.168.1.1_default-aa:bb:cc:dd:ee:ff", config_entry=entry)
-        for domain, platform in [("device_tracker", DOMAIN), ("sensor", DOMAIN), ("device_tracker", "other_platform")]
-    ]
-    unrelated = registry.async_get_or_create(
-        "sensor", "other_platform", f"{DEFAULT_SITE_ID}-aa:bb:cc:dd:ee:ff", config_entry=entry
-    )
-
-    plan = build_tracker_migration_plan(hass, entry, old_site_id="192.168.1.1_default", new_site_id=DEFAULT_SITE_ID)
-    assert plan is not None
-    apply_tracker_migration_plan(hass, plan)
-    for entity in entities:
-        migrated = registry.async_get(entity.entity_id)
-        assert migrated is not None
-        assert migrated.unique_id == f"{DEFAULT_SITE_ID}-aa:bb:cc:dd:ee:ff"
-    assert registry.async_get(unrelated.entity_id) == unrelated
-
-
-async def test_migrate_tracker_unique_ids_skips_non_matching_entities(hass: HomeAssistant) -> None:
-    """Test tracker migration leaves unrelated entity IDs unchanged."""
-    entry = add_mock_config_entry(hass)
-    entity_registry = er.async_get(hass)
-    entity = entity_registry.async_get_or_create(
-        "device_tracker",
-        DOMAIN,
-        f"{DEFAULT_SITE_ID}-11:22:33:44:55:66",
-        config_entry=entry,
-        suggested_object_id="other_phone",
-    )
-
-    plan = build_tracker_migration_plan(
-        hass,
-        entry,
-        old_site_id="192.168.1.1_default",
-        new_site_id=DEFAULT_SITE_ID,
-    )
-    assert plan == []
-    apply_tracker_migration_plan(hass, plan)
-
-    unchanged = entity_registry.async_get(entity.entity_id)
-    assert unchanged is not None
-    assert unchanged.unique_id == f"{DEFAULT_SITE_ID}-11:22:33:44:55:66"
 
 
 @pytest.mark.parametrize("initial_unique_id", [None, "192.168.1.1_default"])
